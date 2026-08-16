@@ -100,3 +100,36 @@ def test_written_record_is_visible_to_the_reader(monkeypatch, tmp_path):
     seen = _extension_usage_log(str(base), tmp_path)
     assert seen == written, f"writer wrote {written}, reader looks at {seen}"
     assert json.loads(seen.read_text().strip())["model"] == "gemini/gemini-3.5-flash"
+
+
+def _extension_agents_dir(tmp_path: Path) -> Path:
+    """Where the EXTENSION thinks the agent registry lives."""
+    runner = tmp_path / "resolve_agents.ts"
+    runner.write_text(
+        f'import {{ agentsDir }} from {json.dumps(str(PATHS_TS))};\n'
+        "console.log(agentsDir());\n"
+    )
+    out = subprocess.run(
+        ["node", "--experimental-strip-types", str(runner)],
+        capture_output=True, text=True, check=True,
+    )
+    return Path(out.stdout.strip())
+
+
+def test_the_agents_registry_dir_matches_python(tmp_path):
+    """The supervisor is cross-process IPC — the CLI writes run records, the extension reads them.
+    A disagreement means the panel watches a directory nothing writes: the metering bug of 0ef5fa4
+    one level up. Note both sides pin it OUTSIDE debug_dir deliberately."""
+    from interact.agents.registry import agents_dir
+
+    assert _extension_agents_dir(tmp_path) == agents_dir()
+
+
+def test_the_agents_registry_ignores_a_debug_dir_override(monkeypatch, tmp_path):
+    """Setting INTERACT_DEBUG_DIR must NOT move the registry — a process that never saw the
+    override still has to find it."""
+    from interact.agents.registry import agents_dir
+
+    monkeypatch.setenv("INTERACT_DEBUG_DIR", str(tmp_path / "elsewhere"))
+    assert _extension_agents_dir(tmp_path) == agents_dir()
+    assert "elsewhere" not in str(agents_dir())

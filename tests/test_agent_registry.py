@@ -189,3 +189,25 @@ def test_the_row_keeps_the_last_MEANINGFUL_line(monkeypatch):
     reg.append_event("r1", reg.AgentEvent(kind="other", raw_type="system"))
     monkeypatch.setattr(reg, "_alive", lambda pid: True)
     assert reg.list_runs()[0].last == "using Bash"
+
+
+def test_the_record_on_disk_carries_cost_and_activity(monkeypatch):
+    """The VS Code panel reads these files directly and cannot replay a JSONL per row. If cost and
+    the activity line lived only on Python's read path, a finished agent would render there as
+    'running, —, blank' — which is exactly what it did before this was folded in."""
+    _record()
+    reg.append_event("r1", reg.AgentEvent(kind="tool", tool="Bash"))
+    reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.61))
+    reg.finish("r1", exit_code=0)
+
+    raw = json.loads((reg.agents_dir() / "r1.json").read_text())
+    assert raw["cost_usd"] == pytest.approx(0.61)
+    assert raw["last"] == "done"
+    assert raw["status"] == "done", "a finished run must not still claim to be running on disk"
+
+
+def test_costs_accumulate_across_events():
+    _record()
+    reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.10))
+    reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.05))
+    assert reg.list_runs()[0].cost_usd == pytest.approx(0.15)

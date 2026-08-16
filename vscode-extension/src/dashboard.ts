@@ -20,7 +20,8 @@ import {
   currencySymbol,
   COMMON_CURRENCIES,
 } from "./currency";
-import { usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
+import { readAgentRuns, summarise, withDepth } from "./agents";
+import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import {
   readUsageLog,
   filterByRange,
@@ -149,6 +150,9 @@ export class DashboardPanel {
     const dirs = new Set([
       path.dirname(this.usageLogPath()),
       path.dirname(INTERACT_CONFIG_PATH),
+      // Agent runs appear and change here; without this a spawned agent would sit invisible
+      // until something else happened to trigger a refresh.
+      agentsDir(),
     ]);
     for (const dir of dirs) {
       try {
@@ -243,6 +247,7 @@ export class DashboardPanel {
       ...this.settingsCells(),
       this.benchmarkDataCell(),
       this.displayCell(),
+      this.agentsCell(),
       await this.consumptionCell(),
       this.benchmarksCell(),
       this.recommendationsCell(),
@@ -522,6 +527,52 @@ export class DashboardPanel {
             "Spend is recorded in USD and converted at live ECB rates (frankfurter.app) for display only.",
           actions: [{ type: "changeCurrency", label: "Change" }],
         },
+      ],
+    };
+  }
+
+  /** The agent team: what is running, what each is doing, and what it has cost.
+   *
+   *  Costs are labelled API-EQUIVALENT because a subscription run is already paid for by the
+   *  plan — showing a bare currency figure would read as fresh spend. A run with no reported
+   *  cost shows "—", never "$0.00", because unknown is not free.
+   *
+   *  Runs interact did NOT spawn (the user's own editor windows) are marked, so the panel is an
+   *  honest view of the machine rather than only of our own children.
+   */
+  private agentsCell(): CellUpdate {
+    const runs = readAgentRuns();
+    if (runs.length === 0) {
+      return {
+        id: "agents",
+        title: "Agents",
+        content: [
+          {
+            kind: "empty",
+            message:
+              "No agent runs yet — start one with `interact agents run \"<task>\"`, or let an " +
+              "agent spawn its own with the agent_spawn tool.",
+          },
+        ],
+      };
+    }
+    const { live, cost } = summarise(runs);
+    const rows = withDepth(runs).map(({ run, depth }) => {
+      const indent = "\u00a0\u00a0".repeat(depth) + (depth ? "\u21b3 " : "");
+      const money = run.cost_usd == null ? "\u2014" : `~$${run.cost_usd.toFixed(4)}`;
+      return [
+        indent + run.name,
+        run.provider,
+        run.foreign ? `${run.status} (not ours)` : run.status,
+        money,
+        (run.last ?? "").slice(0, 60),
+      ];
+    });
+    return {
+      id: "agents",
+      title: `Agents \u2014 ${live} running, ~$${cost.toFixed(4)} API-equivalent`,
+      content: [
+        { kind: "table", headers: ["Agent", "Provider", "Status", "Cost", "Doing"], rows },
       ],
     };
   }

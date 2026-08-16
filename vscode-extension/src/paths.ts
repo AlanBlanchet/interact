@@ -30,3 +30,16 @@ export function expandHome(p: string): string {
 export function usageLogPathFor(baseDir: string): string {
   return path.join(expandHome(baseDir || DEFAULT_DEBUG_DIR), "usage.jsonl");
 }
+
+/** The agent-run registry directory.
+ *
+ *  DELIBERATELY NOT `debug_dir`-relative, unlike the usage log above. This is cross-process IPC —
+ *  the CLI writes records, this extension reads them, another shell stops a run — so every
+ *  participant must agree on one location regardless of whether it saw `INTERACT_DEBUG_DIR`.
+ *  A debug-dir-relative registry would reproduce, at the feature level, exactly the bug 0ef5fa4
+ *  fixed for metering. Mirrors Python's `interact.agents.registry.agents_dir()`; tests/test_paths.py
+ *  binds the two.
+ */
+export function agentsDir(): string {
+  return path.join(os.homedir(), ".interact", "out", "agents");
+}

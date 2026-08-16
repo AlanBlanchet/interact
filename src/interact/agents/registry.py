@@ -96,7 +96,8 @@ def finish(run_id: str, *, exit_code: int | None) -> None:
         return
     stored.finished_at = time.time()
     stored.exit_code = exit_code
-    _record_path(run_id).write_text(stored.model_dump_json())
+    stored.status = _status_for(stored)
+    _write(stored)
 
 
 def stop(run_id: str) -> bool:
@@ -108,7 +109,8 @@ def stop(run_id: str) -> bool:
         _terminate(stored.pid)
     stored.finished_at = time.time()
     stored.exit_code = -signal.SIGTERM
-    _record_path(run_id).write_text(stored.model_dump_json())
+    stored.status = "stopped"
+    _write(stored)
     return True
 
 
@@ -119,11 +121,32 @@ def _read_record(run_id: str) -> AgentRun | None:
         return None
 
 
+def _write(run: AgentRun) -> None:
+    _record_path(run.run_id).write_text(run.model_dump_json())
+
+
 def append_event(run_id: str, event: AgentEvent) -> None:
+    """Persist an event AND fold it into the run record.
+
+    The record has to carry the running totals, not just the event log: the VS Code panel reads
+    these files directly and cannot replay a whole JSONL per row, so a cost or activity line
+    computed only on the Python read path would show up there as blank and free. Folding here
+    keeps it O(1) per event and makes the record authoritative for every reader.
+    """
     path = events_path(run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(event.model_dump_json() + "\n")
+
+    stored = _read_record(run_id)
+    if stored is None:
+        return
+    if event.cost_usd is not None:
+        stored.cost_usd = (stored.cost_usd or 0.0) + event.cost_usd
+    summary = event.summary()
+    if summary:  # system/hook events summarise to nothing; they must not blank the row
+        stored.last = summary
+    _write(stored)
 
 
 def read_events(run_id: str) -> list[AgentEvent]:
@@ -147,27 +170,21 @@ def last_event(run_id: str) -> AgentEvent | None:
     return events[-1] if events else None
 
 
-def _derive(run: AgentRun) -> AgentRun:
-    """Fill in the truth that the file cannot assert: is it still alive, and what has it cost."""
+def _status_for(run: AgentRun) -> RunStatus:
+    """The one thing a file cannot assert about itself: whether it is still running."""
     if run.exit_code is not None:
-        run.status = ("stopped" if run.exit_code == -signal.SIGTERM
-                      else "done" if run.exit_code == 0 else "failed")
-    elif run.pid and _alive(run.pid):
-        run.status = "running"
-    else:
-        # It never recorded an ending and its process is gone — it died without saying so.
-        run.status = "crashed"
+        return ("stopped" if run.exit_code == -signal.SIGTERM
+                else "done" if run.exit_code == 0 else "failed")
+    if run.pid and _alive(run.pid):
+        return "running"
+    # It never recorded an ending and its process is gone — it died without saying so.
+    return "crashed"
 
-    events = read_events(run.run_id)
-    costs = [e.cost_usd for e in events if e.cost_usd is not None]
-    run.cost_usd = sum(costs) if costs else None  # None, not 0.0 — unknown is not free
-    # A real stream interleaves system/hook events that summarise to nothing; taking the last
-    # event literally would blank the row mid-run. Keep the last line that actually says something.
-    for event in reversed(events):
-        summary = event.summary()
-        if summary:
-            run.last = summary
-            break
+
+def _derive(run: AgentRun) -> AgentRun:
+    """Re-check liveness on read. Cost and activity are already folded into the record by
+    :func:`append_event`, so every reader — including the VS Code panel — sees the same values."""
+    run.status = _status_for(run)
     return run
 
 
