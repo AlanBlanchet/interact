@@ -1,0 +1,191 @@
+"""The run registry: what is running, who started it, what it cost, what it's doing now.
+
+Two properties matter more than the rest.
+
+**Status is DERIVED, never trusted.** A record says "running"; the process may have been killed.
+Reading liveness from the pid (the same check `server_registry` uses) means a crashed agent
+reports as crashed instead of spinning forever in the UI — the difference between a supervisor
+and a decoration.
+
+**The registry is a FIXED path, not debug_dir-relative.** It is cross-process IPC: the CLI
+writes, the extension reads, another shell stops a run. If one process had INTERACT_DEBUG_DIR set
+and another didn't they would look in different places — exactly the metering bug 0ef5fa4 fixed,
+reintroduced at the feature level. `server_registry._runtime_dir` is pinned for the same reason.
+"""
+
+import json
+
+import pytest
+
+from interact.agents import registry as reg
+
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() reads this on Windows
+    monkeypatch.setenv("INTERACT_DEBUG_DIR", str(tmp_path / "somewhere-else"))
+    yield
+
+
+def _record(**kw):
+    base = dict(run_id="r1", pid=1, provider="claude", name="tester", task="do it", cwd="/tmp")
+    return reg.register(**{**base, **kw})
+
+
+def test_the_registry_ignores_the_debug_dir_override(tmp_path):
+    # It must be findable by a process that never saw INTERACT_DEBUG_DIR.
+    assert "somewhere-else" not in str(reg.agents_dir())
+    assert reg.agents_dir() == tmp_path / ".interact" / "out" / "agents"
+
+
+def test_a_registered_run_is_listed():
+    _record()
+    runs = reg.list_runs()
+    assert [r.run_id for r in runs] == ["r1"]
+    assert runs[0].name == "tester" and runs[0].provider == "claude"
+
+
+def test_a_dead_pid_is_reported_as_crashed_not_running(monkeypatch):
+    _record(pid=999999)
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    run = reg.list_runs()[0]
+    assert run.status == "crashed", "a record claiming to run must not outlive its process"
+
+
+def test_a_live_pid_stays_running(monkeypatch):
+    _record()
+    monkeypatch.setattr(reg, "_alive", lambda pid: True)
+    assert reg.list_runs()[0].status == "running"
+
+
+def test_a_finished_run_keeps_its_recorded_outcome(monkeypatch):
+    _record()
+    reg.finish("r1", exit_code=0)
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)  # long gone, but it finished cleanly
+    run = reg.list_runs()[0]
+    assert run.status == "done" and run.exit_code == 0
+
+
+def test_a_nonzero_exit_is_failed(monkeypatch):
+    _record()
+    reg.finish("r1", exit_code=2)
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    assert reg.list_runs()[0].status == "failed"
+
+
+# ── the spawn tree: who launched whom, across providers ──────────────────────────────────────
+
+
+def test_a_child_records_its_parent():
+    _record(run_id="parent")
+    _record(run_id="child", parent_run_id="parent", provider="codex")
+    tree = {r.run_id: r.parent_run_id for r in reg.list_runs()}
+    assert tree == {"parent": None, "child": "parent"}
+
+
+def test_the_tree_spans_providers():
+    # The whole point: a Claude agent starting a Codex agent is an ordinary record, not a
+    # special case — they met on MCP.
+    _record(run_id="p", provider="claude")
+    _record(run_id="c", provider="codex", parent_run_id="p")
+    kids = reg.children_of("p")
+    assert [k.provider for k in kids] == ["codex"]
+
+
+# ── events: what it is doing now, and what it cost ───────────────────────────────────────────
+
+
+def test_the_last_event_is_what_it_is_doing_now():
+    _record()
+    reg.append_event("r1", reg.AgentEvent(kind="tool", tool="Bash"))
+    reg.append_event("r1", reg.AgentEvent(kind="text", text="thinking about it"))
+    assert reg.last_event("r1").text == "thinking about it"
+
+
+def test_cost_totals_come_from_the_events():
+    _record()
+    reg.append_event("r1", reg.AgentEvent(kind="text", output_tokens=10))
+    reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.25, output_tokens=4))
+    run = reg.list_runs()[0]
+    assert run.cost_usd == pytest.approx(0.25)
+
+
+def test_a_run_with_no_events_reports_no_cost_not_zero():
+    # Zero would read as "free"; unknown is the truth before anything has been reported.
+    _record()
+    assert reg.list_runs()[0].cost_usd is None
+
+
+def test_events_survive_a_corrupt_line():
+    _record()
+    reg.append_event("r1", reg.AgentEvent(kind="text", text="one"))
+    (reg.agents_dir() / "r1.jsonl").open("a").write("{ this is not json\n")
+    reg.append_event("r1", reg.AgentEvent(kind="text", text="two"))
+    assert reg.last_event("r1").text == "two"
+
+
+# ── seeing agents we did NOT spawn ───────────────────────────────────────────────────────────
+
+
+def test_foreign_sessions_are_listed_without_duplicating_our_own(monkeypatch):
+    """`claude agents --json` sees the user's own interactive windows too — that is what makes
+    this a view of the machine. But it also sees the runs WE spawned, so they must not appear
+    twice: the vendor's sessionId and our run_id are deliberately the same string."""
+    _record(run_id="43840bfe-mine")
+    monkeypatch.setattr(reg, "_alive", lambda pid: True)
+    monkeypatch.setattr(
+        reg, "_discover_foreign",
+        lambda: [
+            {"sessionId": "43840bfe-mine", "cwd": "/tmp", "kind": "background", "name": "ours"},
+            {"sessionId": "other-1", "cwd": "/home/x", "kind": "interactive", "name": "theirs"},
+        ],
+    )
+    runs = reg.list_runs(include_foreign=True)
+    ids = [r.run_id for r in runs]
+    assert ids.count("43840bfe-mine") == 1, "our own run was listed twice"
+    assert "other-1" in ids
+    foreign = next(r for r in runs if r.run_id == "other-1")
+    assert foreign.foreign is True and foreign.name == "theirs"
+
+
+def test_foreign_runs_are_excluded_by_default(monkeypatch):
+    monkeypatch.setattr(reg, "_discover_foreign", lambda: [{"sessionId": "x", "name": "n"}])
+    assert reg.list_runs() == []
+
+
+def test_stopping_records_the_outcome(monkeypatch):
+    _record()
+    killed = []
+    monkeypatch.setattr(reg, "_terminate", lambda pid: killed.append(pid) or True)
+    assert reg.stop("r1") is True
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    assert reg.list_runs()[0].status == "stopped"
+    assert killed == [1]
+
+
+def test_stopping_an_unknown_run_is_false_not_an_exception():
+    assert reg.stop("nope") is False
+
+
+def test_a_corrupt_record_does_not_break_the_listing():
+    _record()
+    (reg.agents_dir() / "broken.json").write_text("{ not json")
+    assert [r.run_id for r in reg.list_runs()] == ["r1"]
+
+
+def test_the_record_round_trips_through_json():
+    _record(task="a task with \"quotes\" and ünicode")
+    raw = json.loads((reg.agents_dir() / "r1.json").read_text())
+    assert raw["task"] == 'a task with "quotes" and ünicode'
+
+
+def test_the_row_keeps_the_last_MEANINGFUL_line(monkeypatch):
+    """A real stream interleaves hook/system events that summarise to nothing. Taking the last
+    event literally blanks the supervisor row mid-run, so the row keeps the last line that
+    actually says something."""
+    _record()
+    reg.append_event("r1", reg.AgentEvent(kind="tool", tool="Bash"))
+    reg.append_event("r1", reg.AgentEvent(kind="other", raw_type="system"))
+    monkeypatch.setattr(reg, "_alive", lambda pid: True)
+    assert reg.list_runs()[0].last == "using Bash"

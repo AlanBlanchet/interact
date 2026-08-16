@@ -484,3 +484,96 @@ def main() -> None:
         run_tui()
         return
     app()
+
+
+agents_app = App(name="agents", help="Spawn and supervise agent runs across providers.")
+app.command(agents_app)
+
+
+@agents_app.command(name="list")
+def agents_list(foreign: bool = True) -> None:
+    """Show agent runs: status, what each is doing, and API-equivalent cost.
+
+    Parameters
+    ----------
+    foreign
+        Also show agent sessions interact did not start (your own editor windows).
+    """
+    from interact.agents import registry as reg
+
+    runs = reg.list_runs(include_foreign=foreign)
+    if not runs:
+        from interact.agents.providers import available_providers
+
+        names = ", ".join(p.name for p in available_providers()) or "none installed"
+        print(f"No agent runs. Providers available here: {names}.")
+        return
+    for run in runs:
+        cost = f"~${run.cost_usd:.4f}" if run.cost_usd is not None else "—"
+        mark = "*" if run.foreign else " "
+        print(f"{mark} {run.status:8} {run.run_id[:8]}  {run.provider:7} {run.name:16} "
+              f"{cost:>10}  {run.last[:60]}")
+    if any(r.foreign for r in runs):
+        print("\n* not started by interact")
+
+
+@agents_app.command(name="events")
+def agents_events(run_id: str, limit: int = 30) -> None:
+    """Print what an agent run has been doing."""
+    from interact.agents import registry as reg
+
+    events = reg.read_events(run_id)
+    if not events:
+        print(f"No events for {run_id!r}.")
+        return
+    for event in events[-max(1, limit):]:
+        print(f"  {event.kind:11} {event.summary()}")
+
+
+@agents_app.command(name="stop")
+def agents_stop(run_id: str) -> None:
+    """Stop a running agent and the tools it spawned."""
+    from interact.agents import registry as reg
+
+    print(f"Stopped {run_id[:8]}." if reg.stop(run_id) else f"No agent run {run_id!r}.")
+
+
+@agents_app.command(name="providers")
+def agents_providers() -> None:
+    """Which agent CLIs can be spawned here."""
+    from interact.agents.providers import PROVIDERS
+
+    for p in PROVIDERS.values():
+        state = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
+        note = f" — {p.caveat}" if not p.verified else ""
+        print(f"  {p.name:8} {state}{note}")
+
+
+@agents_app.command(name="run")
+def agents_run(task: str, provider: str = "claude", name: str | None = None,
+               model: str | None = None, cwd: str | None = None) -> None:
+    """Spawn an agent and stream its events until it finishes."""
+    import asyncio
+    import os
+
+    from interact.agents import registry as reg
+    from interact.agents.providers import provider_for
+    from interact.agents.run import run_agent
+
+    async def _go() -> int:
+        prov = provider_for(provider)
+        handle = await run_agent(prov, task, name=name or prov.name,
+                                 cwd=cwd or os.getcwd(), model=model)
+        print(f"run_id {handle.run_id}")
+        seen = 0
+        while True:
+            events = reg.read_events(handle.run_id)
+            for event in events[seen:]:
+                print(f"  {event.kind:11} {event.summary()}")
+            seen = len(events)
+            if handle.process.returncode is not None:
+                break
+            await asyncio.sleep(0.4)
+        return await handle.wait()
+
+    raise SystemExit(asyncio.run(_go()))

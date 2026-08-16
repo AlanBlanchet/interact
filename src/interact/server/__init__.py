@@ -16,7 +16,7 @@ import asyncio  # noqa: F401 — re-exported: some tests patch interact.server.a
 
 # Submodules — importing the tools_* modules runs their @mcp.tool decorators (registration).
 from interact.server import capture, core, sandbox, targets, vlm  # noqa: F401
-from interact.server import tools_desktop, tools_meta, tools_vision, tools_web  # noqa: F401
+from interact.server import tools_agents, tools_desktop, tools_meta, tools_vision, tools_web  # noqa: F401
 
 # --- Shared instances / entrypoint (core) ---
 from interact.server.core import (  # noqa: F401
@@ -124,6 +124,13 @@ from interact.server.tools_desktop import (  # noqa: F401
     reset_sandbox,
 )
 from interact.server.tools_meta import list_providers, report_issue  # noqa: F401
+from interact.server.tools_agents import (  # noqa: F401
+    agent_events,
+    agent_list,
+    agent_providers,
+    agent_spawn,
+    agent_stop,
+)
 
 # --- Names other modules define but tests reach through interact.server (back-compat) ---
 from interact.debug_utils import Debug  # noqa: F401
