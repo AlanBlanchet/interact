@@ -33,6 +33,13 @@ jobs:
         with:
           enable-cache: true
 
+      # tests/test_paths.py runs the extension's own TS path resolver through node to pin it to
+      # the Python writer. Without node it would SKIP — silently unchecking the cross-language
+      # contract in the one place it matters; the test hard-fails under CI rather than skipping.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Version files in sync (single source of truth)
         run: uv run python -m interact.versioning check
 
@@ -46,6 +53,37 @@ jobs:
       - name: Desktop automation (macOS/Windows real GUI)
         if: runner.os != 'Linux'
         run: uv run pytest tests/test_portable_backend.py -v -rs
+
+  # The extension is TypeScript that nothing else compiles: until now `tsc` ran only inside
+  # publish-extension, i.e. on release tags only, so the extension source could sit broken on
+  # main for weeks with no ordinary run noticing. This job typechecks + bundles on every push
+  # and PR. (It would NOT by itself have caught the usage-log path drift — that was a runtime
+  # semantic mismatch between two languages, and tests/test_paths.py is what pins it; this job
+  # is what makes such a cross-language test compile-checked and runnable at all.)
+  extension:
+    name: extension (typecheck + bundle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: vscode-extension
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv  # compile runs the Python type/data generators
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install extension deps
+        run: npm ci
+      - name: Typecheck + bundle
+        run: npm run compile
+      # Only src/generated/types.ts is tracked — settings.json/models.json/benchmarks.json are
+      # gitignored and copied from the Python package at build time, so diffing them is a no-op.
+      - name: Generated types are committed (in sync with the Python models)
+        run: git diff --exit-code -- src/generated
 
   # Desktop automation CAN be tested in CI on Linux: Xvfb gives the runner a virtual
   # display, and the nested Xephyr sandbox drives real windows via xdotool/maim. (The
@@ -90,7 +128,7 @@ jobs:
   # main. Never tags a broken build. Single source of truth = pyproject.toml version (must
   # match package.json); no-ops if the tag already exists, so re-pushes are safe.
   release:
-    needs: [test, desktop]
+    needs: [test, desktop, extension]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
     runs-on: ubuntu-latest
     permissions:

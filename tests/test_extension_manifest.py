@@ -37,6 +37,36 @@ def test_configuration_keys_use_interact_namespace(manifest):
         assert not key.startswith("interactMcp."), key
 
 
+# Settings the extension owns that have no Python counterpart (UI-only, never sent to the server).
+_EXTENSION_ONLY = {"interact.projectPath", "interact.display.currency"}
+
+
+def test_every_python_setting_is_registered(manifest):
+    """package.json's configuration block is HAND-maintained (nothing generates it), so it drifts
+    from ``config/schema.py`` silently — an unregistered key just never appears in the VS Code
+    settings UI. This is the check that catches it."""
+    from interact.config import SETTINGS
+
+    declared = set(manifest["contributes"]["configuration"]["properties"])
+    expected = {f"interact.{s.key}" for s in SETTINGS}
+    assert not (expected - declared), f"in schema.py but not package.json: {sorted(expected - declared)}"
+    assert not (declared - expected - _EXTENSION_ONLY), (
+        f"in package.json but not schema.py: {sorted(declared - expected - _EXTENSION_ONLY)}"
+    )
+
+
+def test_debug_dir_default_matches_python(manifest, monkeypatch):
+    """The manifest default is what the dashboard resolves the usage log against when the user
+    never touched the setting — it must be Python's ``Config.debug_dir``, or the panel reads a
+    file nothing writes (see tests/test_paths.py)."""
+    from interact.config import Config
+
+    monkeypatch.delenv("INTERACT_DEBUG_DIR", raising=False)  # assert the DEFAULT, not a dev override
+    prop = manifest["contributes"]["configuration"]["properties"]["interact.debug.dir"]
+    default = Config().debug_dir  # derived, not a 4th hand-typed copy of the same path
+    assert prop["default"] == "~/" + default.relative_to(Path.home()).as_posix()
+
+
 def test_activates_on_startup(manifest):
     assert "onStartupFinished" in manifest.get("activationEvents", [])
 

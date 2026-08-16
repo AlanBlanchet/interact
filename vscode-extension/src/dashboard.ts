@@ -20,9 +20,9 @@ import {
   currencySymbol,
   COMMON_CURRENCIES,
 } from "./currency";
+import { usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import {
   readUsageLog,
-  usageLogPathFor,
   filterByRange,
   aggregateByProvider,
   aggregateStackedByModel,
@@ -136,16 +136,21 @@ export class DashboardPanel {
   /** Path of the usage log the running server writes to — under the configured base dir, so a
    *  custom `interact.debug.dir` (== Python's INTERACT_DEBUG_DIR) is honoured, not hardcoded. */
   private usageLogPath(): string {
-    return usageLogPathFor(cfg().get<string>("debug.dir") || "~/.interact");
+    return usageLogPathFor(cfg().get<string>("debug.dir") || "");
   }
 
   /** Live-sync the panel: the MCP server is a SEPARATE process that appends to the usage log and
    *  config.env as you work, so without watching them the panel would freeze at open time. Watch
-   *  both the logs dir (usage) and the base dir (config.env), debounced into one refresh. */
+   *  the usage log's dir and config.env's dir, debounced into one refresh. config.env is located
+   *  DIRECTLY (not as the log dir's parent): the two move independently — point `interact.debug.dir`
+   *  at a project's out/ and the parent is that project, not `~/.interact`, so walking up would
+   *  both miss key/setting edits and watch an unrelated directory. */
   private startWatching(): void {
-    const logsDir = path.dirname(this.usageLogPath());
-    const baseDir = path.dirname(logsDir);
-    for (const dir of new Set([logsDir, baseDir])) {
+    const dirs = new Set([
+      path.dirname(this.usageLogPath()),
+      path.dirname(INTERACT_CONFIG_PATH),
+    ]);
+    for (const dir of dirs) {
       try {
         fs.mkdirSync(dir, { recursive: true });
         const w = fs.watch(dir, () => this.scheduleRefresh());

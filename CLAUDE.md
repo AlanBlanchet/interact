@@ -50,7 +50,9 @@ Zed / Claude Desktop). One Python core in `src/interact/` drives three surfaces:
 - `probe.py` (`DetectionProbe` / `Scenario` / `DesktopScenario`) is **test infrastructure**,
   driven from `tests/`, never a user CLI command.
 - Data sources of truth: `PackageData` (bundled `models.json` / `benchmarks.json` /
-  `published_scores.json`) and `~/.interact/logs/usage.jsonl` (VLM usage).
+  `published_scores.json`) and `~/.interact/out/usage.jsonl` (VLM usage — i.e.
+  `<debug_dir>/usage.jsonl`, relocating with `INTERACT_DEBUG_DIR`; `tests/test_paths.py` binds
+  the VS Code dashboard's reader to this same path).
 
 ## Tool surface model (the MCP API agents see)
 

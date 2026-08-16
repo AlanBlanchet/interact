@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { INTERACT_CONFIG_PATH } from "./paths";
 
 export const SETTING_SECTION = "interact";
 export const IS_SECRET_RE = /KEY|SECRET|TOKEN/i;
@@ -137,20 +138,20 @@ export const SETTING_TO_TASK: Record<string, string> = Object.fromEntries(
   SETTINGS.filter((s) => s.kind === "model").map((s) => [s.key, s.role as string]),
 );
 
-/** Path of interact's shared config store (the same file the CLI/TUI use). */
-export const INTERACT_CONFIG_PATH = path.join(os.homedir(), ".interact", "config.env");
+/** Path of interact's shared config store (the same file the CLI/TUI use). Defined in paths.ts —
+ *  the one module that owns where interact's local files live — and re-exported here for the
+ *  existing importers. */
+export { INTERACT_CONFIG_PATH };
 
 /**
  * API-key store backed by interact's own ~/.interact/config.env — NOT VS Code secret
  * storage. This makes interact the single source of truth for keys: the same file the
  * `interact` CLI/TUI manage and that the `interact mcp` server reads at startup, so a key
- * set in any of them is seen everywhere. The constructor still accepts a SecretStorage for
- * call-site compatibility but ignores it.
+ * set in any of them is seen everywhere. Nothing here touches VS Code SecretStorage.
  */
 export class KeyManager {
   private cache = new Map<string, string>();
 
-  constructor(_secrets?: vscode.SecretStorage) {}
 
   private static readFile(): Map<string, string> {
     const map = new Map<string, string>();
@@ -198,11 +199,6 @@ export class KeyManager {
     file.delete(key);
     KeyManager.writeFile(file);
     this.cache.delete(key);
-  }
-
-  syncCache(key: string, value: string | undefined): void {
-    if (value) this.cache.set(key, value);
-    else this.cache.delete(key);
   }
 
   entries(): [string, string][] {

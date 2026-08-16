@@ -36,7 +36,9 @@ def _log_usage(model: str, response) -> None:
         with log.open("a") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:
-        pass
+        # Metering must never break the tool call that triggered it — but it must not be
+        # invisible either: a swallowed write is exactly how cost metering breaks silently.
+        _log.debug("usage-log write failed", exc_info=True)
 
 
 class _Unset:

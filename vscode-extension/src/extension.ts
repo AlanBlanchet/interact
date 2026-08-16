@@ -338,22 +338,17 @@ export async function activate(
     for (const k of info.envKeys) allEnvKeys.add(k);
   }
 
-  const keyManager = new KeyManager(context.secrets);
+  const keyManager = new KeyManager();
   await keyManager.loadAll([...allEnvKeys]);
 
   const log = vscode.window.createOutputChannel("Interact");
   context.subscriptions.push(log);
 
+  // No `secrets.onDidChange` listener: KeyManager stores keys in ~/.interact/config.env (the
+  // file the CLI + server share), not SecretStorage, so nothing ever writes a secret for that
+  // event to fire on. Key edits refresh the panel through KeyManager.set/remove directly.
   const emitter = new vscode.EventEmitter<void>();
-  context.subscriptions.push(
-    emitter,
-    context.secrets.onDidChange(async (e) => {
-      if (!allEnvKeys.has(e.key)) return;
-      keyManager.syncCache(e.key, await context.secrets.get(e.key));
-      emitter.fire();
-      DashboardPanel.refreshIfOpen();
-    }),
-  );
+  context.subscriptions.push(emitter);
 
   try {
     const serverDef = (vscode.lm as any).registerMcpServerDefinitionProvider(

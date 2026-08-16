@@ -35,8 +35,11 @@ class Debug:
     @staticmethod
     def dump_dir(debug_dir: str | None) -> Path | None:
         # per-call arg wins, then the explicit screenshot override, then the debug_dir base.
+        # expanduser here for the same reason Config does it for the env/settings values: this is
+        # the other boundary a raw path STRING enters on, and a literal Path("~/x") would write to
+        # a "~" dir beside the server's cwd. (Config's fields are already expanded.)
         if debug_dir:
-            return Path(debug_dir)
+            return Path(debug_dir).expanduser()
         return config.screenshot_dump_dir or config.debug_dir
 
     @classmethod

@@ -1,65 +1,7 @@
-// Minimal type re-declarations (matches shared.ts, avoids importing from extension host)
-interface Action {
-  type: string;
-  label: string;
-  data?: Record<string, string>;
-  style?: "primary" | "secondary";
-}
-
-type RangeId = "24h" | "7d" | "30d" | "all";
-
-type CellContent =
-  | {
-      kind: "row";
-      label: string;
-      value?: string;
-      dot?: "ok" | "missing";
-      actions?: Action[];
-      tooltip?: string;
-    }
-  | { kind: "table"; headers: string[]; rows: string[][] }
-  | { kind: "chart"; points: { x: string; y: number }[]; yPrefix?: string }
-  | {
-      kind: "bar-h";
-      bars: { label: string; value: number; color?: string }[];
-      valuePrefix?: string;
-      ariaSummary: string;
-    }
-  | {
-      kind: "stacked-bar";
-      xLabels: string[];
-      series: { name: string; color: string; values: number[] }[];
-      valuePrefix?: string;
-      ariaSummary: string;
-    }
-  | {
-      kind: "small-multiples";
-      panels: {
-        title: string;
-        bars: { label: string; value: number; color: string }[];
-      }[];
-      valuePrefix?: string;
-      ariaSummary: string;
-    }
-  | {
-      kind: "donut";
-      segments: { label: string; value: number; color: string }[];
-      centerLabel?: string;
-      ariaSummary: string;
-    }
-  | {
-      kind: "range-selector";
-      current: RangeId;
-      options: { id: RangeId; label: string }[];
-    }
-  | { kind: "heading"; text: string }
-  | { kind: "empty"; message: string };
-
-interface CellUpdate {
-  id: string;
-  title: string;
-  content: CellContent[];
-}
+// The webview↔host wire types come from shared.ts — ONE declaration, so a change to a cell kind
+// can't compile on one side and silently mismatch on the other. `import type` is erased at build
+// time, so this pulls no extension-host runtime code (esbuild bundles the webview separately).
+import type { Action, RangeId, CellContent, CellUpdate } from "../src/shared";
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 

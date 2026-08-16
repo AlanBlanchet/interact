@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from interact.data import PackageData
@@ -145,6 +145,24 @@ class Config(BaseSettings):
     # When the target is "nested": run the X server visible (Xephyr, default — watch the
     # agent) or headless in the background (Xvfb — for CI / servers, no window).
     nested_headless: bool = False
+
+    @field_validator("debug_dir", "screenshot_dump_dir", "browser_profile_dir", mode="after")
+    @classmethod
+    def _expand_user(cls, value: Path | None) -> Path | None:
+        """Expand ``~`` once, here at the boundary where the value enters.
+
+        These fields are free text everywhere they're set — the config TUI, the VS Code settings
+        UI, a hand-edited ``config.env`` — and their descriptions advertise ``~/.interact/out``,
+        so users type a tilde. Without this, ``INTERACT_DEBUG_DIR=~/.interact`` becomes a literal
+        ``Path("~/.interact")`` and every write lands in a ``./~/.interact`` dir relative to
+        wherever the server happened to start.
+        """
+        if value is None:
+            return value
+        try:
+            return value.expanduser()
+        except RuntimeError as exc:  # "~nosuchuser/out" — pydantic only wraps ValueError
+            raise ValueError(f"cannot expand '~' in {value}: {exc}") from exc
 
     @model_validator(mode="after")
     def _check_dim_bounds(self):

@@ -81,6 +81,11 @@
           "default": "",
           "description": "Vision model for UI element detection. Falls back to image model when empty. Use 'Select Model' command for tested recommendations."
         },
+        "interact.audio.model": {
+          "type": "string",
+          "default": "",
+          "description": "Speech-to-text + audio understanding for the transcribe tool (Whisper / gpt-4o-transcribe / Gemini). Use 'Select Model' command for tested recommendations."
+        },
         "interact.browser.headless": {
           "type": "boolean",
           "default": true,
@@ -111,6 +116,11 @@
           "default": 0,
           "description": "Slow down browser actions by this many milliseconds (useful for observing automation)"
         },
+        "interact.browser.profileDir": {
+          "type": "string",
+          "default": "",
+          "description": "When set, browser sessions keep their cookies/login on disk here (under <dir>/<session>) so you log in once and stay authenticated across restarts. Blank = ephemeral (logged out every launch)."
+        },
         "interact.vlm.maxTokens": {
           "type": "number",
           "default": 2048,
@@ -123,8 +133,8 @@
         },
         "interact.debug.dir": {
           "type": "string",
-          "default": "~/.interact",
-          "description": "Save every screenshot to this folder as timestamped PNGs (for debugging)"
+          "default": "~/.interact/out",
+          "description": "Where interact writes the usage log + debug artifacts (blank = ~/.interact/out; point at a project's out/ when working locally). Must match INTERACT_DEBUG_DIR — the dashboard reads the usage log from here."
         },
         "interact.desktop.target": {
           "type": "string",
