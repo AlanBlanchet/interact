@@ -206,6 +206,12 @@
         "title": "Show agent activity",
         "category": "Interact",
         "icon": "$(output)"
+      },
+      {
+        "command": "interact.agents.openConversation",
+        "title": "Open agent conversation",
+        "category": "Interact",
+        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {
@@ -246,6 +252,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "interact.agents.openConversation",
+          "when": "view == interact.agentsView && viewItem =~ /interact(Running|Foreign)?Run/",
+          "group": "inline@0"
+        },
         {
           "command": "interact.agents.stop",
           "when": "view == interact.agentsView && viewItem == interactRunningRun",

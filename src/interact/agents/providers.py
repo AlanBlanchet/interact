@@ -22,6 +22,29 @@ from typing import ClassVar
 from interact.agents.events import AgentEvent
 
 
+#: A transcript is read by a human, and a 50k-char tool result is not read — it is scrolled past,
+#: while bloating every refresh that parses the file. Keep the head, say what was cut.
+_CLIP = 2000
+
+
+def _clip(text: str, limit: int = _CLIP) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else f"{text[:limit]}… (+{len(text) - limit} chars)"
+
+
+def _summarise_input(value) -> str:
+    """The tool's arguments as one readable line. A dict is rendered key=value with its most
+    telling field first — the command, the path, the pattern — because that is what identifies
+    the call at a glance."""
+    if value is None:
+        return ""
+    if not isinstance(value, dict):
+        return _clip(str(value), 300)
+    lead = ("command", "file_path", "path", "pattern", "url", "query", "prompt")
+    keys = [k for k in lead if k in value] + [k for k in value if k not in lead]
+    return _clip(" ".join(f"{k}={value[k]!r}" for k in keys[:4]), 300)
+
+
 class AgentProvider(ABC):
     """How to launch one vendor's agent CLI and read what it emits."""
 
@@ -37,9 +60,10 @@ class AgentProvider(ABC):
         return shutil.which(self.binary) is not None
 
     @abstractmethod
-    def command(self, task: str, *, cwd: str, model: str | None,
-                mcp_config: str | None, run_id: str) -> list[str]:
-        """The argv to spawn for this task."""
+    def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
+                run_id: str, agent: str | None = None) -> list[str]:
+        """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
+        (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
 
     @abstractmethod
     def parse(self, line: str) -> AgentEvent | None:
@@ -61,8 +85,8 @@ class ClaudeCodeProvider(AgentProvider):
     name = "claude"
     binary = "claude"
 
-    def command(self, task: str, *, cwd: str, model: str | None,
-                mcp_config: str | None, run_id: str) -> list[str]:
+    def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
+                run_id: str, agent: str | None = None) -> list[str]:
         argv = [
             self.binary, "-p", task,
             "--output-format", "stream-json",
@@ -73,6 +97,8 @@ class ClaudeCodeProvider(AgentProvider):
         ]
         if model:
             argv += ["--model", model]
+        if agent:
+            argv += ["--agent", agent]
         if mcp_config:
             argv += ["--mcp-config", mcp_config]
         return argv
@@ -98,19 +124,39 @@ class ClaudeCodeProvider(AgentProvider):
         if kind == "assistant":
             msg = raw.get("message") or {}
             usage = msg.get("usage") or {}
-            texts, tool = [], None
+            texts, thinking, tool, tool_input = [], [], None, ""
             for block in msg.get("content") or []:
-                if block.get("type") == "text":
+                btype = block.get("type")
+                if btype == "text":
                     texts.append(block.get("text", ""))
-                elif block.get("type") == "tool_use":
+                elif btype == "thinking":
+                    thinking.append(block.get("thinking", ""))
+                elif btype == "tool_use":
                     tool = block.get("name")
+                    tool_input = _summarise_input(block.get("input"))
             if tool:
-                return AgentEvent(kind="tool", tool=tool, session_id=sid, raw_type=kind,
+                return AgentEvent(kind="tool", tool=tool, tool_input=tool_input,
+                                  session_id=sid, raw_type=kind,
                                   input_tokens=usage.get("input_tokens"),
                                   output_tokens=usage.get("output_tokens"))
+            if thinking and not any(t.strip() for t in texts):
+                return AgentEvent(kind="thinking", text=_clip("".join(thinking)),
+                                  session_id=sid, raw_type=kind)
             return AgentEvent(kind="text", text="".join(texts), session_id=sid, raw_type=kind,
                               input_tokens=usage.get("input_tokens"),
                               output_tokens=usage.get("output_tokens"))
+
+        if kind == "user":
+            # Tool results come back as a USER turn — that is the other half of a transcript.
+            msg = raw.get("message") or {}
+            for block in msg.get("content") or []:
+                if block.get("type") == "tool_result":
+                    body = block.get("content")
+                    if isinstance(body, list):
+                        body = " ".join(b.get("text", "") for b in body if isinstance(b, dict))
+                    return AgentEvent(kind="tool_result", text=_clip(str(body or "")),
+                                      session_id=sid, raw_type=kind)
+            return AgentEvent(kind="other", session_id=sid, raw_type=kind)
 
         if kind == "rate_limit_event":
             info = raw.get("rate_limit_info") or {}
@@ -166,8 +212,8 @@ class CodexProvider(AgentProvider):
     caveat = ("unverified: built from docs, never run against a real binary; and OpenAI has not "
               "clarified how consumer-subscription terms apply to scripted use")
 
-    def command(self, task: str, *, cwd: str, model: str | None,
-                mcp_config: str | None, run_id: str) -> list[str]:
+    def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
+                run_id: str, agent: str | None = None) -> list[str]:
         argv = [self.binary, "exec", task, "--json"]
         if model:
             argv += ["--model", model]

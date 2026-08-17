@@ -78,8 +78,9 @@ async def run_agent(
     provider: AgentProvider,
     task: str,
     *,
-    name: str,
+    name: str | None = None,
     cwd: str,
+    agent: str | None = None,
     model: str | None = None,
     parent_run_id: str | None = None,
     mesh: bool = True,
@@ -101,10 +102,13 @@ async def run_agent(
         )
     run_id = str(uuid.uuid4())
     parent = parent_run_id or os.environ.get("INTERACT_PARENT_RUN_ID") or None
+    # A run named after its agent DEFINITION ("visual-critic") is self-describing in the panel;
+    # falling back to the provider ("claude") tells you nothing about what it is for.
+    label = name or agent or provider.name
     argv = provider.command(
         task, cwd=cwd, model=model,
         mcp_config=mesh_config(run_id=run_id) if mesh else None,
-        run_id=run_id,
+        run_id=run_id, agent=agent,
     )
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
     # otherwise a grandchild would inherit its grandparent's id and the tree would be wrong.
@@ -124,7 +128,7 @@ async def run_agent(
         )
     finally:
         sink.close()  # the child holds its own dup of the fd
-    reg.register(run_id=run_id, pid=process.pid, provider=provider.name, name=name,
+    reg.register(run_id=run_id, pid=process.pid, provider=provider.name, name=label,
                  task=task, cwd=cwd, model=model, parent_run_id=parent)
     pump = asyncio.create_task(_reap(run_id, process))
     return RunHandle(run_id=run_id, process=process, pump=pump)

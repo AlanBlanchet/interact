@@ -155,6 +155,12 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       "run",
       run,
     );
+    // Clicking a run opens its conversation — the reason to have a tree at all is to get here.
+    node.command = {
+      command: "interact.agents.openConversation",
+      title: "Open conversation",
+      arguments: [run.run_id],
+    };
     const icon = STATUS_ICON[run.status] ?? STATUS_ICON.foreign;
     node.iconPath = new vscode.ThemeIcon(
       icon.id,

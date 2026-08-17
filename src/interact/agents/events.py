@@ -15,7 +15,9 @@ from pydantic import BaseModel
 EventKind = Literal[
     "started",     # the session is up (its id, cwd and tools are known)
     "text",        # the agent said something
+    "thinking",    # the model's own reasoning, kept distinct so a reader can fold it away
     "tool",        # the agent used a tool — the live "what is it doing" line
+    "tool_result", # what that tool gave back
     "rate_limit",  # the account's pooled limit spoke; a run can die here
     "done",        # terminal: carries the run's cost and token totals
     "error",       # terminal: it failed
@@ -30,6 +32,9 @@ class AgentEvent(BaseModel):
     text: str = ""
     session_id: str | None = None
     tool: str | None = None
+    #: A compact rendering of the tool's arguments. A conversation view showing "used Bash" without
+    #: the command is a status line, not a transcript — this is what makes it readable.
+    tool_input: str = ""
     # Cost is API-EQUIVALENT: on a subscription run the user is not billed this, they already paid
     # for the plan. The dashboard must label it accordingly rather than implying fresh spend.
     cost_usd: float | None = None

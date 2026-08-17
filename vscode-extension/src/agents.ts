@@ -118,6 +118,9 @@ export interface AgentActivity {
   kind: string;
   text: string;
   tool?: string | null;
+  /** The tool's arguments, already summarised by Python. "used Bash" without the command is a
+   *  status line; with it, it is a transcript. */
+  tool_input?: string;
 }
 
 /** A run's recent activity, oldest last. Bounded by `limit` because a long run's transcript is
@@ -137,7 +140,12 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
     try {
       const raw = JSON.parse(line);
       if (raw && typeof raw.kind === "string") {
-        out.push({ kind: raw.kind, text: String(raw.text ?? ""), tool: raw.tool ?? null });
+        out.push({
+          kind: raw.kind,
+          text: String(raw.text ?? ""),
+          tool: raw.tool ?? null,
+          tool_input: String(raw.tool_input ?? ""),
+        });
       }
     } catch {
       continue;

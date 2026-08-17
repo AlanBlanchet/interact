@@ -351,6 +351,12 @@ export async function activate(
     agentsProvider,
     vscode.window.registerTreeDataProvider("interact.agentsView", agentsProvider),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    vscode.commands.registerCommand("interact.agents.openConversation", async (arg?: string | { run?: { run_id: string } }) => {
+      const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
+      if (!runId) return;
+      const { ConversationPanel } = await import("./conversation");
+      ConversationPanel.show(runId);
+    }),
     vscode.commands.registerCommand("interact.agents.groupBy", async () => {
       const pick = await vscode.window.showQuickPick(
         [

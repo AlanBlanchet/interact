@@ -129,3 +129,53 @@ def test_codex_is_declared_but_marked_unverified():
     c = CodexProvider()
     assert c.verified is False
     assert "unverified" in (c.caveat or "").lower()
+
+
+# ── what a CONVERSATION view needs (not just a status line) ──────────────────────────────────
+# The tree's one-line summary was enough to answer "what is it doing"; showing the actual
+# conversation needs the tool's INPUT, the tool's RESULT, and the model's thinking — all of which
+# the stream carries and the first normalisation discarded.
+
+
+def _parse(raw: dict):
+    import json as _json
+    return ClaudeCodeProvider().parse(_json.dumps(raw))
+
+
+def test_a_tool_call_keeps_its_input():
+    ev = _parse({"type": "assistant", "session_id": "s", "message": {"content": [
+        {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la", "description": "list"}}]}})
+    assert ev.kind == "tool" and ev.tool == "Bash"
+    assert "ls -la" in ev.tool_input, "the command is the whole point of showing a Bash call"
+
+
+def test_a_tool_result_is_its_own_event():
+    ev = _parse({"type": "user", "session_id": "s", "message": {"content": [
+        {"type": "tool_result", "content": "file-a\nfile-b"}]}})
+    assert ev.kind == "tool_result" and "file-a" in ev.text
+
+
+def test_thinking_is_kept_but_marked_as_thinking():
+    ev = _parse({"type": "assistant", "session_id": "s", "message": {"content": [
+        {"type": "thinking", "thinking": "weighing the options"}]}})
+    assert ev.kind == "thinking" and "weighing" in ev.text
+
+
+def test_a_long_tool_result_is_truncated_not_dropped():
+    ev = _parse({"type": "user", "session_id": "s", "message": {"content": [
+        {"type": "tool_result", "content": "x" * 50_000}]}})
+    assert 0 < len(ev.text) < 5000, "a huge result must not blow up the transcript file"
+
+
+def test_a_named_agent_definition_is_passed_through():
+    """Claude Code resolves `--agent <name>` against the agent files (~/.claude/agents/*.md), so a
+    run can BE visual-critic rather than an anonymous 'claude'. That name is also what the panel
+    should show, which is why the caller gets it back rather than inventing a label."""
+    argv = ClaudeCodeProvider().command("t", cwd="/tmp", model=None, mcp_config=None,
+                                        run_id="r", agent="visual-critic")
+    assert argv[argv.index("--agent") + 1] == "visual-critic"
+
+
+def test_no_agent_flag_when_none_is_named():
+    argv = ClaudeCodeProvider().command("t", cwd="/tmp", model=None, mcp_config=None, run_id="r")
+    assert "--agent" not in argv
