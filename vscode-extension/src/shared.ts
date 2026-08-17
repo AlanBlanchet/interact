@@ -32,6 +32,49 @@ export interface Action {
 
 export type RangeId = "24h" | "7d" | "30d" | "all";
 
+/** How the agent board splits its lanes. The owner watches a team three ways: whose project it is,
+ *  which vendor is burning the quota, which model is doing the work. */
+export type AgentGroupBy = "project" | "provider" | "model" | "none";
+
+export type AgentStatus =
+  | "running"
+  | "done"
+  | "failed"
+  | "crashed"
+  | "stopped"
+  | "foreign";
+
+/**
+ * One agent as the board draws it: an identity plus an interval on a shared clock.
+ *
+ * `endedAt` is `null` for a run with no recorded end — which happens for a crash the registry
+ * never got to stamp. That is NOT the same as "ended now": the board draws an explicit
+ * unknown-end tail rather than inventing a duration, because a fabricated bar length would be a
+ * lie told in pixels.
+ */
+export interface AgentLane {
+  id: string;
+  name: string;
+  provider: string;
+  model?: string;
+  /** Display name of the run's cwd (its basename) — the "project" grouping key. */
+  project?: string;
+  /** Full cwd, for the tooltip. */
+  cwd?: string;
+  task?: string;
+  status: AgentStatus;
+  parentId?: string | null;
+  /** Ancestry depth within the whole run set, for the tree rail. */
+  depth: number;
+  /** Epoch milliseconds. */
+  startedAt: number;
+  /** Epoch milliseconds; `null` = still open (running) or never recorded (see above). */
+  endedAt?: number | null;
+  /** API-EQUIVALENT value, already paid for by the plan. `null` = unknown, which is not zero. */
+  costUsd?: number | null;
+  last?: string;
+}
+
 export type CellContent =
   | {
       kind: "row";
@@ -76,8 +119,20 @@ export type CellContent =
       current: RangeId;
       options: { id: RangeId; label: string }[];
     }
+  | {
+      /** The agent supervision board: lanes on a shared time axis, grouped and totalled.
+       *  Grouping and per-group totals are derived in the webview from `lanes` + `groupBy`, so
+       *  the host ships facts and the renderer owns presentation — one place to change either. */
+      kind: "agent-board";
+      groupBy: AgentGroupBy;
+      lanes: AgentLane[];
+      /** Epoch ms bounds of the shared clock every lane and the ribbon are drawn against. */
+      windowStart: number;
+      now: number;
+      ariaSummary: string;
+    }
   | { kind: "heading"; text: string }
-  | { kind: "empty"; message: string };
+  | { kind: "empty"; message: string; hint?: string };
 
 export interface CellUpdate {
   id: string;

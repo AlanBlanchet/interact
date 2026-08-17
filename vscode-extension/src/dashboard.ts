@@ -8,6 +8,8 @@ import {
   CellUpdate,
   Action,
   RangeId,
+  AgentLane,
+  AgentGroupBy,
   cfg,
   SETTINGS,
   Setting,
@@ -107,6 +109,9 @@ export class DashboardPanel {
   private readonly panel: vscode.WebviewPanel;
   private disposed = false;
   private range: RangeId = "7d";
+  /** How the agent board splits its lanes. Project first: the owner's own default question about a
+   *  team is "what is happening on which of my repos". */
+  private agentGroupBy: AgentGroupBy = "project";
   private watchers: fs.FSWatcher[] = [];
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -339,6 +344,15 @@ export class DashboardPanel {
         }
         break;
       }
+      case "setAgentGroup": {
+        // The webview already re-rendered optimistically; this only makes the choice survive the
+        // next refresh, so no round-trip is on the interaction's critical path.
+        const next = (msg as { group?: string }).group;
+        if (next === "project" || next === "provider" || next === "model" || next === "none") {
+          this.agentGroupBy = next;
+        }
+        break;
+      }
     }
   }
 
@@ -545,34 +559,63 @@ export class DashboardPanel {
     if (runs.length === 0) {
       return {
         id: "agents",
-        title: "Agents",
+        title: "Agent supervision",
         content: [
           {
             kind: "empty",
             message:
-              "No agent runs yet — start one with `interact agents run \"<task>\"`, or let an " +
-              "agent spawn its own with the agent_spawn tool.",
+              "No agent runs yet. Once a team is working, every run appears here as a lane on a " +
+              "shared clock \u2014 who is running, on what, for how long, and who launched whom.",
+            hint: 'interact agents run "<task>"',
           },
         ],
       };
     }
-    const { live, cost } = summarise(runs);
-    const rows = withDepth(runs).map(({ run, depth }) => {
-      const indent = "\u00a0\u00a0".repeat(depth) + (depth ? "\u21b3 " : "");
-      const money = run.cost_usd == null ? "\u2014" : `~$${run.cost_usd.toFixed(4)}`;
-      return [
-        indent + run.name,
-        run.provider,
-        run.foreign ? `${run.status} (not ours)` : run.status,
-        money,
-        (run.last ?? "").slice(0, 60),
-      ];
+
+    const now = Date.now();
+    const lanes: AgentLane[] = withDepth(runs).map(({ run, depth }) => {
+      // Python stamps epoch SECONDS; the board works in milliseconds. A record with no start (an
+      // older writer) is pinned to `now` so it still draws instead of flying off the axis.
+      const cwd = run.cwd || undefined;
+      return {
+        id: run.run_id,
+        name: run.name,
+        provider: run.provider,
+        model: run.model || undefined,
+        project: cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : undefined,
+        cwd,
+        task: run.task || undefined,
+        // `foreign` is provenance rather than lifecycle, but it is the read that matters here: a
+        // session interact did not spawn is drawn as a ghost, never as our own work.
+        status: run.foreign ? "foreign" : run.status,
+        parentId: run.parent_run_id ?? null,
+        depth,
+        startedAt: run.started_at ? run.started_at * 1000 : now,
+        // An absent `finished_at` stays null all the way to the renderer, which draws an explicit
+        // unknown end. Substituting `now` here would invent a duration nothing ever recorded.
+        endedAt: run.finished_at != null ? run.finished_at * 1000 : null,
+        costUsd: run.cost_usd ?? null,
+        last: run.last || undefined,
+      };
     });
+
+    const { live, cost } = summarise(runs);
+    // At least a minute of window, so a team that all started seconds ago still gets an axis.
+    const windowStart = Math.min(...lanes.map((l) => l.startedAt), now - 60_000);
     return {
       id: "agents",
-      title: `Agents \u2014 ${live} running, ~$${cost.toFixed(4)} API-equivalent`,
+      title: "Agent supervision",
       content: [
-        { kind: "table", headers: ["Agent", "Provider", "Status", "Cost", "Doing"], rows },
+        {
+          kind: "agent-board",
+          groupBy: this.agentGroupBy,
+          lanes,
+          windowStart,
+          now,
+          ariaSummary:
+            `${live} of ${lanes.length} agents running; ~$${cost.toFixed(4)} API-equivalent ` +
+            "value consumed, already covered by the plan.",
+        },
       ],
     };
   }
@@ -621,14 +664,13 @@ export class DashboardPanel {
     // a) Spend by provider — horizontal bar
     const provAgg = aggregateByProvider(entries, this.modelsData);
     const provTotal = provAgg.reduce((s, p) => s + p.cost, 0);
-    const provBars = provAgg.map((p) => {
-      const pct = provTotal > 0 ? (p.cost / provTotal) * 100 : 0;
-      return {
-        label: `${p.provider} (${money(p.cost)} • ${pct.toFixed(0)}%)`,
-        value: p.cost * rate,
-        color: colorFor(p.provider),
-      };
-    });
+    // The label is just the name now: the renderer prints the value and the share itself, so
+    // stuffing them into the label duplicated what the bar already says.
+    const provBars = provAgg.map((p) => ({
+      label: p.provider,
+      value: p.cost * rate,
+      color: colorFor(p.provider),
+    }));
     const topProv = provAgg[0];
     const topPct =
       provTotal > 0 && topProv ? (topProv.cost / provTotal) * 100 : 0;

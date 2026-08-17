@@ -67,32 +67,52 @@ body {
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
-/* Content area */
+/* Content area — the panel is a wide surface; a 880px cap left a third of a 1280px window empty. */
 .tab-content {
-  padding: 18px;
+  padding: 20px 22px 32px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 880px;
+  gap: 18px;
+  max-width: 1440px;
 }
 
 .cell {
   border: 1px solid var(--vscode-widget-border, #333);
-  border-radius: 8px;
-  padding: 16px 18px;
+  border-radius: 10px;
+  padding: 16px 18px 18px;
   background: var(
     --vscode-editorWidget-background,
     var(--vscode-editor-background)
   );
 }
 
+/* A section title is the top of the hierarchy, so it reads as a title: sentence case at real
+   size, not 11px grey capitals competing with the body text below it. */
 .cell-title {
   font-weight: 600;
-  margin-bottom: 12px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--vscode-descriptionForeground);
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  font-size: 14px;
+  letter-spacing: 0;
+  color: var(--vscode-editor-foreground);
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* The consumption charts are independent panels — lay them across the width instead of stacking
+   them in one narrow column. */
+#cell-consumption {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 14px 28px;
+  align-items: start;
+}
+#cell-consumption > .cell-title,
+#cell-consumption > .range-selector,
+#cell-consumption > .empty {
+  grid-column: 1 / -1;
 }
 
 /* Group heading inside a cell (settings sections) */
@@ -211,11 +231,59 @@ th {
   letter-spacing: 0.5px;
 }
 
+/* Empty state — a drawn, on-brand "no lanes yet" rather than a line of grey italic apology. */
 .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 20px;
   text-align: center;
-  padding: 20px;
+}
+.empty-art {
+  opacity: 0.55;
+}
+svg .empty-rule {
+  stroke: var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+svg .empty-slot {
+  fill: var(--vscode-charts-blue);
   opacity: 0.5;
-  font-style: italic;
+  animation: empty-fill 3.2s ease-in-out infinite;
+}
+svg .empty-slot:last-of-type {
+  animation-delay: 0.5s;
+}
+svg .empty-now {
+  stroke: var(--vscode-charts-blue);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+@keyframes empty-fill {
+  0%,
+  100% {
+    width: 0px;
+  }
+  55%,
+  75% {
+    width: 60px;
+  }
+}
+.empty-msg {
+  max-width: 46ch;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.6;
+}
+.empty-hint {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+  color: var(--vscode-foreground);
 }
 
 /* Chart */
@@ -249,18 +317,63 @@ svg .chart-fill {
   fill: url(#chartGrad);
 }
 
-/* Horizontal bar chart */
-.bar-h {
-  display: block;
-  margin: 6px 0;
+/* Horizontal bars — real DOM, so a 12px label stays 12px however wide the column gets, and the
+   number is PRINTED at the end instead of being left to the reader's imagination. */
+.barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 4px 0 2px;
 }
-svg .bar-h-fill {
-  opacity: 0.85;
+.barlist-row {
+  display: grid;
+  grid-template-columns: minmax(64px, 22%) 1fr auto;
+  align-items: center;
+  gap: 10px;
 }
-svg .bar-h-label {
-  fill: var(--vscode-editor-foreground);
-  font-size: 10px;
-  dominant-baseline: middle;
+.barlist-label {
+  font-size: 12px;
+  color: var(--vscode-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.barlist-track {
+  position: relative;
+  height: 9px;
+  border-radius: 5px;
+  background: var(--vscode-widget-border, rgba(128, 128, 128, 0.18));
+  overflow: hidden;
+}
+.barlist-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 5px;
+  animation: bar-grow 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: left center;
+}
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.barlist-value {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-foreground);
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.barlist-pct {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  min-width: 3ch;
+  text-align: right;
 }
 
 /* Stacked bar */
@@ -298,13 +411,25 @@ svg .axis-grid {
   display: block;
 }
 
-/* Donut */
+/* Donut — fixed-size ring, HTML legend (an SVG legend scaled its own text along with the chart). */
+.donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 6px 0 2px;
+}
+.donut-ring {
+  position: relative;
+  flex: 0 0 auto;
+  line-height: 0;
+}
 .donut {
   display: block;
-  margin: 6px 0;
 }
 svg .donut-segment {
   opacity: 0.9;
+  transition: opacity 0.15s;
 }
 svg .donut-segment:hover {
   opacity: 1;
@@ -312,11 +437,54 @@ svg .donut-segment:hover {
 svg .donut-empty {
   fill: var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
 }
-svg .donut-center {
-  fill: var(--vscode-editor-foreground);
-  font-size: 14px;
+.donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
   font-weight: 600;
-  dominant-baseline: middle;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--vscode-editor-foreground);
+  pointer-events: none;
+}
+.donut-legend {
+  flex: 1 1 190px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.legend-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-foreground);
+}
+.legend-value {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  gap: 7px;
+}
+.legend-pct {
+  color: var(--vscode-descriptionForeground);
+  min-width: 3ch;
+  text-align: right;
 }
 
 /* Range selector */
@@ -341,4 +509,718 @@ svg .donut-center {
   opacity: 1;
   border-color: var(--vscode-focusBorder, #007acc);
   color: var(--vscode-focusBorder, #007acc);
+}
+
+/* ==========================================================================
+   Agent board — "flight deck"
+   Lanes are intervals on ONE shared clock: the identity column, the ribbon, the axis and every
+   bar all measure the same window, so overlap, duration and gaps read directly off the page.
+   Nothing here is a scaled SVG: positions are percentages of that window on plain elements, which
+   is why a 12px label stays 12px at any panel width.
+   ========================================================================== */
+
+.board {
+  --id-w: 252px;
+  --meta-w: 112px;
+  --lane-h: 38px;
+  --board-grid: var(--vscode-charts-lines, var(--vscode-widget-border, rgba(128, 128, 128, 0.22)));
+  margin-top: 2px;
+}
+
+.board-row {
+  display: grid;
+  grid-template-columns: var(--id-w) minmax(0, 1fr) var(--meta-w);
+  align-items: center;
+  column-gap: 14px;
+}
+
+.board-aside {
+  min-width: 0;
+}
+
+.board-meta-col {
+  min-width: 0;
+}
+
+/* ---- header: the two numbers that matter, then the split control ---- */
+
+.board-head {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding: 2px 2px 16px;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.hero-num {
+  position: relative;
+  font-size: 34px;
+  font-weight: 650;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-descriptionForeground);
+  padding-left: 0;
+}
+
+.hero-num-sm {
+  font-size: 23px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-weight: 600;
+  color: var(--vscode-editor-foreground);
+}
+
+.hero-live {
+  color: var(--vscode-charts-blue);
+  padding-left: 18px;
+}
+
+/* The one deliberately live thing in the header: a heartbeat that says the view is not a snapshot. */
+.hero-pulse {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--vscode-charts-blue);
+  animation: heartbeat 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.hero-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--vscode-charts-blue);
+  animation: halo 2s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+@keyframes heartbeat {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@keyframes halo {
+  0% { transform: scale(1); opacity: 0.5; }
+  70%, 100% { transform: scale(3.1); opacity: 0; }
+}
+
+.hero-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.hero-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--vscode-foreground);
+}
+.hero-sub {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.group-control {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.22));
+}
+.group-control-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  padding: 0 8px 0 6px;
+}
+.seg {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  padding: 4px 12px;
+  border-radius: 5px;
+  font-size: 12px;
+  opacity: 0.75;
+  transition: background 0.12s, opacity 0.12s;
+}
+.seg:hover {
+  opacity: 1;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+.seg-active,
+.seg-active:hover {
+  opacity: 1;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-weight: 600;
+}
+
+/* ---- shared plot furniture ---- */
+
+.lane-track {
+  position: relative;
+  height: var(--lane-h);
+  min-width: 0;
+}
+
+.grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--board-grid);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.now-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--vscode-charts-blue);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ---- concurrency ribbon: how many were working at once ---- */
+
+.board-ribbon-row {
+  align-items: end;
+}
+.ribbon-track {
+  height: 52px;
+}
+.ribbon {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+svg .ribbon-area {
+  fill: url(#ribbonGrad);
+}
+svg .ribbon-line {
+  fill: none;
+  stroke: var(--vscode-charts-blue);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.aside-kicker {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+.aside-peak {
+  font-size: 12px;
+  color: var(--vscode-foreground);
+}
+.aside-peak strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-charts-blue);
+}
+.aside-note {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+/* ---- time axis ---- */
+
+.board-axis-row {
+  margin-bottom: 4px;
+}
+.axis-track {
+  height: 18px;
+}
+.axis-tick {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-100%);
+  padding-right: 5px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
+/* ---- groups ---- */
+
+.group {
+  border-top: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.18));
+  padding: 2px 0 6px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px 7px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 5px;
+}
+.group-head:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.08));
+}
+.group-caret {
+  font-size: 10px;
+  width: 10px;
+  color: var(--vscode-descriptionForeground);
+}
+.group-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-editor-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+.group-pulse {
+  display: flex;
+  gap: 2px;
+  width: 74px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.pulse-seg {
+  display: block;
+  border-radius: 2px;
+  flex-basis: 0;
+}
+.pulse-running { background: var(--vscode-charts-blue); }
+.pulse-done { background: var(--vscode-charts-green); }
+.pulse-stopped { background: var(--vscode-charts-yellow); }
+.pulse-failed,
+.pulse-crashed { background: var(--vscode-charts-red); }
+.pulse-foreign { background: var(--vscode-descriptionForeground); opacity: 0.5; }
+
+.group-totals {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tot-sep { opacity: 0.45; }
+.tot-live {
+  color: var(--vscode-charts-blue);
+  font-weight: 600;
+}
+.tot-cost {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-foreground);
+}
+
+/* ---- one lane ---- */
+
+.lane {
+  height: var(--lane-h);
+  border-radius: 5px;
+  transition: background 0.12s;
+}
+.lane:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.08));
+}
+
+/* Status sets `color` for the whole lane, so the glyph, the bar and its cap all take it from
+   currentColor — one declaration per status instead of five. Text opts back out below. */
+.lane-running { color: var(--vscode-charts-blue); }
+.lane-done { color: var(--vscode-charts-green); }
+.lane-failed,
+.lane-crashed { color: var(--vscode-charts-red); }
+.lane-stopped { color: var(--vscode-charts-yellow); }
+.lane-foreign { color: var(--vscode-descriptionForeground); }
+
+.lane-id {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding-left: 2px;
+}
+
+.rails {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+.rail-hook {
+  position: absolute;
+  right: 1px;
+  top: 0;
+  height: 50%;
+  width: 8px;
+  border-left: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.4));
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.4));
+  border-bottom-left-radius: 5px;
+}
+
+.glyph {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+svg .g-stroke {
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+svg .g-fill {
+  fill: currentColor;
+}
+.lane-running .glyph {
+  animation: glyph-breathe 2s ease-in-out infinite;
+}
+@keyframes glyph-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.lane-id-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  color: var(--vscode-editor-foreground);
+}
+.lane-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* The NAME is the row's identifier, so it shrinks last: a floor here forces the model chip (the
+   most disposable element on the line) to truncate first, instead of "worker-a" becoming
+   "worke..." beside a fully-spelled model id. */
+.lane-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 5em;
+}
+.chip {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  letter-spacing: 0.2px;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-provider {
+  border-color: currentColor;
+  opacity: 0.95;
+}
+.chip-model {
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.ext-parent {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: var(--vscode-descriptionForeground);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What it is doing RIGHT NOW — the line a supervisor actually reads. */
+.lane-doing {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.doing-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doing-pip {
+  flex: 0 0 auto;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: doing-tick 1.4s steps(1, end) infinite;
+}
+@keyframes doing-tick {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0.15; }
+}
+
+/* ---- the bar: one run's interval on the shared clock ---- */
+
+.bar {
+  position: absolute;
+  top: 50%;
+  height: 15px;
+  margin-top: -7.5px;
+  min-width: 4px;
+  border-radius: 4px;
+  border-left: 2px solid currentColor; /* provider hue, set inline */
+  box-sizing: border-box;
+  animation: bar-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: left center;
+}
+@keyframes bar-in {
+  from { transform: scaleX(0.02); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+.bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.3;
+}
+
+/* The cap is the END of the run, and its treatment is what separates the states at a glance. */
+.bar-cap {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+/* running — a live edge that travels, plus a glow at the working end */
+.bar-running .bar-cap {
+  width: 4px;
+  box-shadow: 0 0 7px 1px currentColor;
+  animation: cap-glow 1.8s ease-in-out infinite;
+}
+@keyframes cap-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+/* The travelling edge is a TRANSFORM, not an animated background-position: the latter repaints a
+   bar that can be 700px wide on every frame, in a panel that sits open beside the editor. Its own
+   clip keeps it inside the bar while leaving the cap's glow free to spill. Linear on purpose — a
+   constant-velocity traverse; easing it would read as stuttering rather than as travelling. */
+.bar-sweep-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent 0%, currentColor 50%, transparent 100%);
+  opacity: 0.42;
+  animation: sweep 2.6s linear infinite;
+}
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+/* done — settled: flat, no motion, a squared terminal */
+.bar-done .bar-cap {
+  width: 3px;
+}
+
+/* stopped — deliberately halted: dimmer body, a blunt square end */
+.bar-stopped::before { opacity: 0.22; }
+.bar-stopped .bar-cap { width: 5px; border-radius: 1px; }
+
+/* failed / crashed — the run TORE: a hatched break where the bar should have ended */
+.bar-failed .bar-cap,
+.bar-crashed .bar-cap {
+  width: 9px;
+  border-radius: 0 3px 3px 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    currentColor 0 2px,
+    transparent 2px 4.5px
+  );
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* foreign — not ours: a ghost outline, never a filled claim on the timeline */
+.bar-foreign {
+  border: 1px dashed currentColor;
+  opacity: 0.75;
+}
+.bar-foreign::before { opacity: 0.07; }
+.bar-foreign .bar-cap { display: none; }
+
+/* unknown end — the registry never recorded when this stopped, so the bar DISSOLVES into a dotted
+   tail instead of inventing a duration. A drawn length is a claim; this one we cannot make. */
+.bar-unknown-end::before {
+  -webkit-mask-image: linear-gradient(90deg, #000 42%, transparent 100%);
+  mask-image: linear-gradient(90deg, #000 42%, transparent 100%);
+}
+.bar-unknown-end .bar-cap {
+  width: 14px;
+  background: none;
+  box-shadow: none;
+  border-top: 1px dashed currentColor;
+  border-radius: 0;
+  top: 50%;
+  bottom: auto;
+  height: 0;
+  right: -14px;
+  opacity: 0.8;
+}
+
+/* ---- lineage: who launched whom, drawn IN TIME on the track ---- */
+
+.thread {
+  position: absolute;
+  width: 1px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.thread-start { top: 50%; bottom: 0; }
+.thread-through { top: 0; bottom: 0; }
+.thread-end { top: 0; height: 50%; }
+.thread-elbow {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -7px;
+  border-left: 1px solid;
+  border-bottom: 1px solid;
+  border-bottom-left-radius: 5px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.thread-node {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/* ---- per-lane numbers ---- */
+
+.lane-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+.meta-elapsed {
+  font-size: 12px;
+  color: var(--vscode-foreground);
+}
+.meta-cost {
+  font-size: 10.5px;
+  color: var(--vscode-descriptionForeground);
+}
+.meta-unknown {
+  opacity: 0.6;
+}
+
+/* ---- narrow panel (side-by-side editor split): the lane folds, the clock survives ---- */
+
+@media (max-width: 860px) {
+  .board { --id-w: 190px; --meta-w: 86px; }
+  .group-name { max-width: 30%; }
+  .group-pulse { display: none; }
+}
+
+@media (max-width: 700px) {
+  .board { --lane-h: 30px; }
+  .board-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 0;
+    column-gap: 10px;
+  }
+  .lane {
+    height: auto;
+    padding: 6px 0 8px;
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.14));
+  }
+  .lane-track,
+  .ribbon-track,
+  .axis-track {
+    grid-column: 1 / -1;
+    margin-top: 5px;
+  }
+  .board-head { gap: 18px; }
+  .group-control { margin-left: 0; }
+  /* Explicit placement: with auto-placement the full-width track claims row 2 and pushes the
+     metrics down to a row of their own, which reads as an orphaned number. */
+  .board-aside { grid-row: 1; grid-column: 1; }
+  .board-meta-col { grid-row: 1; grid-column: 2; align-self: center; }
+  .lane-track,
+  .ribbon-track,
+  .axis-track { grid-row: 2; }
+  .lane-meta { flex-direction: row; align-items: baseline; gap: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-pulse,
+  .hero-pulse::after,
+  .bar-sweep,
+  .bar-running .bar-cap,
+  .doing-pip,
+  .lane-running .glyph,
+  svg .empty-slot,
+  .bar,
+  .barlist-fill {
+    animation: none !important;
+  }
+}
+
+/* Provider chip: colour lives in the border + dot, text uses the theme foreground so it clears
+   the contrast floor in BOTH themes (chart hues as 10px text failed AA on light). */
+.chip-provider { color: var(--vscode-foreground); }
+.chip-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: baseline;
 }
