@@ -162,23 +162,29 @@ def read_events(run_id: str) -> list[AgentEvent]:
     parser. A corrupt or half-written line is skipped, never fatal — a truncated write during a
     crash must not make the whole run unreadable.
     """
-    out: list[AgentEvent] = []
     stored = _read_record(run_id)
     provider = PROVIDERS.get(stored.provider) if stored else None
     try:
         raw_lines = raw_events_path(run_id).read_text(errors="replace").splitlines()
     except OSError:
         raw_lines = []
-    if provider is not None:
+
+    # A raw stream is AUTHORITATIVE when present: the child wrote it itself, so it cannot be out
+    # of date. The mirror below is derived from it, and re-reading both would double-count.
+    if provider is not None and raw_lines:
+        parsed: list[AgentEvent] = []
         for line in raw_lines:
             try:
                 event = provider.parse(line)
             except Exception:
                 continue
             if event is not None:
-                out.append(event)
+                parsed.append(event)
+        _mirror_normalised(run_id, parsed)
+        return parsed
 
-    # Events appended directly (a test, or a provider with no raw stream) still count.
+    # No raw stream — events were appended directly (a test, or a provider that has none).
+    out: list[AgentEvent] = []
     try:
         for line in events_path(run_id).read_text().splitlines():
             try:
@@ -188,6 +194,27 @@ def read_events(run_id: str) -> list[AgentEvent]:
     except OSError:
         pass
     return out
+
+
+def _mirror_normalised(run_id: str, events: list[AgentEvent]) -> None:
+    """Keep a provider-AGNOSTIC copy of the stream beside the raw one.
+
+    The VS Code panel cannot parse a vendor dialect — teaching it every provider's JSON would
+    duplicate the adapters in a second language. Translating once here means the panel reads one
+    stable shape whatever produced it. Rewritten only when the length changed, so a settled run
+    costs nothing to re-read.
+    """
+    path = events_path(run_id)
+    try:
+        existing = sum(1 for _ in path.open())
+    except OSError:
+        existing = -1
+    if existing == len(events):
+        return
+    try:
+        path.write_text("".join(e.model_dump_json() + "\n" for e in events))
+    except OSError:
+        pass
 
 
 def last_event(run_id: str) -> AgentEvent | None:
@@ -222,6 +249,15 @@ def _derive(run: AgentRun) -> AgentRun:
         terminal = next((e for e in reversed(events) if e.kind in ("done", "error")), None)
         if terminal is not None:
             run.status = "done" if terminal.kind == "done" else "failed"
+    # A process that dies never calls finish(), so an ended run routinely has no end TIME — and a
+    # timeline cannot draw an interval without one. The last byte the child wrote is an OBSERVED
+    # end: not when it died, but the last moment we know it was alive, which is honest and
+    # drawable. Only ever stamped for a run that is no longer running.
+    if run.finished_at is None and run.status != "running":
+        try:
+            run.finished_at = raw_events_path(run.run_id).stat().st_mtime
+        except OSError:
+            pass
     if events:
         costs = [e.cost_usd for e in events if e.cost_usd is not None]
         cost = sum(costs) if costs else None

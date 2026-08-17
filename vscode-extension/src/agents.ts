@@ -22,8 +22,15 @@ export interface AgentRun {
   cwd?: string;
   status: "running" | "done" | "failed" | "crashed" | "stopped" | "foreign";
   pid?: number | null;
+  /** The model the run was launched with, when the spawner knew it (Python records it). */
+  model?: string | null;
   parent_run_id?: string | null;
   started_at?: number;
+  /** Epoch seconds the run ended. Absent for a run still going — and ALSO for one that died
+   *  before the registry could stamp it, which is why the board draws an unknown end rather
+   *  than assuming "now". */
+  finished_at?: number | null;
+  exit_code?: number | null;
   /** API-EQUIVALENT cost. On a subscription run this value is already paid for by the plan — it
    *  must never be presented as fresh spend. `null`/absent means unknown, which is NOT zero. */
   cost_usd?: number | null;
@@ -99,4 +106,42 @@ export function withDepth(runs: AgentRun[]): { run: AgentRun; depth: number }[] 
     }
     return { run, depth };
   });
+}
+
+/** One thing an agent did, as the panel needs it: when, and what.
+ *
+ *  The vendor's raw stream is a provider-specific dialect, so this reads the NORMALISED events
+ *  the Python side writes. Anything it cannot parse is skipped rather than throwing — a
+ *  half-written line during a crash must not blank a run's history.
+ */
+export interface AgentActivity {
+  kind: string;
+  text: string;
+  tool?: string | null;
+}
+
+/** A run's recent activity, oldest last. Bounded by `limit` because a long run's transcript is
+ *  unbounded and the panel only ever shows a tail — reading it all to display ten lines would
+ *  make every refresh scale with the longest-running agent. */
+export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
+  const file = path.join(agentsDir(), `${runId}.jsonl`);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return []; // no normalised stream for this run (yet)
+  }
+  const out: AgentActivity[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const raw = JSON.parse(line);
+      if (raw && typeof raw.kind === "string") {
+        out.push({ kind: raw.kind, text: String(raw.text ?? ""), tool: raw.tool ?? null });
+      }
+    } catch {
+      continue;
+    }
+  }
+  return out.slice(-Math.max(1, limit));
 }

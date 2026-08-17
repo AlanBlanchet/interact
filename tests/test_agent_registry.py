@@ -246,3 +246,40 @@ def test_a_healed_status_is_written_back_to_disk(monkeypatch):
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     reg.list_runs()
     assert json.loads((reg.agents_dir() / "r1.json").read_text())["status"] == "done"
+
+
+def test_an_ended_run_gets_an_observed_end_time(monkeypatch):
+    """A dead process never calls finish(), so 'ended, but no end time' is the COMMON case, not an
+    edge one — and a timeline cannot draw an interval without one. The last byte the child wrote
+    is an honest observed end: the last moment we know it was alive."""
+    _record(pid=999999)
+    reg.raw_events_path("r1").write_text(
+        '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.2,'
+        '"usage":{},"session_id":"s"}\n'
+    )
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    run = reg.list_runs()[0]
+    assert run.status == "done"
+    assert run.finished_at is not None and run.finished_at >= run.started_at - 1
+
+
+def test_a_running_run_is_never_given_an_end_time(monkeypatch):
+    _record()
+    reg.raw_events_path("r1").write_text("{}\n")
+    monkeypatch.setattr(reg, "_alive", lambda pid: True)
+    assert reg.list_runs()[0].finished_at is None
+
+
+def test_the_raw_stream_is_mirrored_into_a_provider_agnostic_file():
+    """The panel cannot parse a vendor dialect, and teaching it every provider's JSON would
+    duplicate the adapters in TypeScript. Python translates once; the panel reads one shape."""
+    _record()
+    reg.raw_events_path("r1").write_text(
+        '{"type":"system","subtype":"init","cwd":"/tmp","tools":[],"session_id":"s"}\n'
+        '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.3,'
+        '"usage":{},"session_id":"s"}\n'
+    )
+    reg.read_events("r1")
+    mirrored = [json.loads(l) for l in (reg.agents_dir() / "r1.jsonl").read_text().splitlines()]
+    assert [m["kind"] for m in mirrored] == ["started", "done"]
+    assert all("kind" in m and "text" in m for m in mirrored)  # the shape agents.ts expects
