@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import {
   KeyManager,
@@ -342,6 +343,49 @@ export async function activate(
   await keyManager.loadAll([...allEnvKeys]);
 
   const log = vscode.window.createOutputChannel("Interact");
+
+  // The Agents sidebar — the panel you click in the activity bar. The dashboard lives in an
+  // editor tab you must summon; running agents need somewhere you can glance at while working.
+  const agentsProvider = new AgentsProvider(context.globalState);
+  context.subscriptions.push(
+    agentsProvider,
+    vscode.window.registerTreeDataProvider("interact.agentsView", agentsProvider),
+    vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    vscode.commands.registerCommand("interact.agents.groupBy", async () => {
+      const pick = await vscode.window.showQuickPick(
+        [
+          { label: "Project", value: "project", description: "the directory each agent works in" },
+          { label: "Provider", value: "provider", description: "claude, codex, …" },
+          { label: "Model", value: "model" },
+          { label: "Flat", value: "flat", description: "no grouping" },
+        ],
+        { title: "Group agents by", placeHolder: `currently: ${agentsProvider.groupBy}` },
+      );
+      if (pick) await agentsProvider.setGroupBy(pick.value as GroupBy);
+    }),
+    vscode.commands.registerCommand("interact.agents.stop", async (node?: { run?: { run_id: string; name: string } }) => {
+      const run = node?.run;
+      if (!run) return;
+      // Stopping is Python's job (it owns the process group); the extension only asks.
+      const { execFile } = await import("child_process");
+      execFile("interact", ["agents", "stop", run.run_id], (err) => {
+        if (err) vscode.window.showErrorMessage(`Could not stop ${run.name}: ${err.message}`);
+        agentsProvider.refresh();
+      });
+    }),
+    vscode.commands.registerCommand("interact.agents.showEvents", async (node?: { run?: { run_id: string; name: string } }) => {
+      const run = node?.run;
+      if (!run) return;
+      const { readAgentActivity } = await import("./agents");
+      const lines = readAgentActivity(run.run_id, 200).map((a) => `${a.kind.padEnd(10)} ${a.tool ?? a.text}`);
+      const doc = await vscode.workspace.openTextDocument({
+        content: lines.join("\n") || "(no activity recorded yet)",
+        language: "log",
+      });
+      await vscode.window.showTextDocument(doc, { preview: true });
+    }),
+  );
+
   context.subscriptions.push(log);
 
   // No `secrets.onDidChange` listener: KeyManager stores keys in ~/.interact/config.env (the

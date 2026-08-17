@@ -182,8 +182,82 @@
       {
         "command": "interact.reloadPanel",
         "title": "Interact: Reload Panel"
+      },
+      {
+        "command": "interact.agents.refresh",
+        "title": "Refresh agents",
+        "category": "Interact",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "interact.agents.groupBy",
+        "title": "Group agents by…",
+        "category": "Interact",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "interact.agents.stop",
+        "title": "Stop agent",
+        "category": "Interact",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "interact.agents.showEvents",
+        "title": "Show agent activity",
+        "category": "Interact",
+        "icon": "$(output)"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "interact",
+          "title": "Interact",
+          "icon": "media/agents.svg"
+        }
+      ]
+    },
+    "views": {
+      "interact": [
+        {
+          "id": "interact.agentsView",
+          "name": "Agents",
+          "contextualTitle": "Interact agents",
+          "icon": "media/agents.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "interact.agents.groupBy",
+          "when": "view == interact.agentsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "interact.agents.refresh",
+          "when": "view == interact.agentsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "interact.openDashboard",
+          "when": "view == interact.agentsView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "interact.agents.stop",
+          "when": "view == interact.agentsView && viewItem == interactRunningRun",
+          "group": "inline"
+        },
+        {
+          "command": "interact.agents.showEvents",
+          "when": "view == interact.agentsView && viewItem =~ /interact(Running)?Run/",
+          "group": "inline"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
