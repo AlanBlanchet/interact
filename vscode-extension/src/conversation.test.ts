@@ -29,3 +29,25 @@ test("each kind gets its own class so the transcript reads as a conversation", (
 test("escaping covers the quote characters an attribute would break on", () => {
   assert.equal(escapeHtml(`<a href="x">&'`), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
 });
+
+test("a tool result is visually attached to the call above it", () => {
+  // The critic measured the result's border at 1.16:1 — invisible — so a reader could not tell
+  // which call produced which output. It now carries the SAME hue as the call it belongs to.
+  const html = renderTurn({ kind: "tool_result", text: "out" });
+  assert.ok(html.includes("turn-tool_result"));
+  assert.ok(html.includes("result-of"), "the result is not marked as belonging to a call");
+});
+
+test("infrastructure events are not turns in the conversation", () => {
+  // A 'five_hour limit: allowed' rendered BETWEEN a Bash call and its own result, breaking the
+  // one sequence a reader needs unbroken.
+  assert.equal(renderTurn({ kind: "rate_limit", text: "five_hour limit: allowed" }), "");
+  assert.equal(renderTurn({ kind: "started", text: "session up" }), "");
+});
+
+test("a long tool result is truncated at render time, and says so", () => {
+  // enableScripts:false means a collapse can never be added client-side — it must be here.
+  const html = renderTurn({ kind: "tool_result", text: "line\n".repeat(400) });
+  assert.ok(html.length < 4000, "an unbounded wall of output reached the panel");
+  assert.ok(/more line/.test(html), "truncation must declare what it hid");
+});

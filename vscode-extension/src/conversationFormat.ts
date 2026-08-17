@@ -33,6 +33,23 @@ export function turnClass(kind: string): string {
   return `turn turn-${known.includes(kind) ? kind : "other"}`;
 }
 
+/** Events that are about the RUN, not the conversation. A "five_hour limit: allowed" rendered
+ *  between a tool call and its own result broke the one sequence a reader needs unbroken, so
+ *  infrastructure is kept out of the turn stream entirely — it belongs in the header. */
+const NOT_A_TURN = new Set(["rate_limit", "started", "done", "other"]);
+
+/** Long output has to be cut HERE. The panel runs with scripts disabled (agent output is
+ *  untrusted), so a click-to-expand can never be retrofitted — an uncut 50-line result is simply
+ *  a wall the reader scrolls past. Keep the head, say what was hidden. */
+const MAX_LINES = 14;
+
+function clipLines(text: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= MAX_LINES) return text;
+  const hidden = lines.length - MAX_LINES;
+  return `${lines.slice(0, MAX_LINES).join("\n")}\n… ${hidden} more line${hidden > 1 ? "s" : ""}`;
+}
+
 const LABEL: Record<string, string> = {
   text: "assistant",
   thinking: "thinking",
@@ -52,11 +69,16 @@ export function renderTurn(turn: Turn): string {
     const args = turn.tool_input ? `<pre class="args">${escapeHtml(turn.tool_input)}</pre>` : "";
     return `<div class="${cls}"><div class="who">🔧 ${name}</div>${args}</div>`;
   }
+  if (NOT_A_TURN.has(turn.kind)) return ""; // run infrastructure, not something the agent said
   const label = LABEL[turn.kind] ?? escapeHtml(turn.kind);
-  const body = escapeHtml(turn.text ?? "");
-  if (!body.trim()) return "";
+  const raw = turn.text ?? "";
+  if (!raw.trim()) return "";
+  const body = escapeHtml(clipLines(raw));
   const tag = turn.kind === "tool_result" ? "pre" : "div";
-  return `<div class="${cls}"><div class="who">${label}</div><${tag} class="body">${body}</${tag}></div>`;
+  // `result-of` marks the result as belonging to the call above it, so the two read as one unit
+  // rather than as two unrelated blocks.
+  const attach = turn.kind === "tool_result" ? " result-of" : "";
+  return `<div class="${cls}${attach}"><div class="who">${label}</div><${tag} class="body">${body}</${tag}></div>`;
 }
 
 /** The whole transcript, oldest first — a conversation reads top to bottom, unlike the tree's

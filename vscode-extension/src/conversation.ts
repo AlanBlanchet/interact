@@ -84,7 +84,8 @@ export class ConversationPanel {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
 <style>
  body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);
-      background:var(--vscode-editor-background);padding:16px 22px;line-height:1.5;max-width:900px}
+      background:var(--vscode-editor-background);padding:16px 22px;line-height:1.5;
+      max-width:900px;margin:0 auto}
  h1{font-size:16px;margin:0 0 2px}
  .meta{color:var(--vscode-descriptionForeground);font-size:12px;margin:0 0 12px}
  .dim{opacity:.7}
@@ -96,12 +97,18 @@ export class ConversationPanel {
  .body{white-space:pre-wrap;word-break:break-word;margin:0;font-family:inherit}
  pre.body,pre.args{font-family:var(--vscode-editor-font-family);font-size:12px;
       background:var(--vscode-textCodeBlock-background);padding:8px 10px;border-radius:4px;
-      overflow-x:auto;margin:0}
+      overflow-x:auto;margin:0;
+      /* Args used to clip silently at a sidebar width, hiding the file_path — the one thing the
+         reader came for. Wrap instead of cutting. */
+      white-space:pre-wrap;word-break:break-word}
  /* Speech, machinery and reasoning must not look alike — that is what makes it a conversation. */
  .turn-text{border-left-color:var(--vscode-charts-blue)}
  .turn-tool{border-left-color:var(--vscode-charts-purple)}
  .turn-tool .who{color:var(--vscode-charts-purple)}
- .turn-tool_result{border-left-color:var(--vscode-panel-border)}
+ /* The result carries its CALL's hue and sits indented beneath it, so the pair reads as one
+    exchange. Its old border measured 1.16:1 — invisible — and the two looked unrelated. */
+ .turn-tool_result.result-of{border-left-color:var(--vscode-charts-purple);
+      margin-left:14px;opacity:.92}
  .turn-thinking{border-left-color:var(--vscode-charts-yellow);opacity:.8;font-style:italic}
  .turn-error{border-left-color:var(--vscode-charts-red)}
  .turn-done .who,.turn-started .who{color:var(--vscode-charts-green)}

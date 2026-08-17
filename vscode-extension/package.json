@@ -278,14 +278,19 @@
     "package": "npm run compile && npx @vscode/vsce package",
     "publish": "npm run compile && npx @vscode/vsce publish",
     "generate-models": "uv run --project .. python scripts/generate-models.py",
-    "generate-benchmarks": "uv run --project .. python scripts/generate-benchmarks.py"
+    "generate-benchmarks": "uv run --project .. python scripts/generate-benchmarks.py",
+    "test:vscode": "npm run compile && tsc -p tsconfig.test.json && vscode-test"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^25.6.0",
     "@types/vscode": "^1.99.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.5.0",
     "esbuild": "^0.25.0",
     "json-schema-to-typescript": "^15.0.4",
+    "mocha": "^11.8.0",
     "typescript": "^5.7.0"
   }
 }
