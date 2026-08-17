@@ -63,20 +63,15 @@ class RunHandle:
         return await self.process.wait()
 
 
-async def _pump(run_id: str, provider: AgentProvider, process) -> None:
-    """Read the child's stdout line by line, normalise, persist. Runs for the child's lifetime."""
+async def _reap(run_id: str, process) -> None:
+    """Record how the run ended. The EVENTS do not depend on this coroutine — the child writes
+    them to disk itself (see :func:`run_agent`) — so losing this task costs an exit code, never
+    the stream."""
     try:
-        assert process.stdout is not None
-        async for raw in process.stdout:
-            line = raw.decode("utf-8", "replace")
-            event = provider.parse(line)
-            if event is not None:
-                reg.append_event(run_id, event)
-    except Exception:  # a decode/parse fault must not leave the child unreaped
-        pass
-    finally:
         code = await process.wait()
-        reg.finish(run_id, exit_code=code)
+    except Exception:
+        return
+    reg.finish(run_id, exit_code=code)
 
 
 async def run_agent(
@@ -114,12 +109,22 @@ async def run_agent(
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
     # otherwise a grandchild would inherit its grandparent's id and the tree would be wrong.
     env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
-    process = await asyncio.create_subprocess_exec(
-        *argv, cwd=cwd, env=env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-        start_new_session=True,  # own process group, so stop() can signal the whole tree
-    )
+    # The child writes its OWN stream straight to disk. Piping it through a coroutine tied the
+    # events to the caller's event loop: a caller that spawned and returned lost every event, and
+    # the run then looked HEALTHY — status done, exit 0, no cost, no activity — which is worse
+    # than looking crashed. At the OS level the stream survives the caller, and interact dying.
+    raw_path = reg.raw_events_path(run_id)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    sink = raw_path.open("wb")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv, cwd=cwd, env=env,
+            stdout=sink, stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,  # own process group, so stop() can signal the whole tree
+        )
+    finally:
+        sink.close()  # the child holds its own dup of the fd
     reg.register(run_id=run_id, pid=process.pid, provider=provider.name, name=name,
                  task=task, cwd=cwd, model=model, parent_run_id=parent)
-    pump = asyncio.create_task(_pump(run_id, provider, process))
+    pump = asyncio.create_task(_reap(run_id, process))
     return RunHandle(run_id=run_id, process=process, pump=pump)

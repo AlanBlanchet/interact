@@ -211,3 +211,38 @@ def test_costs_accumulate_across_events():
     reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.10))
     reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.05))
     assert reg.list_runs()[0].cost_usd == pytest.approx(0.15)
+
+
+def test_a_completed_run_is_not_reported_crashed_when_nobody_watched(monkeypatch):
+    """If the supervising process dies, no exit code is recorded and the pid is gone — but the
+    child's own stream says it finished. The transcript outranks our bookkeeping, otherwise a
+    successful run is libelled as crashed."""
+    _record(pid=999999)
+    reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.6))
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    assert reg.list_runs()[0].status == "done"
+
+
+def test_a_run_that_reported_an_error_is_failed_not_crashed(monkeypatch):
+    _record(pid=999999)
+    reg.append_event("r1", reg.AgentEvent(kind="error", text="blew up"))
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    assert reg.list_runs()[0].status == "failed"
+
+
+def test_a_run_that_vanished_mid_stream_is_still_crashed(monkeypatch):
+    """No terminal event and no process — that one really did die."""
+    _record(pid=999999)
+    reg.append_event("r1", reg.AgentEvent(kind="tool", tool="Bash"))
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    assert reg.list_runs()[0].status == "crashed"
+
+
+def test_a_healed_status_is_written_back_to_disk(monkeypatch):
+    """The panel reads the file, not Python's in-memory view, and only ever downgrades. A status
+    healed in memory but left stale on disk shows up there as 'crashed' regardless."""
+    _record(pid=999999)
+    reg.append_event("r1", reg.AgentEvent(kind="done", cost_usd=0.6))
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    reg.list_runs()
+    assert json.loads((reg.agents_dir() / "r1.json").read_text())["status"] == "done"

@@ -65,6 +65,12 @@ def events_path(run_id: str) -> Path:
     return agents_dir() / f"{run_id}.jsonl"
 
 
+def raw_events_path(run_id: str) -> Path:
+    """Where the child writes its OWN stream, verbatim. Owned by the OS, not by any interact
+    process — so the record of what an agent did survives interact restarting or dying."""
+    return agents_dir() / f"{run_id}.raw.jsonl"
+
+
 def _terminate(pid: int) -> bool:
     """Stop a run's whole process tree, best effort. Agent CLIs spawn children (their own tools),
     so signalling the group is what actually stops the work."""
@@ -150,18 +156,37 @@ def append_event(run_id: str, event: AgentEvent) -> None:
 
 
 def read_events(run_id: str) -> list[AgentEvent]:
-    """Every event of a run. A corrupt line is skipped, never fatal — a truncated write during a
-    crash must not make the whole run unreadable."""
+    """Every event of a run, normalised.
+
+    Reads the RAW vendor stream the child wrote itself and translates it through that provider's
+    parser. A corrupt or half-written line is skipped, never fatal — a truncated write during a
+    crash must not make the whole run unreadable.
+    """
+    out: list[AgentEvent] = []
+    stored = _read_record(run_id)
+    provider = PROVIDERS.get(stored.provider) if stored else None
     try:
-        lines = events_path(run_id).read_text().splitlines()
+        raw_lines = raw_events_path(run_id).read_text(errors="replace").splitlines()
     except OSError:
-        return []
-    out = []
-    for line in lines:
-        try:
-            out.append(AgentEvent.model_validate_json(line))
-        except ValueError:
-            continue
+        raw_lines = []
+    if provider is not None:
+        for line in raw_lines:
+            try:
+                event = provider.parse(line)
+            except Exception:
+                continue
+            if event is not None:
+                out.append(event)
+
+    # Events appended directly (a test, or a provider with no raw stream) still count.
+    try:
+        for line in events_path(run_id).read_text().splitlines():
+            try:
+                out.append(AgentEvent.model_validate_json(line))
+            except ValueError:
+                continue
+    except OSError:
+        pass
     return out
 
 
@@ -182,9 +207,31 @@ def _status_for(run: AgentRun) -> RunStatus:
 
 
 def _derive(run: AgentRun) -> AgentRun:
-    """Re-check liveness on read. Cost and activity are already folded into the record by
-    :func:`append_event`, so every reader — including the VS Code panel — sees the same values."""
+    """Re-check liveness, and SELF-HEAL the record from the child's own stream.
+
+    The panel reads these records directly and cannot parse a vendor dialect, so cost and the
+    activity line have to be ON the record. Recomputing them here from the raw stream means a run
+    whose supervising process died still reports what it actually did, instead of looking healthy
+    and empty."""
     run.status = _status_for(run)
+    events = read_events(run.run_id)
+    # The child's OWN stream is the authority on how it ended. If it reported a terminal event,
+    # the run finished — even if nothing was watching to record an exit code. Without this, a run
+    # whose supervisor died reports "crashed" while its transcript plainly says it completed.
+    if run.exit_code is None and events:
+        terminal = next((e for e in reversed(events) if e.kind in ("done", "error")), None)
+        if terminal is not None:
+            run.status = "done" if terminal.kind == "done" else "failed"
+    if events:
+        costs = [e.cost_usd for e in events if e.cost_usd is not None]
+        cost = sum(costs) if costs else None
+        last = next((e.summary() for e in reversed(events) if e.summary()), run.last)
+        run.cost_usd, run.last = cost, last
+    # Persist whatever we healed — status included. The panel reads these files directly and does
+    # its own (downgrade-only) liveness check, so a status left stale on disk reappears there as
+    # "crashed" no matter what Python worked out in memory.
+    if _read_record(run.run_id) != run:
+        _write(run)
     return run
 
 

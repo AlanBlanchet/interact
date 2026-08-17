@@ -20,6 +20,12 @@ from interact.agents.run import mesh_config, run_agent
 def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    # A run's raw stream is parsed by the provider named on its record, looked up in the global
+    # registry — so a test double has to be registered exactly like a real provider is.
+    from interact.agents.providers import PROVIDERS
+
+    monkeypatch.setitem(PROVIDERS, "fake", _FakeProvider())
+    monkeypatch.setitem(PROVIDERS, "crash", _CrashingProvider())
     yield
 
 
@@ -122,3 +128,20 @@ def test_the_mesh_config_carries_no_credential():
     cfg = mesh_config(run_id="r1").lower()
     for banned in ("api_key", "apikey", "token", "oauth", "secret"):
         assert banned not in cfg, f"{banned!r} must never be handed to a spawned agent"
+
+
+@pytest.mark.asyncio
+async def test_events_survive_the_spawning_loop_ending(tmp_path):
+    """The defect this replaced: the event stream ran on the CALLER's event loop, so a caller that
+    spawned and returned lost every event — and the run then looked HEALTHY (status done, exit 0,
+    no cost, no activity), which is worse than looking crashed. The child writes its own stream to
+    disk now, so nothing is lost when the supervising coroutine goes away."""
+    run = await run_agent(_FakeProvider(), "t", name="w", cwd=str(tmp_path))
+    run.pump.cancel()  # the caller went away mid-run
+    await asyncio.wait_for(run.process.wait(), timeout=30)
+
+    events = reg.read_events(run.run_id)
+    assert [e.kind for e in events] == ["started", "done"], "the stream did not survive"
+    listed = [r for r in reg.list_runs() if r.run_id == run.run_id][0]
+    assert listed.cost_usd == pytest.approx(0.5), "cost was lost with the supervising task"
+    assert listed.last == "done"
