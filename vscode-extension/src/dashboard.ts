@@ -23,6 +23,7 @@ import {
   COMMON_CURRENCIES,
 } from "./currency";
 import { readAgentRuns, summarise, withDepth } from "./agents";
+import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Catalog } from "./catalog";
 import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import {
   readUsageLog,
@@ -253,6 +254,7 @@ export class DashboardPanel {
       this.benchmarkDataCell(),
       this.displayCell(),
       this.agentsCell(),
+      await this.modelsCell(),
       await this.consumptionCell(),
       this.benchmarksCell(),
       this.recommendationsCell(),
@@ -616,6 +618,61 @@ export class DashboardPanel {
             `${live} of ${lanes.length} agents running; ~$${cost.toFixed(4)} API-equivalent ` +
             "value consumed, already covered by the plan.",
         },
+      ],
+    };
+  }
+
+  /** Live model metadata, with its age on the label.
+   *
+   *  The panel used to render `models.json` — baked into the bundle at BUILD time, so prices and
+   *  context windows silently aged and nothing said so. This shows the live catalog and, when it
+   *  is NOT live (offline, or an old cache), says how old it is rather than presenting a snapshot
+   *  as today's truth. No API key: OpenRouter's catalog endpoint is public.
+   */
+  private async modelsCell(): Promise<CellUpdate> {
+    let cat: Catalog | null = null;
+    try {
+      cat = await loadCatalog();
+    } catch {
+      cat = null;
+    }
+    if (!cat || cat.models.length === 0) {
+      return {
+        id: "models",
+        title: "Models",
+        content: [
+          {
+            kind: "empty",
+            message:
+              "No live catalog yet — needs one network call to openrouter.ai (no API key). " +
+              "It will populate on the next refresh when you are online.",
+          },
+        ],
+      };
+    }
+    const fresh = isLive(cat);
+    const age = describeAge(ageSeconds(cat));
+    const rows = pickHighlights(cat, 8).map((m) => [
+      m.name,
+      m.context_length ? `${Math.round(m.context_length / 1000)}k` : "—",
+      m.input_cost_per_token ? `$${(m.input_cost_per_token * 1e6).toFixed(2)}/M` : "—",
+      (m.input_modalities || []).filter((x) => x !== "text").join(", ") || "text",
+    ]);
+    return {
+      id: "models",
+      title: `Models \u2014 ${cat.models.length} \u00b7 ${fresh ? `live, ${age}` : `${cat.source}, ${age}`}`,
+      content: [
+        ...(fresh
+          ? []
+          : ([
+              {
+                kind: "row",
+                label: "Not live",
+                value: `showing ${cat.source} data from ${age}`,
+                dot: "missing",
+              },
+            ] as CellContent[])),
+        { kind: "table", headers: ["Model", "Context", "Input", "Sees"], rows },
       ],
     };
   }

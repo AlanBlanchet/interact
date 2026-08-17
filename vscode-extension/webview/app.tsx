@@ -16,7 +16,7 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
 
 const TABS = [
-  { id: "dashboard", label: "Dashboard", cells: ["status", "agents", "consumption"] },
+  { id: "dashboard", label: "Dashboard", cells: ["status", "agents", "models", "consumption"] },
   {
     id: "benchmarks",
     label: "Benchmarks",
