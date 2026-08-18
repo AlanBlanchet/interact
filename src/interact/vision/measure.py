@@ -71,6 +71,9 @@ _SAMPLE_MAX = 400
 # Encoded bytes per pixel above which a frame cannot be near-uniform. Real screenshots sit well
 # above this; a flat fill sits three orders of magnitude below.
 _COMPRESSIBLE_ENOUGH = 0.05
+# Below this the encoded size says more about PNG's fixed header than about the picture. A blank
+# frame at this size encodes ~0.008 b/px, well under the threshold, so the screen stays valid.
+_FAST_PATH_MIN_PIXELS = 20_000
 
 
 def _png_dimensions(png: bytes) -> tuple[int, int] | None:
@@ -95,7 +98,11 @@ def blank_frame_reason(png: bytes) -> str | None:
     # of captures, which are not blank.
     if (dims := _png_dimensions(png)) is not None:
         w, h = dims
-        if w * h and len(png) / (w * h) > _COMPRESSIBLE_ENOUGH:
+        # Only where the header is negligible against the pixel count. It is not on a small crop:
+        # an 8x8 blank frame encodes at 1.08 bytes/pixel, twenty times the threshold, so screening
+        # by size would skip every small one — and an element query crops single widgets. Below the
+        # floor the decode this exists to avoid costs microseconds anyway.
+        if w * h >= _FAST_PATH_MIN_PIXELS and len(png) / (w * h) > _COMPRESSIBLE_ENOUGH:
             return None
     try:
         arr = _to_rgb(png)

@@ -126,3 +126,22 @@ async def test_a_normal_window_capture_carries_no_such_note(monkeypatch):
     out = await srv.tools_vision.screenshot(target="Code")
     text = out[0] if isinstance(out, list) else out
     assert "uniform" not in text.lower(), text
+
+
+# --- the header fast path must not create a blind spot at small sizes ---
+#
+# Screening on encoded bytes-per-pixel is only valid while the PNG's fixed header is negligible
+# against the pixel count. It is not, on a small crop: an 8x8 blank frame encodes at 1.08 b/px,
+# twenty times the threshold, so the very check that makes this affordable on a 4K grab was
+# skipping every small one. `screenshot(element=N, query=...)` crops single widgets — an icon, a
+# button — which is exactly the size where a blank frame stopped being detected.
+
+
+@pytest.mark.parametrize("size", [(8, 8), (16, 16), (24, 24), (32, 32), (48, 48), (120, 90)])
+def test_a_blank_crop_is_detected_at_any_size(size):
+    assert blank_frame_reason(_png((0, 0, 0), size=size)), f"{size[0]}x{size[1]} blank frame missed"
+
+
+@pytest.mark.parametrize("size", [(16, 16), (64, 64), (200, 200)])
+def test_a_small_busy_crop_is_still_not_blank(size):
+    assert blank_frame_reason(_varied_png(size=size)) is None
