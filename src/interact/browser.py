@@ -214,7 +214,7 @@ class BrowserManager:
         await self._ensure_open_tab()
         pages = self._context.pages
         if tab_index is None:
-            tab_index = min(self._active_tab, len(pages) - 1)  # a closed tab can leave it stale
+            tab_index = self._active_index(pages)
         if 0 <= tab_index < len(pages):
             return pages[tab_index]
         raise IndexError(f"Tab {tab_index} does not exist — {len(pages)} tab(s) open")
@@ -272,13 +272,16 @@ class BrowserManager:
     def is_recording(self) -> bool:
         return self._recording_dir is not None
 
-    def _active_page(self):
+    def _active_index(self, pages) -> int:
+        """The active tab, clamped to what is actually open — closing a tab can leave the index
+        past the end, which used to surface as a "Tab -1" error."""
+        return min(self._active_tab, len(pages) - 1)
+
+    def _active_page(self) -> Page | None:
         """The page every other tool is looking at. Recording used ``pages[0]``, so after a
         ``switch_tab`` it rebuilt the session around a different page than the one being driven."""
         pages = self._context.pages if self._context else []
-        if not pages:
-            return None
-        return pages[min(self._active_tab, len(pages) - 1)]
+        return pages[self._active_index(pages)] if pages else None
 
     async def start_recording(self) -> str:
         if self._recording_dir:
@@ -293,7 +296,6 @@ class BrowserManager:
         await self._new_context(record_video_dir=self._recording_dir.name)
         if cookies:
             await self._context.add_cookies(cookies)
-        await self.reapply_media()  # a rebuilt context drops forced media features (#110)
         page = self._context.pages[0]
         if url:
             await page.goto(url)
@@ -317,7 +319,6 @@ class BrowserManager:
         await self._new_context()
         if cookies:
             await self._context.add_cookies(cookies)
-        await self.reapply_media()  # a rebuilt context drops forced media features (#110)
         page = self._context.pages[0]
         if url:
             await page.goto(url)
@@ -557,6 +558,10 @@ class BrowserManager:
         # A persistent context opens with one page already; an ephemeral new_context has none.
         page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._attach_page_listeners(page)
+        # Here rather than at each call site: a rebuilt context drops the forced media features,
+        # and the fix had already been applied to two of the three places that rebuild one —
+        # _rebuild_context (a viewport/DPR/mobile change) still silently cleared reduced-motion.
+        await self.reapply_media()
 
     def peek_url(self) -> str | None:
         """The active tab's URL without starting or touching anything — None if this session has
@@ -564,7 +569,7 @@ class BrowserManager:
         ctx = self._context
         if ctx is None or not ctx.pages:
             return None
-        idx = min(self._active_tab, len(ctx.pages) - 1)
+        idx = self._active_index(ctx.pages)
         try:
             return ctx.pages[idx].url
         except Exception:  # a page closing under us is not worth an error here

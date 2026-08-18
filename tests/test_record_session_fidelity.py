@@ -10,6 +10,8 @@ tab, and dropped the forced media features (`prefers-reduced-motion`, `color-sch
 emulate_device had applied — so the clip could differ from the live session in three ways at once.
 """
 
+import pytest
+
 from interact.browser import BrowserManager
 from interact.config import Config
 
@@ -77,3 +79,70 @@ def test_no_pages_at_all_is_not_a_crash():
     mgr = _mgr()
     mgr._context = Empty()
     assert mgr._active_page() is None
+
+
+@pytest.mark.asyncio
+async def test_a_rebuilt_context_keeps_the_forced_media_features():
+    """emulate_device forces media features onto the context; every path that REBUILDS one has to
+    re-assert them. The fix had been applied to the two recording paths and missed _rebuild_context
+    — the same sub-bug, one call site over — so it now lives in _new_context, where forgetting it
+    is not possible."""
+    mgr = _mgr()
+    try:
+        await mgr.ensure_ready()
+    except Exception as exc:
+        pytest.skip(f"no launchable chromium: {exc}")
+    try:
+        await mgr.apply_media(reduced_motion="reduce", color_scheme="dark")
+        page = await mgr.get_page()
+        assert await page.evaluate(
+            "() => matchMedia('(prefers-reduced-motion: reduce)').matches"
+        ), "setup: the override did not apply at all"
+
+        await mgr._rebuild_context()  # what a viewport / DPR / mobile change does
+
+        page = await mgr.get_page()
+        assert await page.evaluate("() => matchMedia('(prefers-reduced-motion: reduce)').matches")
+        assert await page.evaluate("() => matchMedia('(prefers-color-scheme: dark)').matches")
+    finally:
+        await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_frames_are_the_emulated_size_on_a_real_recording():
+    """#110's symptom was PIXELS — ffprobe said 1280x720 — so the closing evidence has to be the
+    produced video, not the kwargs that ask for it."""
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    if not shutil.which("ffprobe"):
+        pytest.skip("ffprobe not installed")
+    mgr = _mgr()
+    try:
+        await mgr.ensure_ready()
+    except Exception as exc:
+        pytest.skip(f"no launchable chromium: {exc}")
+    try:
+        await mgr.emulate_device(device="iPhone 13")
+        await mgr.start_recording()
+        page = await mgr.get_page()
+        await page.set_content("<body style='background:#0af'>hello</body>")
+        await page.wait_for_timeout(400)
+        video = await mgr.stop_recording()
+        assert video, "no video produced"
+
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "clip.webm"
+            f.write_bytes(video)
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream=width,height", "-of", "csv=p=0", str(f)],
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+        w, h = (int(v) for v in out.split(",")[:2])
+        assert (w, h) != (1280, 720), "recorded the desktop default again"
+        assert w < 500, f"frames are {w}x{h}, not the emulated mobile viewport"
+    finally:
+        await mgr.close()
