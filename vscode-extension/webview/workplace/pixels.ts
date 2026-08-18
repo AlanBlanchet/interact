@@ -5,10 +5,16 @@
  *  the point: the art is DATA (`art.ts`), this file is the only renderer, and a new prop costs a
  *  string literal rather than a hand-tuned SVG path.
  *
- *  Two things it does that authoring by hand would not:
+ *  Three things it does that authoring by hand would not:
  *   - the OUTLINE is derived, never drawn. Any empty cell touching a solid one becomes ink, so a
  *     sprite always reads against whatever wall it stands on and the art stays about the shape.
- *   - runs of one colour merge into one `<rect>`, so a 10x16 person costs ~25 nodes, not 160.
+ *   - runs of one colour merge, and every run of the SAME colour is then emitted as ONE `<path>`,
+ *     so a person costs 9 nodes instead of 69 and a wall of books 8 instead of 137. The browser
+ *     gets one shape per colour to lay out, style and paint, which is most of why an empty
+ *     workplace is 62 shapes rather than 827.
+ *   - a body already drawn is not drawn twice. The props do not change when a worker moves, and
+ *     twelve running workers are twelve copies of one drawing, so the engine keeps what it has
+ *     built and every render after the first is a lookup.
  */
 
 /** Rows of equal length. `.` is empty; every other char is a palette key. */
@@ -77,11 +83,16 @@ function outline(c: Cells): void {
   for (const [x, y] of rim) c.set(x, y, INK);
 }
 
-/** Horizontal run-length merge. Vertical merging would halve the node count again but costs a
- *  second pass and the rectangles stop matching how the art was authored, which makes a wrong
- *  pixel much harder to find. */
-function rects(c: Cells, pal: Palette): string {
-  const out: string[] = [];
+/** Horizontal run-length merge, then one `<path>` per colour.
+ *
+ *  The runs are still exactly the runs the art was authored as — a wrong pixel is found by reading
+ *  along the row it is on, which is why vertical merging is still refused. What changed is what
+ *  carries them: a run is a `M x y h w v1 h-w z` subpath rather than an element of its own, so all
+ *  the metal in a server rack is ONE node instead of forty, and the colour is named once instead
+ *  of forty times. Runs never overlap, so painting them grouped by colour puts the same cells on
+ *  screen as painting them in scan order. */
+function paint(c: Cells, pal: Palette): string {
+  const byFill = new Map<string, string[]>();
   for (let y = 0; y < c.h; y++) {
     let x = 0;
     while (x < c.w) {
@@ -92,31 +103,69 @@ function rects(c: Cells, pal: Palette): string {
       // silhouette, and a piece that wants a different rim just declares one.
       const fill = ch === EMPTY ? null : (pal[ch] ?? (ch === INK ? "var(--wp-ink)" : null));
       if (fill) {
-        out.push(
-          `<rect x="${x}" y="${y}" width="${run}" height="1" fill="${fill}"/>`,
-        );
+        let d = byFill.get(fill);
+        if (!d) byFill.set(fill, (d = []));
+        d.push(`M${x} ${y}h${run}v1h-${run}z`);
       }
       x += run;
     }
   }
-  return out.join("");
+  let out = "";
+  for (const [fill, d] of byFill) out += `<path fill="${fill}" d="${d.join("")}"/>`;
+  return out;
+}
+
+/** A drawn body and the grid it fills: everything about a piece of art that does not depend on
+ *  how big it is asked to be. */
+interface Body {
+  svg: string;
+  w: number;
+  h: number;
+}
+
+/** Identity, so a grid and a palette can key a cache without being stringified. Both are module
+ *  constants in `art.ts`, so the numbering is bounded by how many pieces of art exist. */
+const ids = new WeakMap<object, number>();
+let nextId = 0;
+function idOf(o: object): number {
+  let id = ids.get(o);
+  if (id === undefined) ids.set(o, (id = nextId++));
+  return id;
+}
+
+/** What a piece of art actually costs: pad, derive the rim, merge the runs, name the colours.
+ *  Pure in its three arguments, and the whole view draws from about two dozen combinations of
+ *  them, so it is computed once per combination and never again. Deliberately keyed on the art
+ *  alone: the scale, the class and the attributes belong to the `<svg>` wrapper, which is a
+ *  hundred characters of concatenation and is built fresh every time. */
+const bodies = new Map<string, Body>();
+function bodyOf(grid: Grid, pal: Palette, rim: boolean): Body {
+  const key = `${idOf(grid)}:${idOf(pal)}:${rim ? 1 : 0}`;
+  let body = bodies.get(key);
+  if (!body) {
+    const c = cells(grid, rim ? 1 : 0);
+    if (rim) outline(c);
+    bodies.set(key, (body = { svg: paint(c, pal), w: c.w, h: c.h }));
+  }
+  return body;
+}
+
+function open(w: number, h: number, size: string, opts: DrawOptions): string {
+  const { className = "", attrs = "" } = opts;
+  return (
+    `<svg${className ? ` class="${className}"` : ""} ${size} viewBox="0 0 ${w} ${h}" ` +
+    `shape-rendering="crispEdges" aria-hidden="true" focusable="false"${attrs ? " " + attrs : ""}>`
+  );
 }
 
 /** One grid as a standalone `<svg>`, sized to an exact integer multiple so edges stay hard. */
 export function draw(grid: Grid, pal: Palette, opts: DrawOptions = {}): string {
-  const { scale = 2, outline: rim = true, className = "", attrs = "", fluid = false } = opts;
-  const c = cells(grid, rim ? 1 : 0);
-  if (rim) outline(c);
-  const body = rects(c, pal);
-  const cls = className ? ` class="${className}"` : "";
+  const { scale = 2, outline: rim = true, fluid = false } = opts;
+  const body = bodyOf(grid, pal, rim);
   const size = fluid
-    ? `width="100%" height="${c.h * scale}" preserveAspectRatio="none"`
-    : `width="${c.w * scale}" height="${c.h * scale}"`;
-  return (
-    `<svg${cls} ${size} viewBox="0 0 ${c.w} ${c.h}" ` +
-    `shape-rendering="crispEdges" aria-hidden="true" focusable="false"${attrs ? " " + attrs : ""}>` +
-    `${body}</svg>`
-  );
+    ? `width="100%" height="${body.h * scale}" preserveAspectRatio="none"`
+    : `width="${body.w * scale}" height="${body.h * scale}"`;
+  return `${open(body.w, body.h, size, opts)}${body.svg}</svg>`;
 }
 
 /** Two poses in ONE `<svg>`, stacked as groups the stylesheet flips between. A frame animation
@@ -127,23 +176,12 @@ export function drawFrames(
   pal: Palette,
   opts: DrawOptions = {},
 ): string {
-  const { scale = 2, outline: rim = true, className = "", attrs = "" } = opts;
-  const built = frames.map((g) => {
-    const c = cells(g, rim ? 1 : 0);
-    if (rim) outline(c);
-    return c;
-  });
-  const w = Math.max(...built.map((c) => c.w));
-  const h = Math.max(...built.map((c) => c.h));
-  const groups = built
-    .map((c, i) => `<g class="wp-f wp-f${i}">${rects(c, pal)}</g>`)
-    .join("");
-  const cls = className ? ` class="${className}"` : "";
-  return (
-    `<svg${cls} width="${w * scale}" height="${h * scale}" viewBox="0 0 ${w} ${h}" ` +
-    `shape-rendering="crispEdges" aria-hidden="true" focusable="false"${attrs ? " " + attrs : ""}>` +
-    `${groups}</svg>`
-  );
+  const { scale = 2, outline: rim = true } = opts;
+  const built = frames.map((g) => bodyOf(g, pal, rim));
+  const w = Math.max(...built.map((b) => b.w));
+  const h = Math.max(...built.map((b) => b.h));
+  const groups = built.map((b, i) => `<g class="wp-f wp-f${i}">${b.svg}</g>`).join("");
+  return `${open(w, h, `width="${w * scale}" height="${h * scale}"`, opts)}${groups}</svg>`;
 }
 
 /** Rendered size of a grid, so layout can reserve room without measuring in the browser. */
