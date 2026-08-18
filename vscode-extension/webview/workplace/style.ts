@@ -173,6 +173,12 @@ body.vscode-high-contrast-light .wp {
   border-bottom: 2px solid var(--wp-ink);
 }
 .wp-floor:last-of-type { border-bottom: 0; }
+/* An empty storey keeps its rooms and its shape, at a fraction of the height: with a small team
+   the vacant floors were most of the canvas while the people crammed into a corner of it. The
+   props scale with it rather than being cropped, so a dark room still reads as that room. */
+.wp-floor[data-vacant="1"] { grid-template-rows: 30px auto; }
+.wp-floor[data-vacant="1"] .wp-prop { transform: scale(.62); transform-origin: center bottom; }
+.wp-floor[data-vacant="1"] .wp-sign { opacity: .72; }
 
 .wp-base {
   height: 10px;
@@ -342,6 +348,9 @@ body.vscode-high-contrast-light .wp {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  /* Ellipsis, matching the name plates: a line that simply stops mid-word reads as a rendering
+     fault rather than as text that carries on. */
+  text-overflow: ellipsis;
   overflow: hidden;
   overflow-wrap: anywhere;
 }

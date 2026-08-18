@@ -272,9 +272,13 @@ export function renderScene(state: TeamState): string {
     const body = ground
       ? roomOf(zones[0], plans.get(zones[0]), ctx) + lobby + roomOf(zones[1], plans.get(zones[1]), ctx)
       : zones.map((z) => roomOf(z, plans.get(z), ctx)).join("");
+    // A storey nobody is on keeps its rooms — the building has to stay a building — but stops
+    // paying full height for them. With a small team the empty floors were most of the canvas,
+    // and the people were crammed into a corner of it.
+    const vacant = cells.every((c) => c.heads === 0) ? " data-vacant=\"1\"" : "";
     return (
-      `<div class="wp-floor" data-floor="${FLOORS.length - 1 - i}" style="--cols:${columns(cells)}">` +
-      `${body}</div>`
+      `<div class="wp-floor" data-floor="${FLOORS.length - 1 - i}"${vacant} ` +
+      `style="--cols:${columns(cells)}">${body}</div>`
     );
   }).join("");
 
