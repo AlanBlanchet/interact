@@ -11,6 +11,7 @@ from playwright.async_api import Error as PlaywrightError, TimeoutError as Playw
 
 from interact import desktop
 from interact.desktop.atspi import AtSpi
+from interact.settle import settle_animations
 from interact.actions.models import (
     AnyAction,
     AnnotateAction,
@@ -24,7 +25,6 @@ from interact.actions.models import (
     EvaluateJsAction,
     HandleDialogAction,
     HoverAction,
-    settle_animations,
     NewTabAction,
     ScreenshotAction,
     SwitchTabAction,

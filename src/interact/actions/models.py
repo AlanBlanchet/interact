@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from playwright.async_api import Page
 
 from interact.config import DEFAULT_LIMIT
+from interact.settle import settle_animations
 from interact.state import ref_locator
 
 _DND_DISPATCH_JS = (Path(__file__).parent.parent / "js" / "dnd_dispatch.js").read_text()
@@ -194,24 +195,6 @@ class ClickAction(_CoordinateTargetMixin):
             await _click_selector(page, self.selector, button=self.button)
         else:
             await page.mouse.click(self.x, self.y, button=self.button)
-
-
-async def settle_animations(page: Page, timeout: float = 1000) -> None:
-    """Wait (bounded) for FINITE CSS transitions/animations to finish, so a capture taken right after
-    a hover shows the FINAL hovered state, not a mid-transition frame — the real cause behind "hover
-    doesn't latch": the :hover state DOES apply, but an immediate screenshot caught a `duration-500`
-    transition at t≈0 (transform≈none). Infinite animations (spinners) are ignored so they can't
-    block; the whole wait is best-effort (#49)."""
-    try:
-        await page.wait_for_function(
-            "() => document.getAnimations()"
-            "  .filter(a => { try { return a.effect.getComputedTiming().iterations !== Infinity; }"
-            "                 catch (e) { return true; } })"
-            "  .every(a => a.playState !== 'running')",
-            timeout=timeout,
-        )
-    except Exception:
-        pass  # a looping/again-restarting animation, or no animations API — never block the action
 
 
 class HoverAction(_CoordinateTargetMixin):

@@ -6,6 +6,8 @@ from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, model_validator
 from playwright.async_api import Page
 
+from interact.settle import settle_page
+
 _ANNOTATION_COLORS = ["#FF4444", "#44AA44", "#4444FF", "#FF8800", "#AA44AA", "#00AAAA"]
 _NAME_MAX_LEN = 30
 _BADGE_W = 22
@@ -160,6 +162,9 @@ class PageState(BaseModel):
         except Exception:
             accessibility_tree = ""
 
+        # The page may still be MOVING: a smooth scroll or a finite transition outlives the call
+        # that started it, and photographing mid-flight is #109 (pixels disagreed with scrollY).
+        await settle_page(page)
         screenshot_bytes = await target.screenshot(type="png")
         screenshot_base64 = bytes_to_b64(screenshot_bytes)
 

@@ -12,6 +12,7 @@ from interact.debug_utils import Debug
 from interact.desktop import DesktopElement, DesktopWindow
 from interact.vision.detect import _desktop_context, _detect_desktop_elements
 from interact.server import core, targets, vlm
+from interact.settle import settle_page
 from interact.server.core import config
 from interact.state import (
     InteractiveElement,
@@ -66,8 +67,11 @@ async def _annotate_page(
     scope: str | None = None,
     limit: int = DEFAULT_LIMIT,
 ) -> tuple[bytes, list[InteractiveElement]]:
-    elements = await _scan_elements(mgr, tab, scope, limit)
     page = await mgr.get_page(tab)
+    # Before the scan, not just before the shutter: the boxes are drawn at coordinates measured
+    # here, so a page still moving yields an annotation offset from the thing it labels (#109).
+    await settle_page(page)
+    elements = await _scan_elements(mgr, tab, scope, limit)
     screenshot_bytes = await page.screenshot(type="png")
     return annotate_screenshot(screenshot_bytes, elements), elements
 
@@ -184,6 +188,7 @@ async def _element_screenshot(
             meta += f" ({box['width']:.0f}x{box['height']:.0f} at {box['x']:.0f},{box['y']:.0f})"
 
     try:
+        await settle_page(page)  # an element photo goes stale exactly like a page one (#109)
         png_bytes = await locator.screenshot(type="png")
     except Exception as e:
         return f"Cannot screenshot element: {e}"

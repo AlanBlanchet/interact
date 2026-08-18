@@ -6,6 +6,7 @@ of them against a browser session or a desktop window. This ``__init__`` re-expo
 models (so ``from interact.actions import AnyAction`` resolves) and the two dispatch entry points.
 """
 
+from interact.settle import settle_animations  # re-exported: one settle concept, one home
 from interact.actions.models import (  # noqa: F401
     BROWSER_ONLY_ACTIONS,
     DESKTOP_ONLY_ACTIONS,
@@ -36,6 +37,5 @@ from interact.actions.models import (  # noqa: F401
     UploadFileAction,
     WaitForAction,
     _wrap_js,
-    settle_animations,
 )
 from interact.actions.dispatch import _run_actions_browser, _run_actions_desktop  # noqa: F401
