@@ -62,6 +62,63 @@ def _dominant_colors(arr: np.ndarray, k: int = 4, quant: int = 16) -> list[tuple
     return out
 
 
+# A capture this uniform has nothing in it to describe. Real UI — even a near-empty dialog —
+# carries text, borders and shadows, so it never reaches this coverage; a crashed window, an
+# unmapped surface or a GPU buffer the grabber cannot read comes back at 100%.
+_BLANK_COVERAGE = 0.995
+# Longest edge kept for the blankness sample; a 4K grab strides down to this before counting.
+_SAMPLE_MAX = 400
+# Encoded bytes per pixel above which a frame cannot be near-uniform. Real screenshots sit well
+# above this; a flat fill sits three orders of magnitude below.
+_COMPRESSIBLE_ENOUGH = 0.05
+
+
+def _png_dimensions(png: bytes) -> tuple[int, int] | None:
+    """Width and height straight out of the IHDR header, without decoding the image."""
+    if len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
+        return None
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def blank_frame_reason(png: bytes) -> str | None:
+    """Why this frame is empty, or ``None`` if there is something on it.
+
+    Handed an all-black capture of a CRASHED window, a VLM did not say "this image is empty" — it
+    answered the question anyway, echoing the agent's own action text back as if it had read it on
+    screen (#112). A plausible invented answer is worse than an error, because it reads as a real
+    observation and the caller acts on it. Blankness is deterministic, so it is decided here on the
+    pixels and never sent to a model.
+    """
+    # Cheapest question first: a uniform image is what PNG compresses BEST, so its encoded size
+    # already answers this. A busy 1920x1080 screenshot is hundreds of kB; an all-black one is a
+    # few. Reading the size costs nothing and skips the ~70ms decode on the overwhelming majority
+    # of captures, which are not blank.
+    if (dims := _png_dimensions(png)) is not None:
+        w, h = dims
+        if w * h and len(png) / (w * h) > _COMPRESSIBLE_ENOUGH:
+            return None
+    try:
+        arr = _to_rgb(png)
+    except Exception:
+        return None  # unreadable bytes are a different failure; don't mask it as "blank"
+    # Sample, don't sweep. This runs on EVERY capture, and counting all 2M pixels of a 1920x1080
+    # frame costs ~500ms — more than the screenshot itself. Striding cannot hide blankness: what
+    # a stride skips is by definition a minority of the frame, and anything under half a percent
+    # could not change the verdict anyway.
+    height, width = arr.shape[:2]
+    longest = max(height, width) if arr.size else 0
+    if longest > _SAMPLE_MAX:
+        step = longest // _SAMPLE_MAX + 1
+        arr = arr[::step, ::step]
+    top = _dominant_colors(arr, k=1)
+    if not top:
+        return None
+    rgb, fraction = top[0]
+    if fraction < _BLANK_COVERAGE:
+        return None
+    return f"blank {width}x{height} frame — {fraction * 100:.1f}% of it is {_hex(rgb)}"
+
+
 def _largest_uniform_band(
     arr: np.ndarray, std_thresh: float = 6.0, color_thresh: float = 10.0
 ) -> dict | None:

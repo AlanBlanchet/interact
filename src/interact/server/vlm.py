@@ -15,6 +15,7 @@ from interact.vision import (
     analyze_media,
     analyze_screenshot,
 )
+from interact.vision.measure import blank_frame_reason
 
 _log = logging.getLogger("interact")
 _MAX_FALLBACKS = core._MAX_FALLBACKS
@@ -158,6 +159,11 @@ async def _media_response(
     try:
         if not query:
             return None
+        # An empty frame is decided on the pixels, not by a model. Asked to describe a black
+        # capture of a crashed window, the VLM answered the question anyway — with the agent's own
+        # action text, in a full-frame bounding box, as if it had read it on screen (#112).
+        if media_type == "image" and (why := blank_frame_reason(data)):
+            return f"ERROR: nothing to analyse — {why}. Not sent to the model. The window may be crashed, unmapped, or on a GPU surface the grabber cannot read; re-check with return_image=True."
         r = await _vlm(data, context, query, media_type, mime, model_override=model_override)
         return _fmt_timing(r)
     finally:

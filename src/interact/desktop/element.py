@@ -168,6 +168,17 @@ class DesktopElement(Box):
         return _element_cache.get(wid) or None
 
     @classmethod
+    def stale_for(cls, wid: int, signature: str) -> bool:
+        """True when refs exist for this window but were detected on a DIFFERENT frame.
+
+        ``cached_for`` withholds stale refs from a listing; this answers the sharper question a
+        caller asks before ACTING on one ref — is the geometry and label I am about to use
+        describing the screen that is up right now? Cropping the live frame at last screen's
+        coordinates and captioning it with last screen's widget name hands a model text that
+        contradicts its image (#112)."""
+        return wid in _page_sig and _page_sig.get(wid) != signature
+
+    @classmethod
     def cached_for(cls, wid: int, signature: str) -> list[Self] | None:
         """Cached refs ONLY if they were detected on the currently-displayed frame (its content
         ``signature`` matches the one stored when the refs were detected). After a navigation the

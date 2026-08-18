@@ -22,6 +22,7 @@ from interact.vision.critique import (
 from interact.debug_utils import Debug
 from interact.desktop import DesktopElement
 from interact.vision.detect import _crop_image, _desktop_context
+from interact.vision.measure import blank_frame_reason
 from interact.vision.measure import format_measure, measure
 from interact.models import is_audio_model, is_transcription_only_model
 from interact.server import capture, core, targets, vlm
@@ -105,11 +106,24 @@ async def screenshot(
     img_bytes: bytes | None = None
     if win:
         if element is not None:
+            raw = win.capture()
+            # Gate on the LIVE frame before using a ref's geometry or its label. Cropping this
+            # frame at the last screen's coordinates and captioning it with the last screen's
+            # widget name hands the model an image and a description that disagree — the setup
+            # for the confident wrong answer in #112. The no-query branch below already gates
+            # its ref listing this way (#19); acting on one ref deserves the same check.
+            from interact.vision.detect import _page_signature
+
+            if DesktopElement.stale_for(win.wid, _page_signature(raw)):
+                return (
+                    f"ERROR: refs for {win.name!r} were detected on a different frame — the screen "
+                    "has changed since. Call get_interactive_elements again, then re-run with the "
+                    "new ref."
+                )
             el = targets._resolve_desktop_el(win.wid, win.name, element=element)
             if el is None:
                 nf = core._not_found(f"Element {element}")
                 return nf
-            raw = win.capture()
             img_bytes = _crop_image(raw, el.x, el.y, el.w, el.h)
             meta = f"[{el.index}] {el.role}: {el.name!r} ({el.w}x{el.h} at {el.x},{el.y})"
             result = await vlm._media_response(img_bytes, meta, query, path, model_override=model)
@@ -161,6 +175,14 @@ async def screenshot(
             text = _session_response(session, state.text_summary() + refs)
     if overwrote_path:
         text += f"\n(note: overwrote existing file {path} with this capture)"
+    # An empty frame is indistinguishable from "still loading", so a caller retries and waits
+    # instead of looking. That is exactly what happened to a CRASHED window whose per-window
+    # capture came back black while target="screen" showed the crash modal (#113). One line.
+    if img_bytes is not None and (why := blank_frame_reason(img_bytes)):
+        text += (
+            f"\n(note: {why} — the window may be crashed, occluded or GPU-composited"
+            + (' ; try target="screen", which shows crash modals per-window capture misses)' if win else ")")
+        )
     if img_bytes is not None:
         Debug.save("capture", img_bytes, ext="png", invocation_id=inv)
     result = [text, Image(data=img_bytes, format="png")] if (return_image and img_bytes is not None) else text
