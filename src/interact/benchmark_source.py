@@ -23,10 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from interact.model_catalog import describe_age
-
-#: Scores move on the order of days, so a half-day cache keeps the panel responsive without ever
-#: being meaningfully behind. Matches the catalog's TTL so the two surfaces age alike.
-TTL_SECONDS = 12 * 60 * 60
+from interact.ttl_cache import TTL_SECONDS, TTLCache, age_of
 
 _ENDPOINT = "https://artificialanalysis.ai/api/v2/data/llms/models"
 _KEY_ENV = "ARTIFICIAL_ANALYSIS_API_KEY"
@@ -49,7 +46,7 @@ class Board:
 
     @property
     def age_seconds(self) -> float:
-        return max(0.0, time.time() - self.fetched_at) if self.fetched_at else float("inf")
+        return age_of(self.fetched_at)
 
     @property
     def is_live(self) -> bool:
@@ -66,9 +63,12 @@ class Board:
         return f"Artificial Analysis · {describe_age(self.age_seconds)}"
 
 
+#: Never inside the package — these scores are not redistributable (see the licensing note).
+_CACHE = TTLCache("benchmark_scores.json", TTL_SECONDS)
+
+
 def cache_path() -> Path:
-    """Under the user's own output dir — never inside the package (see the licensing note)."""
-    return Path.home() / ".interact" / "out" / "benchmark_scores.json"
+    return _CACHE.path
 
 
 def _num(value) -> float | None:
@@ -98,13 +98,15 @@ def _from_artificial_analysis(payload: dict) -> list[Score]:
 
 
 def _read_cache() -> Board | None:
+    raw = _CACHE.read()
+    if raw is None:
+        return None
     try:
-        raw = json.loads(cache_path().read_text())
         scores = [
             Score(name=s["name"], creator=s.get("creator", "unknown"), intelligence=float(s["intelligence"]))
             for s in raw.get("scores", [])
         ]
-    except (OSError, ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         return None
     if not scores:
         return None
@@ -113,16 +115,12 @@ def _read_cache() -> Board | None:
 
 
 def _write_cache(board: Board) -> None:
-    try:
-        cache_path().parent.mkdir(parents=True, exist_ok=True)
-        cache_path().write_text(json.dumps({
-            "source": board.source,
-            "fetched_at": board.fetched_at,
-            "scores": [{"name": s.name, "creator": s.creator, "intelligence": s.intelligence}
-                       for s in board.scores],
-        }))
-    except OSError:
-        pass  # a cache we cannot write is a slow panel, never a broken one
+    _CACHE.write({
+        "source": board.source,
+        "fetched_at": board.fetched_at,
+        "scores": [{"name": s.name, "creator": s.creator, "intelligence": s.intelligence}
+                   for s in board.scores],
+    })
 
 
 def _fetch() -> Board | None:

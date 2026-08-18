@@ -155,10 +155,12 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       "run",
       run,
     );
-    // Clicking a run opens its conversation — the reason to have a tree at all is to get here.
+    // Clicking a run aims the Chat view below at it — the reason to have a tree at all is to get
+    // there. That view shows the same transcript AND lets you reply, so it strictly beats opening
+    // a read-only editor tab; the tab is still one click away on the row's own icon.
     node.command = {
-      command: "interact.agents.openConversation",
-      title: "Open conversation",
+      command: "interact.agents.chat",
+      title: "Open agent chat",
       arguments: [run.run_id],
     };
     const icon = STATUS_ICON[run.status] ?? STATUS_ICON.foreign;

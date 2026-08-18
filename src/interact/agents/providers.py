@@ -14,6 +14,7 @@ is what lets a Claude agent spawn a Codex agent — they meet on MCP, which is v
 """
 
 import json
+from pathlib import Path
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -69,6 +70,14 @@ class AgentProvider(ABC):
         """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
         (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
 
+    def agent_definitions(self) -> list[str]:
+        """Names this CLI can resolve as ``agent=``, sorted. Empty when it has no such concept.
+
+        A caller — often an agent, which cannot ask a follow-up question — has no other way to
+        learn which definitions exist, so a capability nobody can enumerate is unusable.
+        """
+        return []
+
     @abstractmethod
     def parse(self, line: str) -> AgentEvent | None:
         """One stdout line → a normalised event, or None if the line carries nothing."""
@@ -81,6 +90,13 @@ class AgentProvider(ABC):
         """Agent sessions this provider can see that interact did NOT spawn — the user's own
         interactive windows included. Optional; a provider with no such view returns []."""
         return []
+
+
+#: `system` subtypes that describe the HARNESS rather than the agent — token accounting and hook
+#: lifecycle. They outnumbered the real steps in the activity view, burying the transparency the
+#: panel exists for. Only known noise is dropped; an unrecognised subtype still comes through as
+#: `other`, so a vendor adding an event cannot vanish silently.
+_HARNESS_BOOKKEEPING = frozenset({"thinking_tokens", "hook_started", "hook_response"})
 
 
 class ClaudeCodeProvider(AgentProvider):
@@ -112,6 +128,13 @@ class ClaudeCodeProvider(AgentProvider):
             argv += ["--mcp-config", mcp_config]
         return argv
 
+    def agent_definitions(self) -> list[str]:
+        """Claude Code resolves ``--agent <name>`` against ``~/.claude/agents/<name>.md``."""
+        try:
+            return sorted(p.stem for p in (Path.home() / ".claude" / "agents").glob("*.md"))
+        except OSError:
+            return []
+
     def resume_command(self, run_id: str, message: str) -> list[str]:
         """Continue an existing session. Our run_id IS Claude Code's session id (we set it at
         spawn), so the recipient answers with its full context intact and the reply lands in the
@@ -135,6 +158,13 @@ class ClaudeCodeProvider(AgentProvider):
             return None
         kind = raw.get("type", "")
         sid = raw.get("session_id")
+
+        if kind == "system" and raw.get("subtype") in _HARNESS_BOOKKEEPING:
+            return None  # about the harness's own machinery, not about what the agent did
+
+        if kind == "system" and raw.get("subtype") == "task_started":
+            return AgentEvent(kind="spawn", session_id=sid, raw_type=kind,
+                              text=str(raw.get("description") or raw.get("agent_type") or "subagent"))
 
         if kind == "system" and raw.get("subtype") == "init":
             tools = raw.get("tools") or []
@@ -175,6 +205,11 @@ class ClaudeCodeProvider(AgentProvider):
                     if isinstance(body, list):
                         body = " ".join(b.get("text", "") for b in body if isinstance(b, dict))
                     return AgentEvent(kind="tool_result", text=_clip(str(body or "")),
+                                      session_id=sid, raw_type=kind)
+                # Text on a `user` line is what was ASKED of the agent — the other half of the
+                # conversation. Unnamed, an activity view shows only the agent talking.
+                if block.get("type") == "text":
+                    return AgentEvent(kind="prompt", text=_clip(str(block.get("text") or "")),
                                       session_id=sid, raw_type=kind)
             return AgentEvent(kind="other", session_id=sid, raw_type=kind)
 

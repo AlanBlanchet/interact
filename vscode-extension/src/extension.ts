@@ -1,4 +1,8 @@
 import * as vscode from "vscode";
+
+import { ACTIVITY_SCHEME, activityPath, formatActivity, runIdFromPath } from "./activityDocument";
+import { ChatViewProvider } from "./chatView";
+import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import {
@@ -344,23 +348,82 @@ export async function activate(
 
   const log = vscode.window.createOutputChannel("Interact");
 
-  // The Agents sidebar — the panel you click in the activity bar. The dashboard lives in an
-  // editor tab you must summon; running agents need somewhere you can glance at while working.
+  // Show the panel once, the first time the extension runs. VS Code registers a newly-contributed
+  // container HIDDEN, so without this it sits in the secondary side bar with no icon to click and
+  // nothing to hint it is there. Once only — reopening it every window would be a hijack.
+  //
+  // Runs after the tree provider is registered (else the revealed view has no data source), and
+  // records success only once the reveal actually happened: marking it first would mean a single
+  // failed call suppressed the reveal in every future window, permanently and invisibly.
+  async function revealAgentsPanelOnce(): Promise<void> {
+    if (!shouldRevealOnce(context.globalState)) return;
+    try {
+      await vscode.commands.executeCommand(REVEAL_COMMAND);
+      await context.globalState.update(REVEALED_KEY, true);
+    } catch (err) {
+      log.appendLine(`could not reveal the Agents panel: ${err}`);
+    }
+  }
+
+
+  // The Agents sidebar — the panel you click, in the SECONDARY side bar (right), beside Claude
+  // Code / Codex / Gemini, where a chat panel belongs. `viewsContainers.secondarySidebar` is what
+  // puts it there; the manifest's `engines.vscode` floor is past the build that added it.
+
   const agentsProvider = new AgentsProvider(context.globalState);
+  // The chat surface, under the agent list in the same side-bar container: the list says what is
+  // running, this is where you talk to it.
+  const chatProvider = new ChatViewProvider(log);
   context.subscriptions.push(
     agentsProvider,
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider),
+    // Picking an agent aims the chat at it — the reason the two views sit together.
+    vscode.commands.registerCommand("interact.agents.chat", (arg?: string | { run?: { run_id: string } }) => {
+      const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
+      if (runId) chatProvider.show(runId);
+    }),
     vscode.window.registerTreeDataProvider("interactAgents.board", agentsProvider),
+    vscode.workspace.registerTextDocumentContentProvider(ACTIVITY_SCHEME, {
+      async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+        const { readAgentActivity } = await import("./agents");
+        return formatActivity(readAgentActivity(runIdFromPath(uri.path), 200));
+      },
+    }),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
     vscode.commands.registerCommand("interact.agents.sequence", async () => {
       const { SequencePanel } = await import("./sequencePanel");
       SequencePanel.show();
     }),
-    // VS Code lets an extension declare a view container only in the activity bar (left). Putting
-    // it beside Claude Code / Codex in the SECONDARY side bar is a user move that VS Code then
-    // remembers — so this focuses the view and opens the mover rather than leaving you to drag it.
-    vscode.commands.registerCommand("interact.agents.moveRight", async () => {
-      await vscode.commands.executeCommand("interactAgents.board.focus");
-      await vscode.commands.executeCommand("workbench.action.moveFocusedView");
+    // The manifest already puts the panel in the secondary side bar; what it cannot do is make it
+    // VISIBLE — VS Code registers a new container hidden, so there is no icon to click until
+    // something reveals it. This is that something, and it is also how you get the panel back
+    // after closing it.
+    vscode.commands.registerCommand("interact.agents.show", () =>
+      vscode.commands.executeCommand(REVEAL_COMMAND),
+    ),
+    // Talking BACK to an agent, not only watching it. The agent resumes its own session, so it
+    // answers with everything it has already done still in context, and the reply lands in the
+    // same transcript the conversation view shows.
+    vscode.commands.registerCommand("interact.agents.send", async (node?: { run?: { run_id: string; name: string } }) => {
+      const run = node?.run;
+      if (!run) return;
+      const message = await vscode.window.showInputBox({
+        title: `Message ${run.name}`,
+        prompt: "It answers with its full context intact — write a complete request.",
+        placeHolder: "e.g. also check the error paths",
+        ignoreFocusOut: true,
+      });
+      if (!message) return;
+      const { execFile } = await import("child_process");
+      execFile("interact", ["agents", "send", run.run_id, message], (err, stdout, stderr) => {
+        const said = (stdout || stderr || "").trim();
+        if (err || said.startsWith("ERROR")) {
+          vscode.window.showErrorMessage(said || `Could not reach ${run.name}.`);
+          return;
+        }
+        vscode.window.showInformationMessage(said || `Sent to ${run.name}.`);
+        agentsProvider.refresh();
+      });
     }),
     vscode.commands.registerCommand("interact.agents.openConversation", async (arg?: string | { run?: { run_id: string } }) => {
       const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
@@ -393,16 +456,21 @@ export async function activate(
     vscode.commands.registerCommand("interact.agents.showEvents", async (node?: { run?: { run_id: string; name: string } }) => {
       const run = node?.run;
       if (!run) return;
-      const { readAgentActivity } = await import("./agents");
-      const lines = readAgentActivity(run.run_id, 200).map((a) => `${a.kind.padEnd(10)} ${a.tool ?? a.text}`);
-      const doc = await vscode.workspace.openTextDocument({
-        content: lines.join("\n") || "(no activity recorded yet)",
-        language: "log",
+      // Served by our own scheme, so it opens READ-ONLY. An untitled document would be dirty,
+      // and closing it would ask the user to save a log they never wrote.
+      const uri = vscode.Uri.from({
+        scheme: ACTIVITY_SCHEME,
+        path: activityPath(run.run_id, run.name),
       });
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.languages.setTextDocumentLanguage(doc, "log");
       await vscode.window.showTextDocument(doc, { preview: true });
     }),
   );
 
+  // Now that the view has a data provider, it is safe to show — a revealed view with no
+  // provider renders as empty and reads like a broken panel.
+  void revealAgentsPanelOnce();
   context.subscriptions.push(log);
 
   // No `secrets.onDidChange` listener: KeyManager stores keys in ~/.interact/config.env (the
@@ -443,7 +511,10 @@ export async function activate(
 
   let benchmarksData: unknown = { benchmarks: [] };
   try {
-    benchmarksData = require("./benchmarks.json");
+    // The bundled file is baked at BUILD time, so its scores can never change once packaged.
+    // Whatever Python has fetched since wins, per benchmark.
+    const { mergeLiveTables, readLiveTables } = require("./benchmarkTables");
+    benchmarksData = mergeLiveTables(require("./benchmarks.json"), readLiveTables());
   } catch {}
 
   const statusBar = vscode.window.createStatusBarItem(

@@ -14,16 +14,14 @@ data is fine when the network is down; serving it as though it were live is the 
 """
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 
 import httpx
 
-#: How long a fetched catalog is considered current. Model catalogs move in days, not minutes, and
-#: every refetch is a network call on someone's editor startup — so this is deliberately long.
-TTL_SECONDS = 12 * 60 * 60
+from interact.ttl_cache import TTL_SECONDS, TTLCache, age_of
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 _FETCH_TIMEOUT = 6.0
@@ -51,7 +49,7 @@ class Catalog:
 
     @property
     def age_seconds(self) -> float:
-        return max(0.0, time.time() - self.fetched_at)
+        return age_of(self.fetched_at)
 
     @property
     def is_live(self) -> bool:
@@ -73,10 +71,13 @@ def describe_age(seconds: float) -> str:
     return f"{int(seconds // 86400)}d ago"
 
 
+#: Beside the agent registry, on a fixed path — the CLI and the extension both read it, so it
+#: must not move with ``INTERACT_DEBUG_DIR``.
+_CACHE = TTLCache("model_catalog.json", TTL_SECONDS)
+
+
 def cache_path() -> Path:
-    """Beside the agent registry, on the same fixed path — the CLI and the extension both read
-    it, so it must not move with ``INTERACT_DEBUG_DIR``."""
-    return Path.home() / ".interact" / "out" / "model_catalog.json"
+    return _CACHE.path
 
 
 def _num(value) -> float | None:
@@ -135,8 +136,10 @@ def _from_litellm() -> list[ModelInfo]:
 
 
 def _read_cache() -> Catalog | None:
+    raw = _CACHE.read()
+    if raw is None:
+        return None
     try:
-        raw = json.loads(cache_path().read_text())
         models = [ModelInfo(
             id=m["id"], name=m.get("name", ""),
             context_length=m.get("context_length"),
@@ -153,28 +156,26 @@ def _read_cache() -> Catalog | None:
 
 
 def _write_cache(catalog: Catalog) -> None:
-    try:
-        path = cache_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "source": catalog.source,
-            "fetched_at": catalog.fetched_at,
-            "models": [vars(m) | {"input_modalities": list(m.input_modalities)} for m in catalog.models],
-        }))
-    except OSError:
-        pass  # caching is an optimisation; failing to cache must never fail the call
+    _CACHE.write({
+        "source": catalog.source,
+        "fetched_at": catalog.fetched_at,
+        "models": [vars(m) | {"input_modalities": list(m.input_modalities)} for m in catalog.models],
+    })
 
 
-@lru_cache(maxsize=1)
-def load_catalog() -> Catalog:
+def load_catalog(*, refresh: bool = False) -> Catalog:
     """The freshest catalog available, never raising.
 
     Order: a cache still inside its TTL, then a live fetch, then a STALE cache, then LiteLLM's
     static map. The last two are marked not-live, so a caller can say so rather than presenting
     aged numbers as current.
+
+    ``refresh`` skips the TTL and re-fetches — what the periodic refresher passes, so that a
+    long-lived server does not keep serving whatever it read at startup. (This used to be
+    ``@lru_cache``d, which made any refresher a silent no-op after its first call.)
     """
     cached = _read_cache()
-    if cached is not None and cached.age_seconds <= TTL_SECONDS:
+    if not refresh and cached is not None and cached.age_seconds <= TTL_SECONDS:
         return cached
 
     try:

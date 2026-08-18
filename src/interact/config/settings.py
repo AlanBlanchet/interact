@@ -133,6 +133,12 @@ class Config(BaseSettings):
     # shorter. An abandoned sandbox auto-closes (the next launch_app respawns one); a live recording
     # blocks reaping. 0 disables. Override with INTERACT_SANDBOX_IDLE_TTL.
     sandbox_idle_ttl: int = 300
+    # Refresh the live model catalog (OpenRouter) and benchmark scores (Artificial Analysis) in
+    # the background when the server starts, so the dashboard shows current prices and rankings
+    # instead of whatever was cached. Set false to keep interact from reaching those APIs at all —
+    # the panels then serve the last cache and say how old it is. Override with
+    # INTERACT_REFRESH_LIVE_DATA.
+    refresh_live_data: bool = True
     vlm_max_dim: int = 1280
     vlm_min_dim: int = 768
     detection_max_retries: int = 3  # judge-driven re-detection passes to recover missed elements

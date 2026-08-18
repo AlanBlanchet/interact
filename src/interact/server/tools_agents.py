@@ -31,6 +31,7 @@ def _fmt(run: reg.AgentRun) -> str:
 async def agent_spawn(
     task: str,
     provider: str = "claude",
+    agent: str | None = None,
     name: str | None = None,
     model: str | None = None,
     cwd: str | None = None,
@@ -46,7 +47,11 @@ async def agent_spawn(
 
     task: what the agent should do — write it as a complete brief; the agent cannot ask you.
     provider: which CLI to run ("claude", "codex"). Only installed ones can be used.
-    name: a short role label for the supervisor view (e.g. "reviewer"). Defaults to the provider.
+    agent: a definition the CLI resolves itself — Claude Code reads ~/.claude/agents/<name>.md —
+        so the run IS that agent (e.g. "code-reviewer"), with its own system prompt and tools.
+        The run is named after it, which is what makes a team readable at a glance.
+    name: a short role label for the supervisor view. Defaults to the agent definition, then to
+        the provider — so several runs are not all just called "claude".
     model: provider-specific model name/alias; omit for that CLI's default.
     cwd: directory to work in; defaults to interact's own working directory.
     """
@@ -64,7 +69,8 @@ async def agent_spawn(
         pass
     try:
         handle = await run_agent(
-            prov, task, name=name or prov.name, cwd=cwd or os.getcwd(), model=model,
+            prov, task, name=name or agent or prov.name, cwd=cwd or os.getcwd(),
+            agent=agent, model=model,
         )
     except (OSError, RuntimeError) as e:
         return f"ERROR: could not start the {provider} agent — {e}"
@@ -125,12 +131,19 @@ async def agent_stop(run_id: str) -> str:
 @mcp.tool()
 @instrumented
 async def agent_providers() -> str:
-    """Which agent CLIs can be spawned on this machine, and which are only declared."""
+    """Which agent CLIs can be spawned here, and which named agents each can resolve.
+
+    The definitions matter as much as the providers: `agent_spawn(agent=...)` runs one of them
+    with its own system prompt and tools, and a caller — usually an agent, which cannot ask a
+    follow-up question — has no other way to learn the names.
+    """
     lines = []
     for p in PROVIDERS.values():
         state = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
         note = f" — {p.caveat}" if not p.verified else ""
         lines.append(f"  {p.name}: {state}{note}")
+        if definitions := p.agent_definitions():
+            lines.append(f"    agents: {', '.join(definitions)}")
     return "Agent providers:\n" + "\n".join(lines)
 
 
@@ -153,23 +166,15 @@ async def agent_send(run_id: str, message: str, wait: bool = False) -> str:
     import asyncio
     import os
 
-    run = next((r for r in reg.list_runs() if r.run_id == run_id), None)
-    if run is None:
-        return f"ERROR: no agent run {run_id!r}. Use agent_list to see the run ids."
-    if run.foreign:
-        return (f"ERROR: {run.name!r} is one of your own editor sessions, not an agent interact "
-                "started — interact can watch it, but must not type into it.")
-    try:
-        prov = provider_for(run.provider)
-    except ValueError as e:
-        return f"ERROR: {e}"
-    if not prov.can_resume:
-        return (f"ERROR: the {run.provider!r} CLI cannot continue a session, so a message would "
-                "arrive with no context. Spawn a new agent with agent_spawn instead.")
+    from interact.agents import messaging
 
-    sender = os.environ.get("INTERACT_RUN_ID") or "operator"
-    if not reg.record_message(from_run=sender, to_run=run_id, text=message):
-        return f"ERROR: could not record the message to {run_id!r}."
+    # Shared with `interact agents send`, so the tool and the CLI refuse the same things.
+    run, error = messaging.check_deliverable(run_id)
+    if error:
+        return error
+    prov = provider_for(run.provider)
+    if error := messaging.record_exchange(messaging.sender_id(), run_id, message):
+        return error
 
     # The reply continues the recipient's OWN transcript, so it is appended to that run's stream.
     argv = prov.resume_command(run_id, message)

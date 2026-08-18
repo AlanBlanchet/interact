@@ -26,7 +26,6 @@ import {
 
 export * from "./catalogFormat";
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/models";
 
 /** The file Python writes. It sits beside the agent registry on the same fixed path, so a process
  *  that never saw `INTERACT_DEBUG_DIR` still finds it. */
@@ -44,16 +43,7 @@ export function readCatalog(): Catalog | null {
       fetched_at: Number(raw.fetched_at || 0),
     };
   } catch {
-    return null; // absent or truncated — the caller falls back to a fetch
-  }
-}
-
-function writeCatalog(cat: Catalog): void {
-  try {
-    fs.mkdirSync(path.dirname(catalogPath()), { recursive: true });
-    fs.writeFileSync(catalogPath(), JSON.stringify(cat));
-  } catch {
-    /* caching is an optimisation, never a failure mode */
+    return null; // absent or truncated — the caller asks the CLI to rebuild it
   }
 }
 
@@ -67,30 +57,22 @@ export async function loadCatalog(): Promise<Catalog | null> {
   const cached = readCatalog();
   if (cached && ageSeconds(cached) <= TTL_SECONDS) return cached;
 
-  try {
-    const res = await fetch(OPENROUTER_URL, { signal: AbortSignal.timeout(6000) });
-    if (res.ok) {
-      const payload = (await res.json()) as { data?: unknown[] };
-      const models: ModelInfo[] = [];
-      for (const raw of payload.data ?? []) {
-        const m = raw as Record<string, any>;
-        if (!m?.id) continue;
-        models.push({
-          id: String(m.id),
-          name: String(m.name ?? m.id),
-          context_length: typeof m.context_length === "number" ? m.context_length : null,
-          input_cost_per_token: Number(m.pricing?.prompt) || null,
-          input_modalities: m.architecture?.input_modalities ?? [],
-        });
-      }
-      if (models.length) {
-        const fresh: Catalog = { models, source: "openrouter", fetched_at: Date.now() / 1000 };
-        writeCatalog(fresh);
-        return fresh;
-      }
-    }
-  } catch {
-    /* offline or rate-limited — fall through to whatever we already have */
-  }
-  return cached;
+  // Ask PYTHON to refresh rather than fetching here. This used to fetch OpenRouter and write the
+  // cache itself, with a narrower schema (no output_cost_per_token) — so whichever side wrote
+  // last decided whether output prices existed at all. One writer, one schema.
+  await refreshViaCli();
+  return readCatalog() ?? cached;
 }
+
+/** Run `interact refresh`, best-effort: a panel must render whatever it has even with no CLI. */
+function refreshViaCli(): Promise<void> {
+  return new Promise((resolve) => {
+    import("child_process")
+      .then(({ execFile }) => {
+        const child = execFile("interact", ["refresh"], { timeout: 20000 }, () => resolve());
+        child.on("error", () => resolve());
+      })
+      .catch(() => resolve());
+  });
+}
+

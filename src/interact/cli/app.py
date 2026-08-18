@@ -106,6 +106,30 @@ def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
         print(f"{indent}    pid {s['pid']}: v{s.get('version')}")
 
 
+def _print_sandboxes(real_display: str | None) -> None:
+    """Which sandbox displays exist right now, and who owns each.
+
+    Answers "why do I see two Xephyr windows?" — every interact server owns its own sandbox, so
+    one window per server that has launched something is BY DESIGN. What is not by design is a
+    window whose owner is gone, which is called out here and swept on the next launch.
+    """
+    from interact.desktop import orphans
+
+    try:
+        servers = orphans._list_x_servers()
+    except Exception:
+        return
+    if not servers:
+        return
+    print(f"  sandboxes     : {len(servers)} open (one per interact server that has launched an app)")
+    for srv in servers:
+        where = orphans.display_of(srv.cmdline) or "?"
+        clients = len(orphans.display_clients(where)) if where != real_display else 0
+        owner = "ORPHANED — no owner left; swept on the next launch" if orphans.is_orphan(srv) \
+            else f"owner pid {srv.ppid}"
+        print(f"                  {where}  {clients} app(s)  ({owner})")
+
+
 @app.command
 def mcp() -> None:
     """Run the MCP server over stdio. Clients launch this; register it with `interact install`."""
@@ -390,6 +414,7 @@ def doctor(*, fix: bool = False) -> None:
         display = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")
         maim = shutil.which("maim")
         print(f"  desktop       : session={session} display={display or 'none'} maim={maim or 'MISSING (apt install maim)'}")
+        _print_sandboxes(display)
         if session == "wayland":
             print("                  note: browser + the nested sandbox + uinput input work on "
                   "Wayland; local (non-nested) window capture/enumeration is X11-only for now "
@@ -519,10 +544,10 @@ def agents_list(foreign: bool = True) -> None:
 
 @agents_app.command(name="events")
 def agents_events(run_id: str, limit: int = 30) -> None:
-    """Print what an agent run has been doing."""
+    """Print what an agent run has been doing. Takes the short id `agents list` prints."""
     from interact.agents import registry as reg
 
-    events = reg.read_events(run_id)
+    events = reg.read_events(reg.resolve_run_id(run_id) or run_id)
     if not events:
         print(f"No events for {run_id!r}.")
         return
@@ -532,27 +557,86 @@ def agents_events(run_id: str, limit: int = 30) -> None:
 
 @agents_app.command(name="stop")
 def agents_stop(run_id: str) -> None:
-    """Stop a running agent and the tools it spawned."""
+    """Stop a running agent and the tools it spawned. Takes the short id `agents list` prints."""
     from interact.agents import registry as reg
 
-    print(f"Stopped {run_id[:8]}." if reg.stop(run_id) else f"No agent run {run_id!r}.")
+    resolved = reg.resolve_run_id(run_id)
+    if resolved is None:
+        print(f"No agent run {run_id!r}.")
+        return
+    print(f"Stopped {resolved[:8]}." if reg.stop(resolved) else f"No agent run {run_id!r}.")
+
+
+@app.command(name="refresh")
+def refresh_live_data() -> None:
+    """Re-fetch the live model catalog and benchmark scores the dashboard reads.
+
+    Python is the SOLE writer of those cache files — the extension used to fetch and write the
+    catalog itself with a narrower schema, so whichever side wrote last decided whether prices
+    existed. Now the extension asks for this instead.
+    """
+    from interact import live_sources
+
+    done = live_sources.refresh_all()
+    print("Refreshed: " + ", ".join(done) if done else "Nothing refreshed (offline, or no API key).")
+
+
+@agents_app.command(name="send")
+def agents_send(run_id: str, message: str) -> None:
+    """Send a message to a running agent — it answers with its full context intact.
+
+    This is how the VS Code panel lets you join the conversation instead of only watching it: the
+    agent resumes its own session, so it remembers what it has already done and its reply lands in
+    the same transcript the panel shows.
+    """
+    import subprocess
+
+    from interact.agents import messaging
+    from interact.agents import registry as reg
+    from interact.agents.providers import provider_for
+
+    run, error = messaging.check_deliverable(run_id)
+    if error:
+        print(error)
+        return
+    run_id = run.run_id  # deliver against the full id, whatever prefix was typed
+    if error := messaging.record_exchange(messaging.sender_id(), run_id, message):
+        print(error)
+        return
+    raw = reg.raw_events_path(run_id)
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    argv = provider_for(run.provider).resume_command(run_id, message)
+    with raw.open("ab") as sink:  # append: another turn of the same conversation
+        try:
+            subprocess.Popen(argv, cwd=run.cwd or ".", stdout=sink,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            print(f"ERROR: could not deliver to {run.name} — {e}")
+            return
+    print(f"Delivered to {run.name} ({run_id[:8]}). It is answering now.")
 
 
 @agents_app.command(name="providers")
 def agents_providers() -> None:
-    """Which agent CLIs can be spawned here."""
+    """Which agent CLIs can be spawned here, and the named agents each can resolve."""
     from interact.agents.providers import PROVIDERS
 
     for p in PROVIDERS.values():
         state = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
         note = f" — {p.caveat}" if not p.verified else ""
         print(f"  {p.name:8} {state}{note}")
+        if definitions := p.agent_definitions():
+            print(f"           agents: {', '.join(definitions)}")
 
 
 @agents_app.command(name="run")
-def agents_run(task: str, provider: str = "claude", name: str | None = None,
-               model: str | None = None, cwd: str | None = None) -> None:
-    """Spawn an agent and stream its events until it finishes."""
+def agents_run(task: str, provider: str = "claude", agent: str | None = None,
+               name: str | None = None, model: str | None = None, cwd: str | None = None) -> None:
+    """Spawn an agent and stream its events until it finishes.
+
+    ``--agent`` names a definition the CLI resolves itself (Claude Code reads
+    ``~/.claude/agents/<name>.md``), so the run IS that agent and is named after it.
+    """
     import asyncio
     import os
 
@@ -562,8 +646,8 @@ def agents_run(task: str, provider: str = "claude", name: str | None = None,
 
     async def _go() -> int:
         prov = provider_for(provider)
-        handle = await run_agent(prov, task, name=name or prov.name,
-                                 cwd=cwd or os.getcwd(), model=model)
+        handle = await run_agent(prov, task, name=name or agent or prov.name,
+                                 cwd=cwd or os.getcwd(), agent=agent, model=model)
         print(f"run_id {handle.run_id}")
         seen = 0
         while True:

@@ -199,3 +199,88 @@ def test_resume_continues_the_same_session_with_the_message():
 def test_a_provider_that_cannot_resume_says_so():
     assert CodexProvider().can_resume is False
     assert ClaudeCodeProvider().can_resume is True
+
+
+# ── Housekeeping is not activity ────────────────────────────────────────────────────────────
+# The activity view rendered more `other` rows than real ones: token accounting and hook
+# lifecycle lines outnumbered what the agent actually DID, so the transparency the panel exists
+# for was buried in noise. Bookkeeping the vendor emits about its own machinery is dropped;
+# anything describing the agent's WORK is kept and named.
+
+
+@pytest.mark.parametrize(
+    "subtype",
+    ["thinking_tokens", "hook_started", "hook_response"],
+)
+def test_vendor_housekeeping_is_dropped_not_shown_as_other(subtype):
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(
+        json.dumps({"type": "system", "subtype": subtype, "session_id": "s"})
+    )
+    assert event is None, f"{subtype} is bookkeeping about the harness, not agent activity"
+
+
+def test_a_spawned_subagent_is_real_activity_and_is_kept():
+    """An agent starting a Task IS the team behaviour the panel exists to show."""
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(
+        json.dumps({"type": "system", "subtype": "task_started", "session_id": "s"})
+    )
+    assert event is not None and event.kind != "other"
+
+
+def test_an_unknown_system_subtype_is_still_kept_as_other():
+    """A vendor adding a new event must not vanish — dropping is for the known-noisy only."""
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(
+        json.dumps({"type": "system", "subtype": "something_new", "session_id": "s"})
+    )
+    assert event is not None and event.kind == "other"
+
+
+def test_the_incoming_prompt_is_named_not_lumped_as_other():
+    """A `user` line carrying text is what was ASKED of the agent — the other half of the
+    conversation. Left as `other` the activity view showed only the agent's replies."""
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(json.dumps({
+        "type": "user", "session_id": "s",
+        "message": {"role": "user", "content": [{"type": "text", "text": "check the error paths"}]},
+    }))
+    assert event is not None and event.kind == "prompt"
+    assert "check the error paths" in (event.text or "")
+
+
+# ── Which agent definitions can be spawned here ─────────────────────────────────────────────
+# `agent_spawn(agent=...)` resolves a definition by name, but nothing told a caller WHICH names
+# exist — and an agent cannot ask a follow-up question, so an unlisted capability is an unusable
+# one. The provider knows where its definitions live, so it is the provider that answers.
+
+
+def test_a_provider_lists_the_agent_definitions_it_can_resolve(tmp_path, monkeypatch):
+    from interact.agents.providers import ClaudeCodeProvider
+
+    home = tmp_path / ".claude" / "agents"
+    home.mkdir(parents=True)
+    (home / "code-reviewer.md").write_text("---\nname: code-reviewer\n---\nreview things")
+    (home / "visual-critic.md").write_text("---\nname: visual-critic\n---\nlook at things")
+    (home / "notes.txt").write_text("not an agent")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert ClaudeCodeProvider().agent_definitions() == ["code-reviewer", "visual-critic"]
+
+
+def test_no_definitions_directory_is_an_empty_list_not_an_error(tmp_path, monkeypatch):
+    from interact.agents.providers import ClaudeCodeProvider
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert ClaudeCodeProvider().agent_definitions() == []
+
+
+def test_a_provider_that_has_no_such_concept_lists_nothing():
+    """Codex has no agent-definition files, so it must answer emptily rather than guess."""
+    from interact.agents.providers import CodexProvider
+
+    assert CodexProvider().agent_definitions() == []

@@ -365,3 +365,42 @@ def test_a_registered_run_carries_its_project(tmp_path):
 
 def test_an_empty_cwd_has_no_project_rather_than_a_wrong_one():
     assert reg.project_for("") == ""
+
+
+# ── A project is the REPO, not the nearest folder with a manifest ───────────────────────────
+# "Project detection is folder level" — reported, fixed, and STILL folder level: a package
+# manifest counted as a project root, so a repo's own sub-package filed as a separate project and
+# one repo's agents were split across two groups in the panel.
+
+
+def test_a_sub_package_belongs_to_its_repo_not_to_itself(tmp_path):
+    repo = tmp_path / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "vscode-extension"
+    sub.mkdir()
+    (sub / "package.json").write_text("{}")
+    assert reg.project_for(str(sub)) == "myrepo"
+
+
+def test_a_nested_manifest_several_levels_down_still_resolves_to_the_repo(tmp_path):
+    repo = tmp_path / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+    deep = repo / "services" / "api"
+    deep.mkdir(parents=True)
+    (deep / "pyproject.toml").write_text("")
+    assert reg.project_for(str(deep)) == "myrepo"
+
+
+def test_a_package_with_no_repo_around_it_is_still_its_own_project(tmp_path):
+    """Not everything is version controlled — a bare package must not fall back to a home dir."""
+    pkg = tmp_path / "loose-tool"
+    pkg.mkdir()
+    (pkg / "pyproject.toml").write_text("")
+    assert reg.project_for(str(pkg)) == "loose-tool"
+
+
+def test_the_repo_root_itself_resolves_to_itself(tmp_path):
+    repo = tmp_path / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("")
+    assert reg.project_for(str(repo)) == "myrepo"

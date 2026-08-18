@@ -87,3 +87,105 @@ export function renderTranscript(turns: Turn[]): string {
   const html = turns.map(renderTurn).filter(Boolean).join("\n");
   return html || '<div class="turn turn-other"><div class="body">No activity recorded yet.</div></div>';
 }
+
+/* ── The chat panel ──────────────────────────────────────────────────────────────────────────
+ *
+ *  The tree answers "what is running" and the conversation tab answers "what happened". Neither
+ *  let you SAY anything: the panel was a window, not a conversation. This is the surface that
+ *  talks back — the same transcript with a composer under it, living in the side bar beside the
+ *  agent list rather than as an editor tab you have to summon.
+ *
+ *  It lives here, beside the renderer it uses, because the escaping rule must be shared: an
+ *  agent's name, its output, and a tool result are all arbitrary bytes from a file or a web page.
+ */
+
+/** Shown when nothing is selected — a blank panel reads as broken rather than as ready. */
+export const CHAT_EMPTY_HINT = "Pick an agent in the list above to read and reply to it";
+
+export interface ChatDocument {
+  /** Per-render nonce: the CSP admits only scripts carrying it, so injected markup cannot run. */
+  nonce: string;
+  turns: Turn[];
+  name: string | undefined;
+  status: string | undefined;
+}
+
+export function chatDocument({ nonce, turns, name, status }: ChatDocument): string {
+  const header = name
+    ? `<header><span class="who">${escapeHtml(name)}</span>` +
+      `<span class="status">${escapeHtml(status ?? "")}</span></header>`
+    : "";
+  const body = name
+    ? renderTranscript(turns)
+    : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
+  const composer = name
+    ? `<form id="composer">
+         <textarea id="message" rows="3" placeholder="Reply to ${escapeHtml(name)}…"
+                   aria-label="Message this agent"></textarea>
+         <button type="submit">Send</button>
+       </form>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>${STYLE}</style>
+</head>
+<body>
+${header}
+<main id="transcript">${body}</main>
+${composer}
+<script nonce="${nonce}">
+const vscode = acquireVsCodeApi();
+const form = document.getElementById("composer");
+if (form) {
+  const box = document.getElementById("message");
+  const send = () => {
+    const text = box.value.trim();
+    if (!text) return;
+    vscode.postMessage({ type: "send", text });
+    box.value = "";
+  };
+  form.addEventListener("submit", (e) => { e.preventDefault(); send(); });
+  // Enter sends, Shift+Enter makes a new line — the shape every chat box has.
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+}
+const main = document.getElementById("transcript");
+if (main) main.scrollTop = main.scrollHeight;
+</script>
+</body>
+</html>`;
+}
+
+//: Themed entirely from VS Code's own variables so the panel belongs to whatever theme is set.
+const STYLE = `
+  body { margin: 0; display: flex; flex-direction: column; height: 100vh;
+         font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
+         color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
+  header { display: flex; align-items: baseline; gap: .5em; padding: .6em .8em;
+           border-bottom: 1px solid var(--vscode-panel-border); }
+  .who { font-weight: 600; }
+  .status { color: var(--vscode-descriptionForeground); font-size: .9em; }
+  #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
+  .hint { color: var(--vscode-descriptionForeground); }
+  .turn { margin: 0 0 .7em; line-height: 1.45; }
+  .turn-thinking { color: var(--vscode-descriptionForeground); font-style: italic; }
+  .turn-tool, .turn-tool_result { font-family: var(--vscode-editor-font-family);
+           background: var(--vscode-textCodeBlock-background); border-radius: 4px; padding: .4em .6em;
+           white-space: pre-wrap; overflow-wrap: anywhere; }
+  .turn-error { color: var(--vscode-errorForeground); }
+  #composer { display: flex; flex-direction: column; gap: .4em; padding: .6em .8em;
+              border-top: 1px solid var(--vscode-panel-border); }
+  textarea { resize: vertical; font: inherit; color: var(--vscode-input-foreground);
+             background: var(--vscode-input-background);
+             border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px;
+             padding: .4em; }
+  button { align-self: flex-end; font: inherit; cursor: pointer; border: none; border-radius: 4px;
+           padding: .35em 1em; color: var(--vscode-button-foreground);
+           background: var(--vscode-button-background); }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+`;

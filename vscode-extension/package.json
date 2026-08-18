@@ -2,7 +2,7 @@
   "name": "interact",
   "displayName": "Interact",
   "description": "Interact — browser + desktop automation via an MCP server",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "preview": true,
   "publisher": "AlanBlanchet",
   "icon": "icon.png",
@@ -214,33 +214,43 @@
         "icon": "$(comment-discussion)"
       },
       {
-        "command": "interact.agents.moveRight",
-        "title": "Move Agents panel to the secondary side bar",
-        "category": "Interact"
+        "command": "interact.agents.show",
+        "title": "Interact: Show Agents Panel"
       },
       {
         "command": "interact.agents.sequence",
         "title": "Show agent sequence",
         "category": "Interact",
         "icon": "$(git-merge)"
+      },
+      {
+        "command": "interact.agents.send",
+        "title": "Send message to agent",
+        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
-          "id": "interactAgents",
+          "id": "interactAgentsSecondary",
           "title": "Interact",
           "icon": "media/agents.svg"
         }
       ]
     },
     "views": {
-      "interactAgents": [
+      "interactAgentsSecondary": [
         {
           "id": "interactAgents.board",
           "name": "Agents",
           "contextualTitle": "Interact agents",
           "icon": "media/agents.svg"
+        },
+        {
+          "id": "interactAgents.chat",
+          "name": "Chat",
+          "type": "webview",
+          "contextualTitle": "Interact agent chat"
         }
       ]
     },
@@ -282,6 +292,11 @@
           "command": "interact.agents.showEvents",
           "when": "view == interactAgents.board && viewItem =~ /interact(Running)?Run/",
           "group": "inline"
+        },
+        {
+          "command": "interact.agents.send",
+          "when": "view == interactAgents.board && viewItem =~ /interact(Running)?Run/",
+          "group": "inline@1"
         }
       ]
     }

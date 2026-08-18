@@ -22,6 +22,8 @@ EventKind = Literal[
     "rate_limit",  # the account's pooled limit spoke; a run can die here
     "done",        # terminal: carries the run's cost and token totals
     "error",       # terminal: it failed
+    "prompt",      # what was asked OF the agent — the other half of the conversation
+    "spawn",       # this agent started a subagent — the team growing a branch
     "other",       # recognised as valid, not specially handled — never silently dropped
 ]
 

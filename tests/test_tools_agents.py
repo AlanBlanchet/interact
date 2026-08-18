@@ -91,3 +91,65 @@ async def test_providers_report_availability_and_the_unverified_caveat():
     out = await srv.agent_providers()
     assert "claude" in out and "codex" in out
     assert "unverified" in out.lower(), "an untested adapter must not look as solid as a tested one"
+
+
+# ── Agents are named after their agent FILE ─────────────────────────────────────────────────
+# "the agents should have proper names right ? The name of the agent file ? Right ?" — the
+# provider could already resolve one (`--agent <name>` reads ~/.claude/agents/<name>.md) and
+# run_agent took the parameter, but the spawn TOOL never exposed it, so no caller could ask for
+# one and every run fell back to being called after its provider.
+
+
+@pytest.mark.asyncio
+async def test_an_agent_can_be_spawned_by_its_definition_name(monkeypatch):
+    seen = {}
+
+    async def _fake_run(provider, task, **kw):
+        seen.update(kw)
+
+        class _H:
+            run_id, name, pid = "r1", kw.get("name") or "?", 1
+
+        return _H()
+
+    monkeypatch.setattr("interact.server.tools_agents.run_agent", _fake_run)
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+    await srv.agent_spawn("review it", agent="code-reviewer")
+    assert seen["agent"] == "code-reviewer", "the definition must reach the CLI"
+
+
+@pytest.mark.asyncio
+async def test_the_run_is_NAMED_after_the_definition_not_the_provider(monkeypatch):
+    """Without this the panel lists three runs all called 'claude' — the complaint itself."""
+    seen = {}
+
+    async def _fake_run(provider, task, **kw):
+        seen.update(kw)
+
+        class _H:
+            run_id, name, pid = "r1", kw.get("name") or "?", 1
+
+        return _H()
+
+    monkeypatch.setattr("interact.server.tools_agents.run_agent", _fake_run)
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+    await srv.agent_spawn("review it", agent="code-reviewer")
+    assert seen["name"] == "code-reviewer"
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_name_still_wins_over_the_definition(monkeypatch):
+    seen = {}
+
+    async def _fake_run(provider, task, **kw):
+        seen.update(kw)
+
+        class _H:
+            run_id, name, pid = "r1", "x", 1
+
+        return _H()
+
+    monkeypatch.setattr("interact.server.tools_agents.run_agent", _fake_run)
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+    await srv.agent_spawn("do it", agent="code-reviewer", name="second-opinion")
+    assert seen["name"] == "second-opinion"

@@ -145,3 +145,27 @@ def test_a_real_xdg_open_cannot_reach_the_host_browser(tmp_path):
     assert "https://example.com/must-not-escape" in log.read_text(), (
         "xdg-open escaped the sandbox and reached the host's browser"
     )
+
+
+def test_a_termination_signal_still_tears_the_sandbox_down():
+    """`atexit` does not fire on SIGTERM, and SIGTERM is how this project restarts its OWN servers
+    (`kill_stale_servers`, `interact doctor --fix`) — so the most common shutdown path used to
+    leak the X server, which the user sees as Xephyr windows piling up."""
+    import pytest
+
+    from interact.server import sandbox
+
+    with pytest.raises(SystemExit) as exit_info:
+        sandbox._close_sandbox_on_signal(15, None)
+    assert exit_info.value.code == 143, "must exit normally so atexit handlers get to run"
+
+
+def test_importing_the_module_does_not_hijack_signals_for_every_cli_command():
+    """The handlers belong to a running SERVER. Installing them at import time would give every
+    `interact ...` command a process-wide SIGTERM handler it never asked for."""
+    import signal as signal_mod
+
+    from interact.server import sandbox
+
+    current = signal_mod.getsignal(signal_mod.SIGTERM)
+    assert current is not sandbox._close_sandbox_on_signal

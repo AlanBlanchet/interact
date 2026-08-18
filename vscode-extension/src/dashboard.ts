@@ -856,13 +856,15 @@ export class DashboardPanel {
       if (!benches.length) continue;
       content.push({ kind: "heading", text: cat.label });
       for (const bench of benches) {
-        // What the benchmark measures + freshness, so the user knows what e.g. ScreenSpot is.
-        const asOf = bench.published?.retrieved ? ` · as of ${bench.published.retrieved}` : "";
+        // What the benchmark measures, and WHEN these scores are from. The date used to live in
+        // the tooltip only, so a months-old leaderboard read as today's truth until you hovered.
+        const { provenanceLabel } = require("./benchmarkTables");
+        const asOf = provenanceLabel(bench.published?.retrieved);
         content.push({
           kind: "row",
           label: bench.name,
-          value: bench.description,
-          tooltip: `${bench.url}${asOf}`,
+          value: `${bench.description} · ${asOf}`,
+          tooltip: `${bench.url} · ${asOf}`,
         });
         const rows: string[][] = [];
         for (const e of (bench.published?.entries ?? []).slice(0, 5)) {

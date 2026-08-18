@@ -4,7 +4,10 @@ backend, plus the idle reaper that closes surfaces the agent abandoned. All the 
 drive them."""
 
 import asyncio
+import atexit
 import logging
+import signal
+from contextlib import suppress
 
 from interact.desktop import DesktopWindow
 from interact.server.core import _sessions, config
@@ -54,6 +57,30 @@ def _close_sandbox() -> None:
             _sandbox.close()
         finally:
             _sandbox = None
+
+
+def _close_sandbox_on_signal(signum, _frame) -> None:
+    """Exit normally on a termination signal so `atexit` runs and the sandbox is torn down.
+
+    `atexit` does NOT fire on SIGTERM, and SIGTERM is exactly how this project restarts its own
+    servers (`server_registry.kill_stale_servers`, `interact doctor --fix`) — so without this the
+    most common shutdown path leaked the X server, which is what the user sees as Xephyr windows
+    piling up on their desktop.
+    """
+    raise SystemExit(128 + signum)
+
+
+def install_teardown_handlers() -> None:
+    """Make the sandbox get torn down however this SERVER stops.
+
+    Called from the server lifespan, not at import: a process-wide signal handler is not something
+    a `interact agents list` should inherit just for importing this module.
+    """
+    atexit.register(_close_sandbox)  # the lifespan's `finally` covers a clean stop; this the rest
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            with suppress(OSError, ValueError):  # not the main thread, or no such signal here
+                signal.signal(sig, _close_sandbox_on_signal)
 
 
 _portable: "object | None" = None  # the macOS/Windows real-desktop backend (mss + pynput)

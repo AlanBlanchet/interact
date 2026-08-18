@@ -22,9 +22,7 @@ from interact import model_catalog as mc
 def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    mc.load_catalog.cache_clear()
     yield
-    mc.load_catalog.cache_clear()
 
 
 _OPENROUTER = {
@@ -95,9 +93,17 @@ def test_no_network_falls_back_and_says_so(monkeypatch):
 def test_a_fresh_cache_is_not_refetched(monkeypatch):
     calls = _serve(monkeypatch)
     mc.load_catalog()
-    mc.load_catalog.cache_clear()  # new process, same cache file
-    mc.load_catalog()
+    mc.load_catalog()  # a second call, as a second process would: same cache file on disk
     assert len(calls) == 1, "a fresh cache must not hit the network again"
+
+
+def test_refresh_bypasses_the_ttl_so_a_long_lived_server_does_not_serve_startup_data(monkeypatch):
+    """`load_catalog` used to be `@lru_cache`d, which made any periodic refresher a silent no-op
+    after its first call — the server would keep serving whatever it read the day it started."""
+    calls = _serve(monkeypatch)
+    mc.load_catalog()
+    mc.load_catalog(refresh=True)
+    assert len(calls) == 2, "refresh must re-fetch even while the cache is still inside its TTL"
 
 
 def test_a_stale_cache_is_served_when_the_network_is_down_but_reports_its_age(monkeypatch):
@@ -107,7 +113,6 @@ def test_a_stale_cache_is_served_when_the_network_is_down_but_reports_its_age(mo
     raw = json.loads(mc.cache_path().read_text())
     raw["fetched_at"] = time.time() - (mc.TTL_SECONDS * 10)
     mc.cache_path().write_text(json.dumps(raw))
-    mc.load_catalog.cache_clear()
     _serve(monkeypatch, fail=True)
 
     cat = mc.load_catalog()

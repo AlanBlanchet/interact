@@ -58,22 +58,38 @@ class AgentRun(BaseModel):
 #: Markers that make a directory the root of a PROJECT. Grouping on the working directory's own
 #: name splits one repo across several groups the moment an agent runs in a subfolder — `src` and
 #: `tests` show up as separate projects. The repo root is the unit people mean by "project".
-_PROJECT_MARKERS = (".git", ".hg", ".svn", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
+#: A REPOSITORY boundary. Checked first and on its own, because a repo is the unit people mean by
+#: "project": this repo's `vscode-extension/` has its own package.json, and treating that as a root
+#: filed one repo's agents under two different projects — the "project detection is folder level"
+#: complaint, still true after the first fix because a manifest counted equally with a VCS root.
+_REPO_MARKERS = (".git", ".hg", ".svn")
+#: A package boundary — only meaningful when nothing above it is a repo at all (a loose tool in a
+#: directory nobody version-controls still deserves its own name rather than falling back to $HOME).
+_PACKAGE_MARKERS = ("pyproject.toml", "package.json", "Cargo.toml", "go.mod")
 
 
 def project_for(cwd: str) -> str:
-    """The project a working directory belongs to: the nearest enclosing repo/package root's
-    name, else the directory's own name. Empty for an unknown directory — a wrong project label
-    is worse than none, because it silently merges unrelated work."""
+    """The project a working directory belongs to — the enclosing REPOSITORY, by name.
+
+    A repo root wins over any package manifest inside it, so a sub-package (this repo's own
+    ``vscode-extension/`` and its package.json) files under the repo rather than as a project of
+    its own. Only when nothing above is version-controlled does a package manifest count, so a
+    loose tool still gets its own name instead of falling back to a home directory.
+
+    Empty for an unknown directory — a wrong project label is worse than none, because it
+    silently merges unrelated work.
+    """
     if not cwd:
         return ""
     try:
         here = Path(cwd).expanduser().resolve()
     except (OSError, RuntimeError):
         return ""
-    for candidate in (here, *here.parents):
-        if any((candidate / marker).exists() for marker in _PROJECT_MARKERS):
-            return candidate.name
+    chain = (here, *here.parents)
+    for markers in (_REPO_MARKERS, _PACKAGE_MARKERS):
+        for candidate in chain:
+            if any((candidate / marker).exists() for marker in markers):
+                return candidate.name
     return here.name
 
 
@@ -401,6 +417,22 @@ def list_runs(*, include_foreign: bool = False) -> list[AgentRun]:
                 last=raw.get("kind") or "",
             ))
     return sorted(runs, key=lambda r: r.started_at)
+
+
+def resolve_run_id(prefix: str) -> str | None:
+    """The full run id a prefix names, or None if it names none or more than one.
+
+    `interact agents list` prints 8-character ids, so an id copied off the tool's own output has
+    to work everywhere an id is taken. Ambiguity resolves to None rather than to a guess: picking
+    one at random would stop or message the WRONG agent.
+    """
+    if not prefix:
+        return None
+    ids = [r.run_id for r in list_runs(include_foreign=True)]
+    if prefix in ids:
+        return prefix  # an exact id is never ambiguous, even if it prefixes another
+    matches = [rid for rid in ids if rid.startswith(prefix)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def children_of(run_id: str) -> list[AgentRun]:

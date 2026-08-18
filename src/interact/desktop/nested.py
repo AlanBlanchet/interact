@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import time
 
+from interact.desktop import orphans
+
 from interact.desktop.backend import (
     DesktopBackend,
     _gl_unrendered,
@@ -67,6 +69,12 @@ class NestedBackend(DesktopBackend):
         # MCP servers fight over it — the loser's Xephyr died seconds in, taking the launched app's
         # windows with it (#33). Picking a free number also sidesteps a stale lock from a crashed
         # prior server.
+        # Sweep away displays whose owner died before claiming one. A crashed or reloaded server
+        # leaves its Xephyr running, reparented to init, sitting on the user's screen with nothing
+        # left that remembers it — and each new server would otherwise step past it to the next
+        # free number, so they accumulate.
+
+        orphans.reap_orphaned_displays()
         last_err: Exception | None = None
         for candidate in self._free_displays(display):
             self.display = f":{candidate}"
@@ -810,7 +818,17 @@ class NestedBackend(DesktopBackend):
             self._audio_module = self._audio_sink = None
         for proc in self._procs:
             self._kill_tree(proc)  # by GROUP: a launcher's children must go too (#92)
-        if self._xserver.poll() is None:
+        # A group kill misses anything that started its OWN session — Chromium does exactly that
+        # for its helper processes, so an Electron app (VS Code) left `--type=renderer/gpu-process`
+        # children running under systemd after every teardown, holding the profile lock. Sweeping
+        # by DISPLAY catches them whatever the app, and cannot touch the user's real session.
+        #
+        # Gated on our X server still RUNNING: a display number is reclaimed the moment its lock
+        # drops, and several interact servers at once is normal, so if ours already died another
+        # server may own this number — and its apps are not ours to kill.
+        owned = self._xserver.poll() is None
+        orphans.sweep_if_owned(self.display, owned=owned)
+        if owned:
             self._xserver.terminate()
             try:
                 self._xserver.wait(timeout=2)

@@ -1,13 +1,20 @@
-"""Command rewriting + sizing for ``launch_app`` — pure helpers with no dependency on the MCP
-server or its runtime state, so they live apart from the 2000-line tool module.
+"""Command rewriting + sizing for ``launch_app``, apart from the MCP tool module.
 
-Two launch rewriters (`_flutter_software_render`, `_browser_isolate`) share the same job shape:
-inspect the command's executable, and if it matches a known class, inject flags + return a note.
-They compose as ``LAUNCH_REWRITES`` — a third rewriter is one more entry, no call-site edit.
+Each rewriter shares one job shape: inspect the command's executable, and if it matches a known
+class, inject flags and return a note explaining what was added and why — the note reaches the
+agent, so a launch that behaves unexpectedly explains itself. ``apply_launch_rewrites`` threads a
+command through all of them.
+
+The isolating rewriters (`_browser_isolate`, `_editor_isolate`) also PREPARE the profile they
+point at — creating it and clearing a lock left by a dead process — so they touch the filesystem
+rather than being pure argv transforms.
 """
 
+import os
 import re
 from pathlib import Path
+
+from interact.desktop.orphans import process_alive
 
 _DEVICE_SIZES = {
     "phone": "412x915",
@@ -105,7 +112,7 @@ def _browser_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
     profile = (
         Path.home() / ".interact" / "out" / "sandbox-profiles" / f"{display.lstrip(':')}-{base}"
     )
-    profile.mkdir(parents=True, exist_ok=True)
+    _prepare_profile(profile)
     exe_i = argv.index(exe)
     if is_chromium:
         inject = [f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"]
@@ -123,6 +130,57 @@ def _browser_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
 # empty with no error — the same escape `_browser_isolate` closes for browsers, and just as
 # invisible. Matched on the executable basename.
 _EDITORS = ("code", "code-insiders", "codium", "vscodium", "cursor", "windsurf")
+
+
+#: Singleton locks an editor profile can carry. `code.lock` holds a pid as text; Chromium's
+#: `SingletonLock` is a symlink named ``<host>-<pid>``.
+_PROFILE_LOCKS = ("code.lock", "SingletonLock")
+
+
+def _lock_owner(lock: Path) -> int | None:
+    """The pid a lock claims, or None when it does not name one we can read."""
+    try:
+        raw = os.readlink(lock) if lock.is_symlink() else lock.read_text()
+    except OSError:
+        return None
+    try:
+        return int(raw.strip().rsplit("-", 1)[-1])
+    except ValueError:
+        return None
+
+
+def _prepare_profile(profile: Path) -> None:
+    """Make a sandbox profile usable before an app is pointed at it.
+
+    Every isolated launch goes through here — browser and editor alike — so a fix to one cannot
+    silently miss the other; clearing the lock only for editors left Chromium, which is what
+    `SingletonLock` is actually named after, still broken.
+    """
+    profile.mkdir(parents=True, exist_ok=True)
+    _clear_stale_locks(profile)
+
+
+def _clear_stale_locks(profile: Path) -> None:
+    """Remove a singleton lock whose owning process is gone.
+
+    The profile is keyed per DISPLAY and OUTLIVES it: tearing the sandbox down takes the editor's
+    processes but leaves the lock file naming a pid that no longer exists. The next launch then
+    finds a lock it cannot join and exits without ever mapping a window — the sandbox just looks
+    empty, and nothing in any log says why.
+
+    Only a lock we can PROVE is dead is removed; an unreadable or unparseable one is left alone.
+    """
+    for name in _PROFILE_LOCKS:
+        lock = profile / name
+        if not (lock.is_symlink() or lock.exists()):
+            continue
+        pid = _lock_owner(lock)
+        if pid is None or process_alive(pid):
+            continue
+        try:
+            lock.unlink()
+        except OSError:
+            pass  # a lock we cannot remove is the editor's problem to report, not ours to crash on
 
 
 def _editor_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
@@ -147,6 +205,7 @@ def _editor_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
     # Same home as the browser profiles, so all sandbox state lives in one place a user
     # can inspect or delete.
     profile = Path.home() / ".interact" / "out" / "sandbox-profiles" / f"editor-{display.lstrip(':')}"
+    _prepare_profile(profile)
     # A fresh profile means FIRST-RUN state: the welcome walkthrough, the workspace-trust modal,
     # release notes, an extension's sign-in prompt. Each is a modal that swallows the very
     # keystrokes an agent sends next, so the editor looks unresponsive for reasons that have

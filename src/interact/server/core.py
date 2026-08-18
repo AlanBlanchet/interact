@@ -177,10 +177,18 @@ def _desktop_label(win) -> str:
 
 @asynccontextmanager
 async def _lifespan(_: FastMCP) -> AsyncIterator[None]:
+    from interact import live_sources
     from interact.server import sandbox
     from interact.server_registry import register_server, unregister_server
 
     reg = register_server()  # record pid+version so `interact doctor` can flag a stale long-lived server
+    sandbox.install_teardown_handlers()  # tear the display down on SIGTERM too, not only a clean exit
+    # Prices and benchmark scores are read straight off disk by the CLI dashboard and the VS Code
+    # extension, so something has to WRITE them; this server is the process alive whenever the
+    # user is working. Off-thread and best-effort: a slow or missing API never delays a tool call.
+    # Opt-out, because it is the only outbound call a server makes on its own initiative.
+    if config.refresh_live_data:
+        live_sources.refresh_in_background()
     reaper = asyncio.create_task(sandbox._idle_session_reaper(config.session_idle_ttl))
     try:
         yield
