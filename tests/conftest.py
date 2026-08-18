@@ -81,3 +81,34 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_integration)
         if no_linux_display and "desktop" in item.keywords:
             item.add_marker(skip_desktop)
+
+# --- shared image fixtures (blankness, capture and VLM-gate tests all build frames) ---
+
+
+def make_png(fill=(0, 0, 0), size=(320, 200), speckle: int = 0) -> bytes:
+    """A flat frame, optionally speckled — what a crashed or unmapped window grabs as."""
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGB", size, fill)
+    for i in range(speckle):
+        img.putpixel((i % size[0], (i * 7) % size[1]), (255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def make_varied_png(size=(320, 200)) -> bytes:
+    """A frame with content in it, for the negative case."""
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGB", size)
+    for x in range(size[0]):
+        for y in range(size[1]):
+            img.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()

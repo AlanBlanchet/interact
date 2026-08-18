@@ -12,7 +12,13 @@ from interact.vision import VLMResult
 
 _DESKTOP_CTX = "Desktop window: Test (800x600)"
 
-_img = PILImage.new("RGB", (1, 1), color="red")
+# A frame with CONTENT in it, not a flat fill: an empty frame is now short-circuited before any
+# model call (#112), so a 1x1 red square would make every fallback test below assert on a chain
+# that never ran.
+_img = PILImage.new("RGB", (8, 8))
+for _x in range(8):
+    for _y in range(8):
+        _img.putpixel((_x, _y), (_x * 32, _y * 32, 0))
 _buf = io.BytesIO()
 _img.save(_buf, format="PNG")
 _PNG = _buf.getvalue()

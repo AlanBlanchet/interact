@@ -48,6 +48,23 @@ async def _vlm(
     model_override: str | None = None,
     extra_images: list[bytes] | None = None,
 ) -> VLMResult:
+    # An empty frame is decided on the pixels, not by a model. Asked to describe a black capture
+    # of a crashed window, the VLM answered the question anyway — returning the agent's own action
+    # text in a full-frame bounding box, as if it had read it on screen (#112).
+    #
+    # Here rather than in _media_response, because that is one caller of three: review_ui and
+    # verify_ui reach the model through this function directly, and describing a frame is their
+    # whole job, so they were the paths most exposed to the bug.
+    if media_type == "image" and (why := blank_frame_reason(data)):
+        return VLMResult(
+            text=(
+                f"ERROR: nothing to analyse — {why}. Not sent to the model. The window may be "
+                "crashed, unmapped, or on a GPU surface the grabber cannot read; re-check with "
+                "return_image=True, or capture target=\"screen\"."
+            ),
+            elapsed=0.0,
+            model="(not called)",
+        )
     item_type = "video" if media_type == "video" else "image"
     routing = media_type or "image"
     # extra_images ride alongside the primary frame in ONE call (e.g. a reference + the build, for a
@@ -159,11 +176,6 @@ async def _media_response(
     try:
         if not query:
             return None
-        # An empty frame is decided on the pixels, not by a model. Asked to describe a black
-        # capture of a crashed window, the VLM answered the question anyway — with the agent's own
-        # action text, in a full-frame bounding box, as if it had read it on screen (#112).
-        if media_type == "image" and (why := blank_frame_reason(data)):
-            return f"ERROR: nothing to analyse — {why}. Not sent to the model. The window may be crashed, unmapped, or on a GPU surface the grabber cannot read; re-check with return_image=True."
         r = await _vlm(data, context, query, media_type, mime, model_override=model_override)
         return _fmt_timing(r)
     finally:

@@ -11,31 +11,12 @@ A blank frame is deterministically detectable, so it never needs a model's opini
 say so, and don't spend a VLM call inventing an answer about an empty image.
 """
 
-import io
-
 import pytest
-from PIL import Image
 
 from interact.vision.measure import blank_frame_reason
 
 
-def _png(fill=(0, 0, 0), size=(320, 200), speckle: int = 0) -> bytes:
-    img = Image.new("RGB", size, fill)
-    for i in range(speckle):
-        img.putpixel((i % size[0], (i * 7) % size[1]), (255, 255, 255))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _varied_png(size=(320, 200)) -> bytes:
-    img = Image.new("RGB", size)
-    for x in range(size[0]):
-        for y in range(size[1]):
-            img.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+from tests.conftest import make_png as _png, make_varied_png as _varied_png
 
 
 def test_an_all_black_capture_is_reported_blank_with_its_colour():
@@ -48,9 +29,18 @@ def test_a_white_capture_is_blank_too():
     assert blank_frame_reason(_png((255, 255, 255)))
 
 
-def test_a_few_stray_pixels_do_not_make_an_empty_frame_look_real():
-    """A dead window often carries a cursor or a 1px border. Still nothing to caption."""
-    assert blank_frame_reason(_png((0, 0, 0), speckle=40))
+def test_the_check_errs_toward_sending_the_frame():
+    """The two mistakes are not symmetric. Wrongly calling a real screen blank REFUSES to look at
+    it — the failure this whole gate exists to avoid, in the other direction. Wrongly calling an
+    empty one real just spends a model call. So visible content at small size wins, even a
+    scattering of it."""
+    assert blank_frame_reason(_png((0, 0, 0), speckle=40)) is None
+
+
+def test_a_full_size_crashed_window_is_caught():
+    """The reported case, at the size it was reported at: an entirely black 1440x900 capture of a
+    window that had crashed."""
+    assert blank_frame_reason(_png((0, 0, 0), size=(1440, 900)))
 
 
 def test_a_real_screenful_is_not_blank():
@@ -58,14 +48,14 @@ def test_a_real_screenful_is_not_blank():
 
 
 @pytest.mark.asyncio
-async def test_a_blank_capture_is_never_sent_to_the_vlm(monkeypatch):
+async def test_a_blank_capture_is_never_sent_to_the_vlm():
+    """No mock needed to prove the model was not called: the conftest fixture fails any real
+    litellm call in a non-integration test, so reaching one would blow up rather than pass."""
     import interact.server as srv
 
-    async def boom(*a, **k):  # spending a call to caption an empty image is the bug
-        raise AssertionError("the VLM was asked to describe a blank frame")
-
-    monkeypatch.setattr(srv.vlm, "_vlm", boom)
-    out = await srv.vlm._media_response(_png((0, 0, 0)), "Desktop window: Code (1920x1080)", "what is on screen?")
+    out = await srv.vlm._media_response(
+        _png((0, 0, 0), size=(400, 300)), "Desktop window: Code (1920x1080)", "what is on screen?"
+    )
     assert out and out.startswith("ERROR:"), out
     assert "blank" in out.lower()
 
@@ -145,3 +135,15 @@ def test_a_blank_crop_is_detected_at_any_size(size):
 @pytest.mark.parametrize("size", [(16, 16), (64, 64), (200, 200)])
 def test_a_small_busy_crop_is_still_not_blank(size):
     assert blank_frame_reason(_varied_png(size=size)) is None
+
+
+@pytest.mark.asyncio
+async def test_the_judgement_tools_are_gated_too():
+    """review_ui and verify_ui reach the model through `_vlm` directly rather than through
+    `_media_response`, and describing a frame is their entire job — so gating only the screenshot
+    path left the two tools most exposed to #112 still exposed."""
+    import interact.server as srv
+
+    r = await srv.vlm._vlm(_png((0, 0, 0), size=(400, 300)), "ctx", "what is wrong here?")
+    assert r.text.startswith("ERROR:") and "blank" in r.text
+    assert r.model == "(not called)", "it must be visible that no model ran"
