@@ -332,3 +332,36 @@ def test_a_message_survives_a_run_that_has_a_raw_vendor_stream():
     kinds = [e.kind for e in reg.read_events("b")]
     assert "message" in kinds, "the message was lost behind the vendor stream"
     assert "started" in kinds, "the vendor's own events must still be there"
+
+
+# ── which PROJECT a run belongs to ───────────────────────────────────────────────────────────
+# Grouping on the working directory's basename splits one repo across several groups the moment
+# an agent runs in a subfolder — "src" and "tests" appear as separate projects. The repo root is
+# the unit people actually mean by "project".
+
+
+def test_the_project_is_the_repo_root_not_the_working_subfolder(tmp_path):
+    repo = tmp_path / "my-repo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "src" / "deep"
+    sub.mkdir(parents=True)
+    assert reg.project_for(str(sub)) == "my-repo"
+
+
+def test_a_directory_outside_any_repo_falls_back_to_its_own_name(tmp_path):
+    plain = tmp_path / "scratch"
+    plain.mkdir()
+    assert reg.project_for(str(plain)) == "scratch"
+
+
+def test_a_registered_run_carries_its_project(tmp_path):
+    repo = tmp_path / "proj"
+    (repo / ".git").mkdir(parents=True)
+    work = repo / "pkg"
+    work.mkdir()
+    _record(run_id="r9", cwd=str(work))
+    assert reg.list_runs()[0].project == "proj"
+
+
+def test_an_empty_cwd_has_no_project_rather_than_a_wrong_one():
+    assert reg.project_for("") == ""

@@ -217,6 +217,12 @@
         "command": "interact.agents.moveRight",
         "title": "Move Agents panel to the secondary side bar",
         "category": "Interact"
+      },
+      {
+        "command": "interact.agents.sequence",
+        "title": "Show agent sequence",
+        "category": "Interact",
+        "icon": "$(git-merge)"
       }
     ],
     "viewsContainers": {
@@ -240,6 +246,11 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "interact.agents.sequence",
+          "when": "view == interactAgents.board",
+          "group": "navigation@0"
+        },
         {
           "command": "interact.agents.groupBy",
           "when": "view == interactAgents.board",

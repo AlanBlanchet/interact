@@ -351,6 +351,10 @@ export async function activate(
     agentsProvider,
     vscode.window.registerTreeDataProvider("interactAgents.board", agentsProvider),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    vscode.commands.registerCommand("interact.agents.sequence", async () => {
+      const { SequencePanel } = await import("./sequencePanel");
+      SequencePanel.show();
+    }),
     // VS Code lets an extension declare a view container only in the activity bar (left). Putting
     // it beside Claude Code / Codex in the SECONDARY side bar is a user move that VS Code then
     // remembers — so this focuses the view and opens the mover rather than leaving you to drag it.

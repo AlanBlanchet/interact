@@ -118,6 +118,43 @@ def _browser_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
     return [*argv[: exe_i + 1], *inject, *argv[exe_i + 1:]], note
 
 
+# Electron editors with a SINGLETON: launching one while an instance is already running hands the
+# request to that instance, which opens a window on the USER'S desktop. The sandbox then sits
+# empty with no error — the same escape `_browser_isolate` closes for browsers, and just as
+# invisible. Matched on the executable basename.
+_EDITORS = ("code", "code-insiders", "codium", "vscodium", "cursor", "windsurf")
+
+
+def _editor_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
+    """Make an Electron editor start a REAL instance inside the sandbox, and render there.
+
+    Three flags, each closing a distinct failure:
+
+    * ``--user-data-dir`` — its own profile, so it cannot join the running instance and open on
+      the host desktop. Keyed per DISPLAY so two sandboxes never fight over one profile lock.
+    * ``--disable-gpu`` — a nested X display has no usable hardware GL, so an Electron app that
+      tries it paints a black window.
+    * ``--no-sandbox`` — Electron's own sandbox needs user namespaces that a nested/containerised
+      session often lacks; without this it refuses to start at all.
+
+    Idempotent, and a no-op for anything that is not one of these editors.
+    """
+    exe = _argv_executable(argv)
+    if not exe or Path(exe).name.lower() not in _EDITORS:
+        return argv, ""
+    if any(a.startswith("--user-data-dir") for a in argv):
+        return argv, ""  # already isolated — never stack a second profile
+    # Same home as the browser profiles, so all sandbox state lives in one place a user
+    # can inspect or delete.
+    profile = Path.home() / ".interact" / "out" / "sandbox-profiles" / f"editor-{display.lstrip(':')}"
+    return (
+        [*argv, f"--user-data-dir={profile}", "--disable-gpu", "--no-sandbox"],
+        f" (isolated the editor into its own profile at {profile}: launching it otherwise hands "
+        "the window to your already-running instance on the real desktop, and the sandbox stays "
+        "empty)",
+    )
+
+
 def apply_launch_rewrites(argv: list[str], display: str) -> tuple[list[str], str]:
     """Run every launch rewriter over a command, threading the argv through each and concatenating
     their notes. The one place launch_app calls to prepare a command for the sandbox."""
@@ -125,5 +162,7 @@ def apply_launch_rewrites(argv: list[str], display: str) -> tuple[list[str], str
     argv, n = _flutter_software_render(argv)
     note += n
     argv, n = _browser_isolate(argv, display)
+    note += n
+    argv, n = _editor_isolate(argv, display)
     note += n
     return argv, note

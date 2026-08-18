@@ -30,7 +30,11 @@ export function formatElapsed(run: AgentRun): string {
 }
 
 export function groupKeyFor(run: AgentRun, by: GroupBy): string {
-  if (by === "project") return run.cwd ? path.basename(run.cwd) : "(no project)";
+  // Prefer the project Python derived (the repo root). Falling back to the directory name keeps
+  // records written before that field existed grouping sensibly rather than vanishing.
+  if (by === "project") {
+    return run.project || (run.cwd ? path.basename(run.cwd) : "(no project)");
+  }
   if (by === "provider") return run.provider || "(unknown)";
   if (by === "model") return run.model || "(default model)";
   return "";

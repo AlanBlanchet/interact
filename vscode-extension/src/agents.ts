@@ -20,6 +20,9 @@ export interface AgentRun {
   name: string;
   task?: string;
   cwd?: string;
+  /** The repo/package this run belongs to, derived by Python from the repo root — NOT the working
+   *  directory's own name, which splits one project across several groups. */
+  project?: string;
   status: "running" | "done" | "failed" | "crashed" | "stopped" | "foreign";
   pid?: number | null;
   /** The model the run was launched with, when the spawner knew it (Python records it). */
@@ -152,4 +155,48 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
     }
   }
   return out.slice(-Math.max(1, limit));
+}
+
+/** One agent addressing another. Written by Python to `<run_id>.messages.jsonl` on BOTH sides,
+ *  so this dedupes — the same exchange appears in the sender's file and the recipient's. */
+export interface AgentMessage {
+  from_run: string;
+  to_run: string;
+  text: string;
+}
+
+/** Every recorded exchange, in file order. These are the edges a sequence view draws; without
+ *  them the panel can only show monologues side by side. */
+export function readAgentMessages(): AgentMessage[] {
+  const dir = agentsDir();
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith(".messages.jsonl"));
+  } catch {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: AgentMessage[] = [];
+  for (const name of names.sort()) {
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(dir, name), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const raw = JSON.parse(line);
+        if (!raw?.from_run || !raw?.to_run) continue;
+        const key = `${raw.from_run} ${raw.to_run} ${raw.text ?? ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ from_run: raw.from_run, to_run: raw.to_run, text: String(raw.text ?? "") });
+      } catch {
+        continue;
+      }
+    }
+  }
+  return out;
 }

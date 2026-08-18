@@ -58,3 +58,14 @@ test("elapsed counts to now while running, and freezes once finished", () => {
     "30s",
   );
 });
+
+test("a run groups by its repo, not the subfolder it happened to run in", () => {
+  // The whole point: an agent working in `<repo>/src` belongs to the repo, not to a "src" group.
+  const inSub = run({ cwd: "/home/alan/dev/interact/src", project: "interact" }) as never;
+  assert.equal(groupKeyFor(inSub, "project"), "interact");
+});
+
+test("a record written before projects existed still groups sensibly", () => {
+  const old = run({ cwd: "/home/alan/dev/interact", project: undefined }) as never;
+  assert.equal(groupKeyFor(old, "project"), "interact");
+});

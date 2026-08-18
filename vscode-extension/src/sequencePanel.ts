@@ -1,0 +1,88 @@
+/** The Agent sequence panel — the team, not one agent.
+ *
+ *  Opens beside your code and follows the registry, so a spawn or a message appears as it
+ *  happens. Read-only and script-free: agent text is untrusted, and a diagram is looked at, not
+ *  driven.
+ */
+import * as fs from "fs";
+import * as vscode from "vscode";
+
+import { readAgentMessages, readAgentRuns } from "./agents";
+import { agentsDir } from "./paths";
+import { buildSequence, renderSequence } from "./sequenceFormat";
+
+export class SequencePanel {
+  private static current: SequencePanel | undefined;
+  private watcher: fs.FSWatcher | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  private constructor(private readonly panel: vscode.WebviewPanel) {
+    this.panel.onDidDispose(() => this.dispose());
+    try {
+      this.watcher = fs.watch(agentsDir(), () => {
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.render(), 300);
+      });
+      this.watcher.on("error", () => {});
+    } catch {
+      /* unwatchable → static diagram */
+    }
+    this.render();
+  }
+
+  static show(): void {
+    if (SequencePanel.current) {
+      SequencePanel.current.panel.reveal(vscode.ViewColumn.Beside);
+      SequencePanel.current.render();
+      return;
+    }
+    SequencePanel.current = new SequencePanel(
+      vscode.window.createWebviewPanel(
+        "interact.sequence",
+        "Agent sequence",
+        vscode.ViewColumn.Beside,
+        { enableScripts: false, retainContextWhenHidden: true },
+      ),
+    );
+  }
+
+  private dispose(): void {
+    this.watcher?.close();
+    if (this.timer) clearTimeout(this.timer);
+    SequencePanel.current = undefined;
+  }
+
+  private render(): void {
+    const runs = readAgentRuns().filter((r) => !r.foreign); // your own editor windows are not team members
+    const seq = buildSequence(runs as never[], readAgentMessages());
+    const live = runs.filter((r) => r.status === "running").length;
+    this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<style>
+ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);
+      background:var(--vscode-editor-background);padding:14px 18px}
+ h1{font-size:14px;margin:0 0 2px}
+ .meta{color:var(--vscode-descriptionForeground);font-size:12px;margin:0 0 14px}
+ .empty{color:var(--vscode-descriptionForeground)}
+ .scroll{overflow:auto;max-width:100%}
+ .lifeline{stroke:var(--vscode-panel-border);stroke-width:1;stroke-dasharray:3 4}
+ .lane-name{fill:var(--vscode-foreground);font-size:12px;font-weight:600}
+ .lane-meta{fill:var(--vscode-descriptionForeground);font-size:10px}
+ .arrow{stroke-width:1.4}
+ .arrow.message{stroke:var(--vscode-charts-blue)}
+ .arrow.spawn{stroke:var(--vscode-charts-purple);stroke-dasharray:4 3}
+ .head{fill:none;stroke-width:1.4}
+ .head.message{stroke:var(--vscode-charts-blue)}
+ .head.spawn{stroke:var(--vscode-charts-purple)}
+ .arrow-label{font-size:10px}
+ .arrow-label.message{fill:var(--vscode-charts-blue)}
+ .arrow-label.spawn{fill:var(--vscode-charts-purple)}
+ .key{margin-top:14px;font-size:11px;color:var(--vscode-descriptionForeground)}
+</style></head><body>
+<h1>Agent sequence</h1>
+<p class="meta">${seq.lanes.length} agent${seq.lanes.length === 1 ? "" : "s"} · ${live} running · time flows downward</p>
+<div class="scroll">${renderSequence(seq)}</div>
+<p class="key">— solid = a message · dashed = a spawn</p>
+</body></html>`;
+  }
+}

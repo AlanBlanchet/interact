@@ -35,6 +35,9 @@ class AgentRun(BaseModel):
     name: str
     task: str = ""
     cwd: str = ""
+    #: The repo/package the run belongs to — the grouping unit, derived from `cwd` at registration
+    #: so it survives even if the directory is later moved or deleted.
+    project: str = ""
     pid: int | None = None
     model: str | None = None
     parent_run_id: str | None = None
@@ -50,6 +53,28 @@ class AgentRun(BaseModel):
     #: paid for the plan. Callers must label it as equivalent value, never as fresh spend.
     cost_usd: float | None = None
     last: str = ""
+
+
+#: Markers that make a directory the root of a PROJECT. Grouping on the working directory's own
+#: name splits one repo across several groups the moment an agent runs in a subfolder — `src` and
+#: `tests` show up as separate projects. The repo root is the unit people mean by "project".
+_PROJECT_MARKERS = (".git", ".hg", ".svn", "pyproject.toml", "package.json", "Cargo.toml", "go.mod")
+
+
+def project_for(cwd: str) -> str:
+    """The project a working directory belongs to: the nearest enclosing repo/package root's
+    name, else the directory's own name. Empty for an unknown directory — a wrong project label
+    is worse than none, because it silently merges unrelated work."""
+    if not cwd:
+        return ""
+    try:
+        here = Path(cwd).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return ""
+    for candidate in (here, *here.parents):
+        if any((candidate / marker).exists() for marker in _PROJECT_MARKERS):
+            return candidate.name
+    return here.name
 
 
 def agents_dir() -> Path:
@@ -95,7 +120,8 @@ def _terminate(pid: int) -> bool:
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None) -> AgentRun:
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
-                   model=model, parent_run_id=parent_run_id, started_at=time.time())
+                   project=project_for(cwd), model=model, parent_run_id=parent_run_id,
+                   started_at=time.time())
     d = agents_dir()
     d.mkdir(parents=True, exist_ok=True)
     _record_path(run_id).write_text(run.model_dump_json())
@@ -297,6 +323,8 @@ def _status_for(run: AgentRun) -> RunStatus:
 
 
 def _derive(run: AgentRun) -> AgentRun:
+    if not run.project and run.cwd:
+        run.project = project_for(run.cwd)
     """Re-check liveness, and SELF-HEAL the record from the child's own stream.
 
     The panel reads these records directly and cannot parse a vendor dialect, so cost and the

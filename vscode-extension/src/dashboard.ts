@@ -23,6 +23,7 @@ import {
   COMMON_CURRENCIES,
 } from "./currency";
 import { readAgentRuns, summarise, withDepth } from "./agents";
+import { describeAge as describeBoardAge, readLeaderboard } from "./leaderboard";
 import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Catalog } from "./catalog";
 import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import {
@@ -823,6 +824,31 @@ export class DashboardPanel {
 
   private benchmarksCell(): CellUpdate {
     const content: CellContent[] = [];
+    // The live leaderboard first: the bundled file describes the benchmarks, but its SCORES age
+    // immediately, and a stale ranking presented as current is the defect this fixes.
+    const board = readLeaderboard();
+    if (board) {
+      content.push({ kind: "heading", text: "Model intelligence — Artificial Analysis" });
+      content.push({
+        kind: "row",
+        label: board.isLive ? "live" : "stale",
+        value: `${board.scores.length} models · ${describeBoardAge(board.ageSeconds)}`,
+        dot: board.isLive ? "ok" : "missing",
+        tooltip: "Fetched with your own ARTIFICIAL_ANALYSIS_API_KEY. Their index, their methodology.",
+      });
+      content.push({
+        kind: "table",
+        headers: ["Model", "Creator", "Index"],
+        rows: board.scores.slice(0, 12).map((s) => [s.name, s.creator, s.intelligence.toFixed(1)]),
+      });
+    } else {
+      content.push({
+        kind: "row",
+        label: "Model intelligence",
+        value: "set ARTIFICIAL_ANALYSIS_API_KEY to fetch live scores (not redistributable, so they cannot ship)",
+        dot: "missing",
+      });
+    }
     for (const cat of BENCHMARK_CATEGORIES) {
       const benches = this.benchmarksData.benchmarks.filter(
         (b) => b.category === cat.id,
