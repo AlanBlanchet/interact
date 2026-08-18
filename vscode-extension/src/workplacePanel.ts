@@ -26,6 +26,13 @@ export class WorkplacePanel {
     private readonly log: vscode.OutputChannel,
   ) {
     this.panel.onDidDispose(() => this.dispose());
+    // A click in the room aims the side-bar Chat at that agent: the workplace is where you SEE
+    // the team, the chat is where you talk to one of them, and this is the seam between.
+    this.panel.webview.onDidReceiveMessage((msg) => {
+      if (msg?.type === "focus" && typeof msg.runId === "string") {
+        void vscode.commands.executeCommand("interact.agents.chat", msg.runId);
+      }
+    });
     this.watch();
     this.render();
   }

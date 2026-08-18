@@ -27,23 +27,42 @@ const ROOMS: [ZoneId, RegExp][] = [
   ["library", /(Skill|librarian|prompt)/i],
 ];
 
+/** A worker's HOME room — where they sit when the work in hand does not put them somewhere else.
+ *  A researcher belongs at the web, a librarian in the library; parking every thinking agent in
+ *  one generic box loses exactly the thing that makes a team legible. */
+const HOME: [ZoneId, RegExp][] = [
+  ["web", /^(researcher|scraper|market-analyst|source-validator)$/],
+  ["library", /^(librarian|teacher|advocate)$/],
+  ["studio", /^(visual-critic|artist|ux-critic|audio-critic)$/],
+  ["lab", /^(tester|perf-critic|optimizer|session-auditor)$/],
+  ["code", /^(code-reviewer|generalizer|threat-modeler)$/],
+  ["data", /^(fiscal-auditor|business-strategist)$/],
+];
+
 /**
  * Where a worker stands.
  *
- * Status wins over activity: a finished worker is back at the entrance whatever it was last
- * holding, and a session interact did not start is never shown mid-task — watching it work would
- * claim a supervision we do not have.
+ * Three things decide it, in order. Status first: a finished worker is back at the entrance
+ * whatever it was last holding, and a session interact did not start is never shown mid-task —
+ * watching it work would claim a supervision we do not have. Then the WORK in hand, because a
+ * position has to be earned: a librarian reading source is in the code, not at their desk.
+ * Only then their ROLE, so a thinking agent sits somewhere that means something.
  */
-export function zoneOf(step: Step | undefined, status: string): ZoneId {
+export function zoneOf(step: Step | undefined, status: string, agent?: string | null): ZoneId {
   if (status === "foreign") return "idle";
   if (status !== "running") return "entry";
-  if (!step) return "idle";
-  if (step.kind === "spawn") return "managers";
-  if (step.kind === "tool" && step.tool) {
+  if (step?.kind === "spawn") return "managers";
+  if (step?.kind === "tool" && step.tool) {
     for (const [zone, pattern] of ROOMS) {
       if (pattern.test(step.tool)) return zone;
     }
   }
+  if (agent) {
+    for (const [zone, pattern] of HOME) {
+      if (pattern.test(agent)) return zone;
+    }
+  }
+  if (!step) return "idle";
   // Thinking, speaking, or a tool nobody has taught us: still at their desk, not thrown out.
   return "managers";
 }
@@ -124,7 +143,7 @@ export function buildTeam(
       name: run.name || run.run_id.slice(0, 8),
       agent: run.agent ?? null,
       status: (run.status as Worker["status"]) ?? "done",
-      zone: zoneOf(step, run.status),
+      zone: zoneOf(step, run.status, run.agent ?? null),
       activity: activityOf(step),
       parent_run_id: run.parent_run_id ?? null,
       project: run.project ?? "",

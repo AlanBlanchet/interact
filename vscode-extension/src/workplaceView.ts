@@ -26,7 +26,7 @@ function worker(w: Worker, all: Worker[]): string {
   const nested = reports.length
     ? `<div class="reports">${reports.map((r) => worker(r, all)).join("")}</div>`
     : "";
-  return `<div class="worker ${esc(w.status)}">
+  return `<div class="worker ${esc(w.status)}" data-run-id="${esc(w.run_id)}">
     <div class="who">${esc(w.name)}</div>
     <div class="doing">${esc(w.activity)}</div>
     ${nested}
@@ -56,6 +56,19 @@ function plainRoom(state: TeamState, nonce: string): string {
   .doing { color: var(--vscode-descriptionForeground); font-size: .9em; }
   .reports { margin-left: .8rem; }
   .empty { color: var(--vscode-descriptionForeground); margin: 0; }
+  .worker { cursor: pointer; }
+  .worker:hover { background: var(--vscode-list-hoverBackground); }
 </style></head>
-<body><div class="rooms">${rooms}</div></body></html>`;
+<body><div class="rooms">${rooms}</div>
+<script nonce="${nonce}">
+const vscode = acquireVsCodeApi();
+// Clicking a worker aims the side-bar Chat at them — what makes the workplace a control surface
+// rather than a picture, and what ties the two panels together. Delegated, so it survives every
+// re-render and works however the sprite is nested.
+document.addEventListener("click", (event) => {
+  const el = event.target && event.target.closest ? event.target.closest("[data-run-id]") : null;
+  if (el) vscode.postMessage({ type: "focus", runId: el.getAttribute("data-run-id") });
+});
+</script>
+</body></html>`;
 }

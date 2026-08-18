@@ -118,3 +118,33 @@ test("idle time is measured, so the view can fade whoever stopped", () => {
 test("an empty registry is an empty room, not a crash", () => {
   assert.deepEqual(buildTeam([], () => undefined, 1).workers, []);
 });
+
+// "researchers accessing the web... the librarian... etc" — a worker has a HOME room from who
+// they are, not only from the tool they last touched. A thinking librarian belongs in the
+// library, not parked in a generic managers box.
+
+test("an agent's role gives it a home room when the work does not name one", () => {
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "librarian"), "library");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "researcher"), "web");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "visual-critic"), "studio");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "artist"), "studio");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "tester"), "lab");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "perf-critic"), "lab");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "optimizer"), "lab");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "code-reviewer"), "code");
+});
+
+test("the work in hand still wins over the role — that is the point of watching", () => {
+  // A librarian reading source is IN the code, not at their desk. Position must be earned.
+  assert.equal(zoneOf({ kind: "tool", tool: "Read" }, "running", "librarian"), "code");
+  assert.equal(zoneOf({ kind: "tool", tool: "WebFetch" }, "running", "tester"), "web");
+});
+
+test("an unknown role falls back to the managers' room, not to nowhere", () => {
+  assert.equal(zoneOf({ kind: "thinking" }, "running", "some-new-agent"), "managers");
+  assert.equal(zoneOf({ kind: "thinking" }, "running", null), "managers");
+});
+
+test("a finished worker is at the entrance whatever their role", () => {
+  assert.equal(zoneOf({ kind: "thinking" }, "done", "librarian"), "entry");
+});
