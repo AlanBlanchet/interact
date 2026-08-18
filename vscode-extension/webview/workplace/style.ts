@@ -13,6 +13,8 @@
  *  rooms is an EVENT, and an event that lands on the ambient beat is invisible.
  */
 
+import { STAMP_CSS } from "./status";
+
 export const STYLE = String.raw`
 *, *::before, *::after { box-sizing: border-box; }
 /* A worker is a <figure> and a nameplate a <figcaption> — the right elements, and both carry a
@@ -88,6 +90,20 @@ body {
   --wp-bubble-bg: color-mix(in srgb, var(--wp-fg) 90%, var(--wp-bg));
   --wp-bubble-fg: var(--wp-bg);
 
+  /* How the shared stamp is MOUNTED in a room. The device itself — the rule, the tilt, the
+     tracking, the four colour treatments — comes from status.ts and is byte-identical on the
+     desk; what a room supplies is only the physics. A placard here stands over someone's head
+     against whatever the room is painted, so unlike ink on paper it has to be OPAQUE (the same
+     argument that made the nameplate opaque: a label whose background is decided by the prop
+     behind it has an uncomputable contrast) and it throws the hard pixel shadow every other sign
+     in this building throws. Its ink is the editor foreground, not --wp-ink: --wp-ink is a
+     near-black outline colour and would vanish into a dark room. */
+  --stamp-ink: var(--wp-fg);
+  --stamp-quiet: var(--wp-fg);
+  --stamp-mix: 52%;
+  --stamp-bg: var(--wp-bg);
+  --stamp-shadow: 2px 2px 0 0 var(--wp-ink);
+
   --w-lead: 122px;
   --w-rep: 104px;
   --w-mini: 92px;
@@ -105,6 +121,10 @@ body.vscode-light .wp,
 body.vscode-high-contrast-light .wp {
   --wp-ink: #2c2438;
   --wp-tint: #2f2a3a;
+  /* A light theme's chart green is mid-valued against near-white, so the same 52% that clears the
+     floor on a dark room leaves it too pale here. Re-derived, never copied across — the desk
+     learned the same lesson at the same number. */
+  --stamp-mix: 40%;
   /* An empty room must be the QUIETEST thing on screen, which on a light theme means greyer than
      its neighbours — not whiter. Lighting it up was exactly backwards: the dark room reading was
      inverted and "where is everyone" answered wrong. */
@@ -319,6 +339,14 @@ body.vscode-high-contrast-light .wp {
   max-width: var(--w-rep);
   min-width: 0;
   cursor: pointer;
+}
+/* The idle fade is on the SPRITE, not on the person's whole card — the third instance of one
+   mistake on this surface, and the one that hid behind the other two. An ancestor opacity here
+   composited the nameplate AND (once the building started printing words) the status stamp: a
+   fifteen-minute-old ghost's NOT OURS measured 4.69 against the desk's 12.36 for the identical
+   stamp, which is the map whispering exactly the fact the desk shouts. The reading was never
+   about the label anyway. Faded and still = idle is a statement about the PERSON. */
+.wp-worker .wp-stage {
   filter: saturate(calc(1 - .72 * var(--idle))) opacity(calc(1 - .3 * var(--idle)));
 }
 .wp-worker[data-depth="0"] { flex: 0 0 var(--w-lead); max-width: var(--w-lead); }
@@ -334,9 +362,21 @@ body.vscode-high-contrast-light .wp {
    is read — see plateContrast.test.ts, which holds the whole stack to a floor with headroom.
    Finished is already said twice over, by the faded sprite and by the dim status mark; the name
    does not have to whisper it a third time. */
-.wp-worker[data-status="done"] .wp-stage { filter: grayscale(.6) opacity(.58); }
-.wp-worker[data-status="foreign"] { filter: opacity(.72); }
-.wp-worker:hover { filter: none; }
+/* Two fades on one element, so the done grey has to carry the idle terms too rather than be
+   overwritten by them. */
+.wp-worker[data-status="done"] .wp-stage {
+  filter: grayscale(.6) opacity(calc(.58 * (1 - .3 * var(--idle))));
+}
+/* Scoped to the sprite for the same reason the done fade is, and it took a stamp to make it
+   visible: an opacity on the WHOLE worker composites the nameplate and now the NOT OURS stamp
+   along with the person, which is the third time this surface has said "quieter" with a filter
+   over something that has words on it. A ghost is already flat, one-toned and faceless — the
+   sprite carries "not ours" without needing to be dimmed on top, and the label it stands under
+   has to be read like every other. */
+.wp-worker[data-status="foreign"] .wp-stage {
+  filter: opacity(calc(.72 * (1 - .3 * var(--idle))));
+}
+.wp-worker:hover .wp-stage { filter: none; }
 .wp-worker:focus-visible { outline: 1px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 2px; }
 /* A worker carries role="button" and opens its conversation, and the pointer said otherwise.
    No screenshot can show this — the cursor property puts nothing in the frame — so it survived
@@ -411,13 +451,24 @@ body.vscode-high-contrast-light .wp {
   animation: wp-snooze calc(var(--beat) * 1.5) ease-out infinite;
 }
 
-.wp-beacon {
-  position: absolute;
-  top: -4px; left: 50%;
-  margin-left: -9px;
-  --mark: var(--wp-bad);
-  animation: wp-beacon calc(var(--beat) / 3) steps(1, end) infinite;
+/* The placard a worker is standing under. In flow above the head rather than absolutely placed,
+   so a stamped worker grows UPWARD and every pair of boots in the room stays on the same floor
+   line — the one thing a diorama cannot trade away.
+
+   It is allowed to overhang its worker: a stamp that had to fit inside a 92px column would have
+   to drop either its shape or its word, and both are the vocabulary. Physical stamps overhang. */
+.wp-hang {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 5px;
+  pointer-events: none;
 }
+${STAMP_CSS}
+/* The key at the foot of the view prints the STAMPS themselves, so what is explained there is the
+   identical element printed over a person's head and across a work order on the desk. */
+.wp-key { display: inline-flex; align-items: center; gap: 5px; }
 
 /* The nameplate. Status is a SHAPE first — a disc, a tick, a wedge, an open square — because a
    red dot and a green dot are the same dot to a lot of people, and at this size to everyone. */
@@ -638,7 +689,6 @@ body.vscode-high-contrast-light .wp {
 @keyframes wp-fb { 0%, 49.99% { opacity: 0 } 50%, 100% { opacity: 1 } }
 @keyframes wp-bob { 0%, 49.99% { transform: translateY(0) } 50%, 100% { transform: translateY(-1px) } }
 @keyframes wp-breathe { 0%, 100% { filter: brightness(1) } 50% { filter: brightness(1.11) } }
-@keyframes wp-beacon { 0%, 49.99% { opacity: 1 } 50%, 100% { opacity: .15 } }
 @keyframes wp-snooze {
   0% { transform: translate(0, 0) scale(1); opacity: 0 }
   22% { opacity: .95 }

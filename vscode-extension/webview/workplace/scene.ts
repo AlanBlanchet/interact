@@ -19,7 +19,6 @@ import {
   DISC,
   GHOST_PAL,
   HORIZON,
-  MARKS,
   NOTE,
   POSE_MOVE,
   POSE_REST,
@@ -29,6 +28,7 @@ import {
   STAIRS,
 } from "./art";
 import { faceOf, idleAmount, shortDuration } from "./palette";
+import { STAMPS, WORDS, isHeld, markOf, stampFor, stampHtml } from "./status";
 import {
   FLOORS,
   OUTDOOR,
@@ -43,8 +43,6 @@ import type { Member, Pod, Post, RoomPlan } from "./layout";
 import { clip, esc } from "./esc";
 
 const LABELS = new Map<ZoneId, string>(ZONES.map((z) => [z.id, z.label]));
-/** Past two minutes of nothing, a worker is not working — and stops moving. */
-const STALL_SECONDS = 120;
 /** How big a person is drawn. Seniority as size means a chain of three reads at a glance and costs
  *  no indentation, no brackets and no lines between boxes. */
 const SCALE = [4, 3, 2, 2];
@@ -56,11 +54,6 @@ const AWAY_SHOWN = 3;
 interface Ctx {
   pods: Pod[];
   mail: Map<string, { n: number; who: string[] }>;
-}
-
-function markOf(status: string): string {
-  const piece = MARKS[status] ?? MARKS.foreign;
-  return draw(piece.grid, piece.pal, { scale: 2, outline: false });
 }
 
 function spriteOf(w: Worker, scale: number): string {
@@ -75,7 +68,11 @@ function spriteOf(w: Worker, scale: number): string {
  *  sprite, the name or the speech bubble resolves to exactly one worker. */
 function worker(w: Worker, depth: number, ctx: Ctx, leadName?: string): string {
   const idle = idleAmount(w.idle_seconds);
-  const stalled = w.idle_seconds >= STALL_SECONDS ? 1 : 0;
+  // Only work can stall. A completed run's idle clock is just how long ago it ended, and a session
+  // interact did not start has no clock we own at all — the building used to snooze both of them,
+  // which is a finished worker wearing z’s, and it is also the desk saying the opposite about
+  // the same person. One rule now, in status.ts, for both surfaces.
+  const stalled = isHeld(w) ? 1 : 0;
   const scale = SCALE[Math.min(depth, SCALE.length - 1)];
   const speaks = w.status === "running" || w.status === "error";
   const bubble =
@@ -83,10 +80,13 @@ function worker(w: Worker, depth: number, ctx: Ctx, leadName?: string): string {
   const snooze = stalled
     ? `<span class="wp-snooze">${draw(SNOOZE.grid, SNOOZE.pal, { scale: 2, outline: false })}</span>`
     : "";
-  const beacon =
-    w.status === "error"
-      ? `<span class="wp-beacon">${draw(MARKS.error.grid, MARKS.error.pal, { scale: 3 })}</span>`
-      : "";
+  // The word, said the way the desk says it. This replaced a small blinking wedge over the head:
+  // the wedge was the building's whole answer to "this agent died", and it spelled nothing, so the
+  // one state that most wants a person was also the one the desk shouted and the map whispered.
+  // A placard, mounted like every other sign in this building — opaque, hard pixel shadow — and
+  // carrying the identical stamp the work order carries.
+  const st = stampFor(w);
+  const stamp = st ? `<div class="wp-hang">${stampHtml(st)}</div>` : "";
   // Post already exchanged, marked quietly. The arrival is animated, but a cold load has no
   // arrival to show and the conversation still happened.
   const mail = ctx.mail.get(w.run_id);
@@ -111,7 +111,12 @@ function worker(w: Worker, depth: number, ctx: Ctx, leadName?: string): string {
     `style="--idle:${idle};${faceOf(w.run_id)}" tabindex="0" role="button" title="${esc(label)}" ` +
     `aria-label="${esc(label)}">` +
     bubble +
-    `<div class="wp-stage">${spriteOf(w, scale)}<span class="wp-shadow"></span>${note}${snooze}${beacon}</div>` +
+    // Under the speech, directly over the head. Above the bubble it drifted to the top of the room
+    // — on a stuck worker with a long activity line the ERROR ended up level with the room plaque,
+    // and a reader had to trace down two elements to learn whose it was. The desk prints it AT the
+    // name; the building has to put it AT the person.
+    stamp +
+    `<div class="wp-stage">${spriteOf(w, scale)}<span class="wp-shadow"></span>${note}${snooze}</div>` +
     `<figcaption class="wp-plate">${markOf(w.status)}` +
     `<span class="wp-name">${esc(w.name)}</span>${since}</figcaption>` +
     under +
@@ -205,11 +210,15 @@ function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): strin
     `<span class="wp-sign"><span class="wp-sign-name">The team</span>` +
     `<span class="wp-sign-sub">${projects}</span></span>` +
     `<span class="wp-tally">` +
-    chip("running", t.running, "working", "var(--wp-ok)") +
-    chip("error", t.error, "stuck", "var(--wp-bad)") +
-    chip("done", t.done, "finished", "var(--wp-dim)") +
-    chip("foreign", t.foreign, "not ours", "var(--wp-dim)") +
-    (t.idle ? `<span class="wp-chip"><b>${t.idle}</b> idle 2m+</span>` : "") +
+    // The words come from the shared lexicon, not from this file. The board by the door used to
+    // carry its own three — a different one for each of the states the desk already stamped — so
+    // one set of facts had two vocabularies, which is the same defect as two colour allocators,
+    // only in prose. statusVocabulary.test.ts fails if a literal ever reappears in this file.
+    chip("running", t.running, WORDS.running, "var(--wp-ok)") +
+    chip("error", t.error, WORDS.error, "var(--wp-bad)") +
+    chip("done", t.done, WORDS.done, "var(--wp-dim)") +
+    chip("foreign", t.foreign, WORDS.foreign, "var(--wp-dim)") +
+    chip("held", t.idle, WORDS.held, "var(--wp-dim)") +
     (mail ? `<span class="wp-chip">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b> messages</span>` : "") +
     `<span class="wp-chip">spend <b>${money(t.cost)}</b></span>` +
     `</span>` +
@@ -218,16 +227,18 @@ function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): strin
   );
 }
 
+/** The key. It shows the STAMPS, not a private set of marks with words beside them: whatever is
+ *  printed here is the identical element printed over a person's head and across a work order on
+ *  the desk, so the legend is a key to ONE vocabulary rather than a translation table between two.
+ */
 function legend(): string {
-  const item = (status: string, word: string, colour: string) =>
-    `<span style="--mark:${colour}">${markOf(status)} ${word}</span>`;
   return (
     `<footer class="wp-legend">` +
-    item("running", "working", "var(--wp-ok)") +
-    item("error", "stuck", "var(--wp-bad)") +
-    item("done", "finished", "var(--wp-dim)") +
-    item("foreign", "not ours", "var(--wp-dim)") +
-    `<span>faded &amp; still = idle</span>` +
+    `<span class="wp-key" style="--mark:var(--wp-ok)">${markOf("running")} ${WORDS.running} — nothing stamped</span>` +
+    `<span class="wp-key">${stampHtml(STAMPS.error)}</span>` +
+    `<span class="wp-key">${stampHtml(STAMPS.held)}</span>` +
+    `<span class="wp-key">${stampHtml(STAMPS.done)}</span>` +
+    `<span class="wp-key">${stampHtml(STAMPS.foreign)}</span>` +
     `<span>${draw(NOTE.grid, NOTE.pal, { scale: 2 })} carried between two agents who spoke</span>` +
     `<span>one platform = one lead and their reports; the colour follows them across rooms</span>` +
     `</footer>`

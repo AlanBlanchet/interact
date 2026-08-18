@@ -379,6 +379,16 @@ export const MARKS: Record<string, Piece> = {
     grid: ["MMMMMM", "M....M", "M....M", "M....M", "M....M", "MMMMMM"],
     pal: { M: "var(--mark)" },
   },
+  // held — an hourglass: running, but nothing has happened for a long time.
+  //
+  // It needed its own shape. The side bar used to stamp HELD with the open square, which is the
+  // mark for NOT OURS — two different facts wearing one silhouette in a set whose entire premise
+  // is that shape carries the status before colour does. An hourglass is also the only mark in
+  // the set that says "time is the problem", which is exactly what held means.
+  held: {
+    grid: ["MMMMMM", ".M..M.", "..MM..", "..MM..", ".M..M.", "MMMMMM"],
+    pal: { M: "var(--mark)" },
+  },
 };
 
 /** Weather, and the rest of the world seen from the yard. Both exist so that "outside" reads as

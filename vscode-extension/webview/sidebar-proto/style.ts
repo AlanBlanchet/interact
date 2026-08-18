@@ -22,6 +22,8 @@
  *  is free to follow the editor.
  */
 
+import { STAMP_CSS } from "../workplace/status";
+
 export const STYLE = String.raw`
 *, *::before, *::after { box-sizing: border-box; }
 /* Not a reset — the two UA margins that actually bite. <figure>/<p>/<h3> all carry one, and a
@@ -141,7 +143,13 @@ body {
   /* Chart hues are tuned to sit on the editor background, not on paper: DONE and ERROR measured
      3.6:1 peak against the slip. Mixed toward the ink, which flips with the theme, so the same
      ratio brightens on dark stock and darkens on light while the hue still reads. */
-  --sp-stamp-mix: 52%;
+  /* The shared stamp, mounted on PAPER. The device comes from workplace/status.ts and is the same
+     element the building prints over a worker's head; what this panel supplies is only the
+     physics of ink pressed into a sheet — no plate behind it, no shadow under it, and the mix
+     partner is the paper's own ink rather than the editor foreground. */
+  --stamp-ink: var(--sp-ink);
+  --stamp-quiet: var(--sp-dim);
+  --stamp-mix: 52%;
   --sp-grain:
     repeating-linear-gradient(45deg, var(--sp-tooth) 0 1px, transparent 1px 5px),
     repeating-linear-gradient(-45deg, var(--sp-laid) 0 1px, transparent 1px 7px),
@@ -217,7 +225,7 @@ body {
   --sp-perf: color-mix(in srgb, var(--wp-ink) 42%, transparent);
   --sp-grain-lift: color-mix(in srgb, #ffffff 6%, transparent);
   --sp-proj-mix: 52%;
-  --sp-stamp-mix: 40%;
+  --stamp-mix: 40%;
 }
 
 /* ── the spike ───────────────────────────────────────────────────────────────────────────────
@@ -408,7 +416,11 @@ body {
      the measured number as much as the colour does. */
   font-size: 11px;
   font-weight: 600;
-  color: var(--sp-dim);
+  /* Not plain --sp-dim. Measured over glyph COVERAGE rather than at the glyph core, this line came
+     in at 4.01:1 on cream stock against an 8.35 nominal — a two-thirds loss to anti-aliasing, and
+     under the floor. Pulled a little toward the ink; it stays clearly the quieter of the two lines
+     because the name above it is at full ink and this is not. */
+  color: color-mix(in srgb, var(--sp-dim) 55%, var(--sp-ink));
   letter-spacing: .02em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -454,7 +466,7 @@ body {
 .sp-slip[data-fold="slim"] .sp-said { display: none; }
 .sp-slip[data-fold="slim"] .sp-foot { flex: 0 0 auto; margin-top: 0; }
 .sp-slip[data-fold="slim"] .sp-from { display: none; }
-.sp-slip[data-fold="slim"] .sp-stamp { transform: rotate(-4deg); }
+.sp-slip[data-fold="slim"] .wp-stamp { transform: rotate(-4deg); }
 
 .sp-slip[data-fold="slim"]:hover .sp-body,
 .sp-slip[data-fold="slim"]:focus-visible .sp-body { display: block; }
@@ -467,47 +479,16 @@ body {
 .sp-slip[data-fold="slim"]:hover .sp-foot,
 .sp-slip[data-fold="slim"]:focus-visible .sp-foot { margin-top: 3px; }
 
-/* ── the marks ─────────────────────────────────────────────────────────────────────────────
-   Status by SHAPE first — a filled disc, a tick, a pointed wedge, an open square — and by colour
-   second, never colour alone. Running work is UNSTAMPED: an open job with nothing stamped on it is
-   the oldest "in progress" signal there is, and it saves the loud marks for what wants looking at.
-*/
+/* ── the marks ────────────────────────────────────────────────────────────────
+   Status is read by SHAPE first — a filled disc, a tick, a pointed wedge, an open square, an
+   hourglass — and by colour second, never colour alone. Running work is UNSTAMPED: an open job
+   with nothing stamped on it is the oldest "in progress" signal there is, and it saves the loud
+   marks for what wants looking at.
 
-.sp-stamp {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 4px 2px;
-  border: 2px solid currentColor;
-  color: var(--stamp, var(--sp-dim));
-  --mark: currentColor;
-  /* 10px, not 9: a rotated 2px outline is mostly anti-aliased edge, so the stamp measured weaker
-     than the text it sits beside even at the same colour. */
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: .11em;
-  text-transform: uppercase;
-  transform: rotate(-7deg);
-}
-.sp-stamp svg { display: block; }
-.sp-stamp[data-kind="done"] { --stamp: color-mix(in srgb, var(--wp-ok) var(--sp-stamp-mix), var(--sp-ink)); }
-/* ERROR is the one stamp where misreading costs something, and red on this stock cannot reach the
-   floor while still being red — measured 3.3-3.6:1 in dark by two independent methods. So it stops
-   being an outline and becomes a filled plate: the ink is the paper's own near-black, which has
-   plenty of contrast against the red, and a solid red label reads as more urgent than a red
-   outline anyway. DONE stays an outline; it clears the floor as one. */
-.sp-stamp[data-kind="error"] {
-  /* The fill is mixed DOWN toward a near-black red rather than used as the theme gives it: the
-     editor's error colour is a mid red on dark and a strong red on light, so neither the ink nor
-     the paper contrasts with it in both themes at once. A deep red is deep in either, which lets
-     one pairing — white on it — hold everywhere. */
-  --stamp: #fff;
-  background: color-mix(in srgb, var(--wp-bad) 58%, #1a0508);
-  border-color: color-mix(in srgb, var(--wp-bad) 58%, #1a0508);
-}
-.sp-stamp[data-kind="foreign"], .sp-stamp[data-kind="held"] { --stamp: var(--sp-ink); }
-
+   The stamp rule is NOT written here. It is imported from the workplace, byte for byte, because
+   this device is the whole reason the two panels now say the same fact the same way — and because
+   two hand-kept copies is exactly how the pod colours drifted the last time. */
+${STAMP_CSS}
 .sp-lamp { --mark: var(--wp-ok); line-height: 0; }
 .sp-lamp svg { display: block; animation: sp-pulse calc(var(--beat) / 3) ease-in-out infinite; }
 
@@ -820,9 +801,9 @@ body {
   .sp-dieline-hole { left: 4px; }
   .sp-dieline-label { left: 20px; }
   .sp-props { right: 16px; }
-  .sp-slip[data-fold="slim"] .sp-stamp b { display: none; }
-  .sp-slip[data-fold="slim"] .sp-stamp { padding: 2px 3px; }
-  .sp-slip[data-fold="slim"]:hover .sp-stamp b,
-  .sp-slip[data-fold="slim"]:focus-visible .sp-stamp b { display: inline; }
+  .sp-slip[data-fold="slim"] .wp-stamp b { display: none; }
+  .sp-slip[data-fold="slim"] .wp-stamp { padding: 2px 3px; }
+  .sp-slip[data-fold="slim"]:hover .wp-stamp b,
+  .sp-slip[data-fold="slim"]:focus-visible .wp-stamp b { display: inline; }
 }
 `;

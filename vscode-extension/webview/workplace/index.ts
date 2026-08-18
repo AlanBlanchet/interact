@@ -18,6 +18,11 @@ import { SCRIPT } from "./motion";
 
 export { renderScene } from "./scene";
 export { STYLE } from "./style";
+// The status lexicon is part of the workplace's public surface, not a private helper: the side
+// bar imports it, and anything else that ever has to name a run's state must take these words
+// rather than invent a second set.
+export { STAMPS, STAMP_CSS, STALL_SECONDS, WORDS, isHeld, stampFor, stampHtml } from "./status";
+export type { Stamp, StampKind } from "./status";
 
 /** A nonce ends up inside an attribute and inside a CSP header value, so it is reduced to the
  *  alphabet a nonce is allowed to use rather than trusted. A caller passing something strange

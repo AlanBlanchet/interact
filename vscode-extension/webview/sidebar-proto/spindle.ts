@@ -29,7 +29,8 @@
  *  the same person in both views.
  */
 import { draw, drawFrames } from "../workplace/pixels";
-import { GHOST_PAL, MARKS, POSE_MOVE, POSE_REST, SKIN_PAL, SNOOZE } from "../workplace/art";
+import { GHOST_PAL, POSE_MOVE, POSE_REST, SKIN_PAL, SNOOZE } from "../workplace/art";
+import { STALL_SECONDS, isHeld, markOf, stampFor, stampHtml } from "../workplace/status";
 import { assignAccents, faceOf, shortDuration } from "../workplace/palette";
 import { clip, esc } from "../workplace/esc";
 import { ZONES } from "../../src/team";
@@ -38,10 +39,6 @@ import { DESK_STAMP, DOG_EAR, OUT_FLAG, PAD_CORNER, SPINDLE_BASE, SPINDLE_TIP, S
 import type { Board, Docket } from "./fixture";
 
 const LABELS = new Map<ZoneId, string>(ZONES.map((z) => [z.id, z.label]));
-
-/** Past two minutes of nothing a worker is not working. The same threshold the workplace uses to
- *  stop a sprite moving — the two surfaces must not disagree about who is stalled. */
-const STALL_SECONDS = 120;
 
 /** How deep in the pile a slip sits. `full` is on top and readable; `slim` has been pressed down
  *  and shows only its top edge. This is the whole information model. */
@@ -74,24 +71,6 @@ function totalOf(ds: Docket[]): string {
   return `~$${known.reduce((s, d) => s + (d.cost_usd ?? 0), 0).toFixed(4)}`;
 }
 
-/** The word stamped across a finished slip. Running work is deliberately UNSTAMPED — an open job
- *  with nothing stamped on it is the oldest "in progress" signal there is, and it leaves the loud
- *  marks for the states that actually want a person to look. */
-function stampOf(d: Docket): { word: string; kind: string } | null {
-  if (d.status === "done") return { word: "DONE", kind: "done" };
-  if (d.status === "error") return { word: "ERROR", kind: "error" };
-  if (d.status === "foreign") return { word: "NOT OURS", kind: "foreign" };
-  if (d.idle_seconds >= STALL_SECONDS) return { word: "HELD", kind: "held" };
-  return null;
-}
-
-/** Status is read by SHAPE first — a filled disc, a tick, a pointed wedge, an open square. Colour
- *  is the second signal and never the only one. Straight out of the workplace's own mark set. */
-function markOf(status: string, scale = 2): string {
-  const piece = MARKS[status] ?? MARKS.foreign;
-  return draw(piece.grid, piece.pal, { scale, outline: false });
-}
-
 function spriteOf(d: Docket, scale: number): string {
   const pal = d.status === "foreign" ? GHOST_PAL : SKIN_PAL;
   const live = d.status === "running" && d.idle_seconds < STALL_SECONDS;
@@ -121,8 +100,8 @@ function slip(d: Docket, depth: number, at: number, leadName: string | null): st
   // Only WORK can stall. A finished run's idle clock is just how long ago it ended, and a session
   // interact did not start has no clock we own at all — sleeping either of them says the run is
   // stuck when it is simply over.
-  const stalled = d.status === "running" && d.idle_seconds >= STALL_SECONDS ? 1 : 0;
-  const stamp = stampOf(d);
+  const stalled = isHeld(d) ? 1 : 0;
+  const stamp = stampFor(d);
   const zone = LABELS.get(d.zone) ?? d.zone;
   const out = d.zone === "web";
 
@@ -133,9 +112,11 @@ function slip(d: Docket, depth: number, at: number, leadName: string | null): st
       ? `<span class="sp-mug">${spriteOf(d, 2)}</span>`
       : `<span class="sp-mug sp-mug-slim">${markOf(d.status, 2)}</span>`;
 
+  // The stamp is not built here any more — it is the shared device, markup and all, so a change
+  // to the word or the shape reaches both panels or neither. HELD used to be drawn with the open
+  // square, which is the mark for NOT OURS; it has its own hourglass now.
   const badge = stamp
-    ? `<span class="sp-stamp" data-kind="${stamp.kind}">` +
-      `${markOf(stamp.kind === "held" ? "foreign" : d.status, 2)}<b>${stamp.word}</b></span>`
+    ? stampHtml(stamp)
     : `<span class="sp-lamp" title="running">${markOf("running", 2)}</span>`;
 
   const flag = out

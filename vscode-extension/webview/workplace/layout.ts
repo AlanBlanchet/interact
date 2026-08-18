@@ -13,6 +13,7 @@
  */
 import { reportsOf } from "../../src/team";
 import { assignAccents } from "./palette";
+import { isHeld } from "./status";
 import type { TeamState, Worker, ZoneId } from "../../src/team";
 
 /** Floors, top to bottom. The ground floor is the one with the door, so the rooms a worker is
@@ -122,8 +123,12 @@ export interface Tally {
   projects: string[];
 }
 
-/** The board by the door: how the shift is going. Idle is counted across statuses on purpose —
- *  a "running" worker that has not moved for ten minutes is the thing you most want counted. */
+/** The board by the door: how the shift is going.
+ *
+ *  `idle` is HELD — a run that is still open and has not moved for two minutes. It used to be
+ *  counted across every status, which put finished and foreign runs in the count: a DONE run's
+ *  idle clock is only how long ago it ended, and the desk never counted those. One rule, in
+ *  status.ts, so the two panels cannot report different numbers for the same fact. */
 export function tally(state: TeamState): Tally {
   const t: Tally = { running: 0, done: 0, error: 0, foreign: 0, idle: 0, cost: 0, projects: [] };
   const seen = new Set<string>();
@@ -132,7 +137,7 @@ export function tally(state: TeamState): Tally {
     else if (w.status === "done") t.done++;
     else if (w.status === "error") t.error++;
     else if (w.status === "foreign") t.foreign++;
-    if (w.idle_seconds >= 120) t.idle++;
+    if (isHeld(w)) t.idle++;
     if (typeof w.cost_usd === "number") t.cost += w.cost_usd;
     if (w.project && !seen.has(w.project)) {
       seen.add(w.project);
