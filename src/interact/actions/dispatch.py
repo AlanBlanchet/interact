@@ -270,6 +270,16 @@ async def _execute_browser_action(action, page):
                 f"{action.type}: {target} matched multiple elements — narrow it (add :visible, a "
                 "parent scope, or `>> nth=0`) or use a unique `ref` from get_interactive_elements."
             ) from None
+        if "Execution context was destroyed" in msg:
+            # Accurate and useless on its own: it names a browser internal rather than what the
+            # caller did or should do. It means the page navigated while the script was running —
+            # a redirect, a router push, a form submit — so the script never finished. Seen 12
+            # times in client logs, always from evaluate_js reading a page as it moved.
+            raise ValueError(
+                f"{action.type}: the page navigated while the script was running, so it never "
+                "finished. Let the navigation settle first — add a `wait_for` step (a selector "
+                "that only exists on the destination) before this one, and re-read the page after."
+            ) from None
         if not targets_element:
             raise ValueError(f"{action.type} failed: {first}") from None
         sel = _selector_of(action)
