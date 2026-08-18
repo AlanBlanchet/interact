@@ -286,3 +286,53 @@ def test_a_hand_started_xephyr_with_the_same_plain_flags_is_NOT_ours():
     """The old markers were exactly what someone types by hand, so they proved nothing."""
     hand_typed = "Xephyr :50 -screen 1280x800 -br -ac -noreset -no-host-grab"
     assert orphans.is_orphan(_proc(10, 1, hand_typed)) is False
+
+
+# ── Sweeping by profile, not only by display ────────────────────────────────────────────────
+# An editor launched into the sandbox can end up running on the REAL display while still using
+# the sandbox PROFILE — measured live: a `code` process with
+# `--user-data-dir=…/sandbox-profiles/editor-99` and `DISPLAY=:1`. A display sweep can never touch
+# it (:1 is the user's own session, correctly off limits), so it survives every teardown, keeps
+# the profile's singleton, and hands each new launch to its own stale extension host. That is what
+# makes a rebuilt extension appear not to change and a launch appear to open nothing.
+
+
+def test_a_process_holding_our_sandbox_profile_is_ours_wherever_it_runs(monkeypatch):
+    profile = "/home/alan/.interact/out/sandbox-profiles/editor-99"
+    monkeypatch.setattr(orphans, "_process_table", lambda: [
+        (10, f"/usr/share/code/code --user-data-dir={profile} --type=renderer"),
+        (11, "/usr/share/code/code --user-data-dir=/home/alan/.config/Code"),  # the user's own
+        (os.getpid(), f"grep {profile}"),                                       # us, hunting
+    ])
+    assert orphans.profile_clients(profile) == [10]
+
+
+def test_the_users_own_editor_is_never_swept(monkeypatch):
+    monkeypatch.setattr(orphans, "_process_table", lambda: [
+        (11, "/usr/share/code/code --user-data-dir=/home/alan/.config/Code"),
+    ])
+    assert orphans.profile_clients("/home/alan/.interact/out/sandbox-profiles/editor-99") == []
+
+
+@pytest.mark.parametrize("profile", ["", "/", "/home/alan", "/home/alan/.config/Code"])
+def test_it_refuses_a_profile_outside_our_own_sandbox_directory(monkeypatch, profile):
+    """The whole safety of this rests on the path being one WE created. Anything else could name
+    the user's real profile — or their home — and sweep their editor."""
+    monkeypatch.setattr(orphans, "_process_table", lambda: [(10, f"code --user-data-dir={profile}")])
+    assert orphans.profile_clients(profile) == []
+
+
+def test_the_process_table_is_read_untruncated(tmp_path, monkeypatch):
+    """`ps -o args=` truncates to the terminal width, and Chromium puts `--user-data-dir` far into
+    a very long command line — so the profile sweep matched nothing while `pgrep` found four
+    processes. /proc/<pid>/cmdline is the untruncated, authoritative copy."""
+    proc = tmp_path / "42"
+    proc.mkdir()
+    long_flag = "--user-data-dir=/home/alan/.interact/out/sandbox-profiles/editor-99"
+    (proc / "cmdline").write_bytes(b"\0".join(
+        [b"/usr/share/code/code", *(b"--padding-flag-that-is-long" for _ in range(40)),
+         long_flag.encode()]
+    ))
+    monkeypatch.setattr(orphans, "_PROC", tmp_path)
+    monkeypatch.setattr(orphans, "_all_pids", lambda: [42])  # the module fixture stubs this empty
+    assert (42, ) == tuple(pid for pid, args in orphans._process_table() if long_flag in args)

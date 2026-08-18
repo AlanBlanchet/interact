@@ -70,6 +70,11 @@ class AgentProvider(ABC):
         """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
         (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
 
+    def definition_path(self, agent: str) -> Path | None:
+        """The file holding a definition's system prompt, or None when this CLI has no such
+        concept. A link to it is what makes "what IS this agent" answerable from a panel."""
+        return None
+
     def agent_definitions(self) -> list[str]:
         """Names this CLI can resolve as ``agent=``, sorted. Empty when it has no such concept.
 
@@ -97,6 +102,19 @@ class AgentProvider(ABC):
 #: panel exists for. Only known noise is dropped; an unrecognised subtype still comes through as
 #: `other`, so a vendor adding an event cannot vanish silently.
 _HARNESS_BOOKKEEPING = frozenset({"thinking_tokens", "hook_started", "hook_response"})
+
+#: The parts of a prompt Claude reports separately. `input_tokens` alone is only the UNCACHED
+#: remainder — a run whose 102k prompt was fully cached reports 2 there — so "context" has to sum
+#: all three or it claims a number nobody would recognise.
+_PROMPT_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+
+
+def _prompt_tokens(usage: dict) -> int | None:
+    """The whole prompt the model saw, or None when the vendor reported no usage at all (zero
+    would render as a measurement of an empty context rather than as an absence)."""
+    parts = [usage.get(f) for f in _PROMPT_FIELDS]
+    known = [p for p in parts if isinstance(p, int)]
+    return sum(known) if known else None
 
 
 class ClaudeCodeProvider(AgentProvider):
@@ -127,6 +145,10 @@ class ClaudeCodeProvider(AgentProvider):
         if mcp_config:
             argv += ["--mcp-config", mcp_config]
         return argv
+
+    def definition_path(self, agent: str) -> Path | None:
+        path = Path.home() / ".claude" / "agents" / f"{agent}.md"
+        return path if path.exists() else None
 
     def agent_definitions(self) -> list[str]:
         """Claude Code resolves ``--agent <name>`` against ``~/.claude/agents/<name>.md``."""
@@ -175,6 +197,7 @@ class ClaudeCodeProvider(AgentProvider):
             msg = raw.get("message") or {}
             usage = msg.get("usage") or {}
             texts, thinking, tool, tool_input = [], [], None, ""
+            prompt_tokens = _prompt_tokens(usage)
             for block in msg.get("content") or []:
                 btype = block.get("type")
                 if btype == "text":
@@ -187,13 +210,13 @@ class ClaudeCodeProvider(AgentProvider):
             if tool:
                 return AgentEvent(kind="tool", tool=tool, tool_input=tool_input,
                                   session_id=sid, raw_type=kind,
-                                  input_tokens=usage.get("input_tokens"),
+                                  input_tokens=prompt_tokens,
                                   output_tokens=usage.get("output_tokens"))
             if thinking and not any(t.strip() for t in texts):
                 return AgentEvent(kind="thinking", text=_clip("".join(thinking)),
                                   session_id=sid, raw_type=kind)
             return AgentEvent(kind="text", text="".join(texts), session_id=sid, raw_type=kind,
-                              input_tokens=usage.get("input_tokens"),
+                              input_tokens=prompt_tokens,
                               output_tokens=usage.get("output_tokens"))
 
         if kind == "user":

@@ -118,19 +118,46 @@ export function renderTranscript(turns: Turn[]): string {
 /** Shown when nothing is selected — a blank panel reads as broken rather than as ready. */
 export const CHAT_EMPTY_HINT = "Pick an agent in the list above to read and reply to it";
 
+/** A file the panel can open for you — the point of a link rather than a path you copy out. */
+export interface ChatFile {
+  label: string;
+  path: string;
+}
+
+/** What a run IS, as opposed to what it has said. */
+export interface ChatRun {
+  run_id: string;
+  provider?: string;
+  model?: string | null;
+  agent?: string | null;
+  task?: string;
+  cwd?: string;
+  pid?: number | null;
+  cost_usd?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+}
+
 export interface ChatDocument {
   /** Per-render nonce: the CSP admits only scripts carrying it, so injected markup cannot run. */
   nonce: string;
   turns: Turn[];
   name: string | undefined;
   status: string | undefined;
+  /** The run behind the transcript — its definition, brief, context size and identity. Without
+   *  it the panel says what an agent SAID and nothing about what it IS. */
+  run?: ChatRun;
+  /** Files worth opening: the system prompt, the raw stream, the transcript. */
+  files?: ChatFile[];
   /** A message has been delivered and nothing has come back yet. Without this the panel looks
    *  identical whether the agent is thinking or the send silently failed — a reviewer read the
    *  silence as a broken button while the reply was on its way. */
   awaitingReply?: boolean;
 }
 
-export function chatDocument({ nonce, turns, name, status, awaitingReply }: ChatDocument): string {
+export function chatDocument(
+  { nonce, turns, name, status, awaitingReply, run, files }: ChatDocument,
+): string {
   const header = name
     ? `<header><span class="who">${escapeHtml(name)}</span>` +
       `<span class="status">${escapeHtml(status ?? "")}</span></header>`
@@ -139,7 +166,7 @@ export function chatDocument({ nonce, turns, name, status, awaitingReply }: Chat
     ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
     : "";
   const body = name
-    ? renderTranscript(turns) + pending
+    ? renderDetails(run, files) + renderTranscript(turns) + pending
     : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
   const composer = name
     ? `<form id="composer">
@@ -177,6 +204,16 @@ if (form) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
 }
+// A webview cannot open a workspace file itself, so a file button asks the extension to.
+// Delegated from the document: the transcript is re-rendered on every registry change, and
+// per-node listeners attached at load are lost the moment that happens.
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  const button = target && target.closest ? target.closest(".file") : null;
+  if (!button) return;
+  event.preventDefault();
+  vscode.postMessage({ type: "open", path: button.getAttribute("data-path") });
+});
 const main = document.getElementById("transcript");
 if (main) main.scrollTop = main.scrollHeight;
 </script>
@@ -196,6 +233,14 @@ const STYLE = `
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
   .hint { color: var(--vscode-descriptionForeground); }
   .pending { color: var(--vscode-descriptionForeground); font-style: italic; }
+  .details { margin: 0 0 .8em; font-size: .95em; }
+  .details summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+  .details .grid { display: grid; grid-template-columns: auto 1fr; gap: .15em .8em; margin: .5em 0; }
+  .details .k { color: var(--vscode-descriptionForeground); }
+  .details .v { overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
+  .details .brief p { margin: .2em 0 .6em; white-space: pre-wrap; }
+  .details .files { margin-top: .5em; }
+  .details .file { color: var(--vscode-textLink-foreground); overflow-wrap: anywhere; }
   .pending::after { content: ""; animation: blink 1.2s steps(1) infinite; }
   @keyframes blink { 50% { opacity: .4 } }
   .turn { margin: 0 0 .7em; line-height: 1.45; }
@@ -236,4 +281,64 @@ export function isAwaitingReply(turns: Turn[]): boolean {
     }
   }
   return false;
+}
+
+/** A real link that opens the file.
+ *
+ *  A `command:` URI is VS Code's own mechanism for this and needs no message plumbing — the
+ *  earlier attempt posted a message from a click handler, and the handler never fired for reasons
+ *  the markup and the compiled bundle both denied. This is documented, and it is also literally
+ *  what was asked for: a file link.
+ */
+function fileLink(file: ChatFile): string {
+  const args = encodeURIComponent(JSON.stringify([`file://${file.path}`]));
+  // The PATH is shown, not just the label: it is what was actually asked for, it survives a
+  // link the workbench declines to follow, and it can be copied into a terminal.
+  return (
+    `<div class="k">${escapeHtml(file.label)}</div>` +
+    `<div class="v"><a class="file" href="command:vscode.open?${args}">` +
+    `${escapeHtml(file.path)}</a></div>`
+  );
+}
+
+/** Compact token counts — "120k" reads at a glance where "120000" does not. */
+function tokens(n: number | null | undefined): string {
+  if (n == null) return "—";
+  if (n < 1000) return String(n);
+  return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+}
+
+/** What the agent IS, above what it has said: its definition, its brief, how much context it has
+ *  consumed, and the identity you need to find the process. Collapsed by default — the
+ *  conversation is what you came for; this is what you open when you want to know why it behaves
+ *  the way it does.
+ *
+ *  Files are BUTTONS, not links: a webview cannot open a workspace file itself, so each posts a
+ *  message and the extension opens it in an editor.
+ */
+export function renderDetails(run: ChatRun | undefined, files: ChatFile[] | undefined): string {
+  if (!run) return "";
+  const rows: [string, string][] = [];
+  if (run.agent) rows.push(["definition", run.agent]);
+  rows.push(["provider", [run.provider, run.model].filter(Boolean).join(" · ") || "—"]);
+  rows.push([
+    "context",
+    `${tokens(run.input_tokens)} in · ${tokens(run.output_tokens)} out` +
+      (run.cost_usd != null ? ` · ~$${run.cost_usd.toFixed(4)}` : ""),
+  ]);
+  if (run.cwd) rows.push(["working dir", run.cwd]);
+  rows.push(["process", run.pid ? String(run.pid) : "not running"]);
+  rows.push(["session", run.run_id]);
+
+  const table = rows
+    .map(([k, v]) => `<div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div>`)
+    .join("");
+  const brief = run.task
+    ? `<div class="brief"><div class="k">brief</div><p>${escapeHtml(run.task)}</p></div>`
+    : "";
+  const links = (files ?? []).length
+    ? `<div class="grid files">${(files ?? []).map(fileLink).join("")}</div>`
+    : "";
+  return `<details class="details"><summary>about this agent</summary>
+    <div class="grid">${table}</div>${brief}${links}</details>`;
 }

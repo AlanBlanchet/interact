@@ -828,6 +828,17 @@ class NestedBackend(DesktopBackend):
         # server may own this number — and its apps are not ours to kill.
         owned = self._xserver.poll() is None
         orphans.sweep_if_owned(self.display, owned=owned)
+        # Sweeping by DISPLAY misses an app that ended up on the REAL display while still holding
+        # a sandbox PROFILE — where a display sweep must never follow it. Left running it keeps
+        # the profile's singleton, so the next launch is handed to that stale instance rather than
+        # starting fresh: a rebuilt app appears not to change, or opens nothing at all.
+        if owned:
+            # Imported here, not at module level: `launch` imports `orphans`, and importing that
+            # submodule runs this package's __init__, which imports THIS module — a genuine cycle.
+            from interact.launch import sandbox_profiles
+
+            for profile in sandbox_profiles(self.display):
+                orphans.kill_profile_clients(str(profile))
         if owned:
             self._xserver.terminate()
             try:

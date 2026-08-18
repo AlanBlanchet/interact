@@ -25,6 +25,11 @@ export interface AgentRun {
   project?: string;
   status: "running" | "done" | "failed" | "crashed" | "stopped" | "foreign";
   pid?: number | null;
+  /** The DEFINITION this run is — resolves to the file holding its system prompt. */
+  agent?: string | null;
+  /** Cumulative token use: how much CONTEXT it has consumed, which a cost figure alone hides. */
+  input_tokens?: number | null;
+  output_tokens?: number | null;
   /** The model the run was launched with, when the spawner knew it (Python records it). */
   model?: string | null;
   parent_run_id?: string | null;

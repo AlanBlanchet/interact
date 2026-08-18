@@ -10,10 +10,12 @@
  *  provider that cannot resume), and this must not drift from them.
  */
 import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { chatDocument, isAwaitingReply } from "./conversationFormat";
+import { ChatFile, chatDocument, isAwaitingReply } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -36,9 +38,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
-    view.webview.options = { enableScripts: true };
+    // `enableCommandUris` is what lets a file link actually open the file: without it VS Code
+    // silently drops the command: href, which looks exactly like a dead button.
+    view.webview.options = { enableScripts: true, enableCommandUris: true };
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
+      if (msg?.type === "open" && typeof msg.path === "string") void this.open(msg.path);
     });
     view.onDidDispose(() => this.stopWatching());
     this.watch();
@@ -61,7 +66,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       name: run?.name,
       status: run?.status,
       awaitingReply: isAwaitingReply(turns),
+      run: run as never,
+      files: run ? this.files(run) : [],
     });
+  }
+
+  /** The files behind a run: what it IS, and everything it wrote. Only ones that exist are
+   *  offered — a button that opens nothing is worse than no button. */
+  private files(run: AgentRun): ChatFile[] {
+    const dir = agentsDir();
+    const candidates: ChatFile[] = [
+      // The system prompt. Resolved the same way the provider resolves `--agent`.
+      ...(run.agent
+        ? [{ label: "system prompt", path: path.join(os.homedir(), ".claude", "agents", `${run.agent}.md`) }]
+        : []),
+      { label: "transcript", path: path.join(dir, `${run.run_id}.jsonl`) },
+      { label: "raw stream", path: path.join(dir, `${run.run_id}.raw.jsonl`) },
+      { label: "messages", path: path.join(dir, `${run.run_id}.messages.jsonl`) },
+    ];
+    return candidates.filter((f) => fs.existsSync(f.path));
+  }
+
+  /** Open a file in an editor — a webview cannot, so it asks us to.
+   *
+   *  A failure is SHOWN, not just logged: a button that silently does nothing is the defect, and
+   *  the log is somewhere nobody looks until they already suspect one.
+   */
+  private async open(target: string): Promise<void> {
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
+      await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+    } catch (err) {
+      this.log.appendLine(`could not open ${target}: ${err}`);
+      void vscode.window.showErrorMessage(`Interact: could not open ${target} — ${err}`);
+    }
   }
 
   private async send(text: string): Promise<void> {

@@ -1,6 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-  <!-- A team on a shared clock: three lanes of differing length, the way the panel reads. -->
-  <circle cx="4.5" cy="6" r="2"/><path d="M8 6h11"/>
-  <circle cx="4.5" cy="12" r="2"/><path d="M8 12h7"/>
-  <circle cx="4.5" cy="18" r="2"/><path d="M8 18h4"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- A team with a lead, not a list: one agent above, two it works with below, joined. VS Code
+       tints a view-container icon with the theme's own foreground, so this is a single-colour
+       outline at 24px with no fills — anything else renders as a smudge in the activity strip. -->
+  <circle cx="12" cy="5.5" r="2.6"/>
+  <circle cx="5" cy="17.5" r="2.6"/>
+  <circle cx="19" cy="17.5" r="2.6"/>
+  <path d="M12 8.1v3.4M12 11.5H6.6a1.6 1.6 0 0 0-1.6 1.6v1.8"/>
+  <path d="M12 11.5h5.4a1.6 1.6 0 0 1 1.6 1.6v1.8"/>
 </svg>

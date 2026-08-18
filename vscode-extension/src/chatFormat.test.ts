@@ -124,3 +124,59 @@ test("a spawned subagent is labelled as one", () => {
   });
   assert.match(html, /spawn/i);
 });
+
+// "What i want is to be able to view an active running agent, context, system prompt (a file link
+// is enough), basically everything". The panel showed a transcript and nothing about what the
+// agent IS — no definition, no brief, no context size, no way to reach the files.
+
+const RUN = {
+  run_id: "abcd1234-0000-0000-0000-000000000000",
+  name: "code-reviewer", provider: "claude", model: "sonnet", status: "running",
+  agent: "code-reviewer", task: "Review the diff for correctness",
+  cwd: "/home/alan/dev/interact", project: "interact", pid: 4242,
+  cost_usd: 1.25, input_tokens: 120000, output_tokens: 8000,
+} as any;
+
+test("the system prompt is reachable as a link", () => {
+  const html = chatDocument({ nonce: "n", name: "code-reviewer", status: "running", turns: [],
+    run: RUN, files: [{ label: "system prompt", path: "/home/alan/.claude/agents/code-reviewer.md" }] });
+  assert.match(html, /system prompt/);
+  assert.match(html, /code-reviewer\.md/);
+});
+
+test("the brief it was given is shown, not just its name", () => {
+  const html = chatDocument({ nonce: "n", name: "code-reviewer", status: "running", turns: [], run: RUN });
+  assert.match(html, /Review the diff for correctness/);
+});
+
+test("context size is shown as tokens, not only as cost", () => {
+  const html = chatDocument({ nonce: "n", name: "code-reviewer", status: "running", turns: [], run: RUN });
+  assert.match(html, /120,000|120k/i);
+});
+
+test("identity a person needs to find the process is there", () => {
+  const html = chatDocument({ nonce: "n", name: "code-reviewer", status: "running", turns: [], run: RUN });
+  for (const fact of ["claude", "sonnet", "4242", "abcd1234"]) {
+    assert.ok(html.includes(fact), `missing ${fact}`);
+  }
+});
+
+test("a run with no definition does not render an empty system-prompt row", () => {
+  const html = chatDocument({ nonce: "n", name: "claude", status: "done", turns: [],
+    run: { ...RUN, agent: null }, files: [] });
+  assert.ok(!/system prompt/.test(html));
+});
+
+test("everything in the details is escaped — a task is user text", () => {
+  const html = chatDocument({ nonce: "n", name: "x", status: "done", turns: [],
+    run: { ...RUN, task: "<img src=x onerror=alert(1)>" } });
+  assert.ok(!html.includes("<img src=x"));
+});
+
+test("a file's PATH is shown, not hidden behind a label", () => {
+  // "system prompt (a file link is enough)" — the path IS the deliverable. A chip that only says
+  // "system prompt" tells you a file exists somewhere; it does not tell you where.
+  const html = chatDocument({ nonce: "n", name: "g", status: "done", turns: [], run: RUN,
+    files: [{ label: "system prompt", path: "/home/alan/.claude/agents/g.md" }] });
+  assert.match(html, /\/home\/alan\/\.claude\/agents\/g\.md/);
+});

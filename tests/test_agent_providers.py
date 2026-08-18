@@ -284,3 +284,44 @@ def test_a_provider_that_has_no_such_concept_lists_nothing():
     from interact.agents.providers import CodexProvider
 
     assert CodexProvider().agent_definitions() == []
+
+
+# ── Context means CONTEXT ───────────────────────────────────────────────────────────────────
+# Claude reports the prompt in three parts and `input_tokens` is only the UNCACHED remainder. A
+# real run measured here: input_tokens=2, cache_creation_input_tokens=102218. Recording the first
+# number and calling it context claims a 102k prompt was 2 tokens.
+
+
+def test_the_cached_prompt_counts_as_context():
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(json.dumps({
+        "type": "assistant", "session_id": "s",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}],
+                    "usage": {"input_tokens": 2, "cache_creation_input_tokens": 102218,
+                              "cache_read_input_tokens": 500, "output_tokens": 40}},
+    }))
+    assert event.input_tokens == 102720, "the whole prompt the model saw, not the uncached scrap"
+    assert event.output_tokens == 40
+
+
+def test_a_usage_block_with_no_caching_is_unchanged():
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(json.dumps({
+        "type": "assistant", "session_id": "s",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}],
+                    "usage": {"input_tokens": 300, "output_tokens": 40}},
+    }))
+    assert event.input_tokens == 300
+
+
+def test_no_usage_at_all_reports_nothing_rather_than_zero():
+    """Zero would render as a real measurement of an empty context."""
+    from interact.agents.providers import ClaudeCodeProvider
+
+    event = ClaudeCodeProvider().parse(json.dumps({
+        "type": "assistant", "session_id": "s",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    }))
+    assert event.input_tokens is None

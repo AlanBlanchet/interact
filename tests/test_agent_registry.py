@@ -20,6 +20,7 @@ import os
 import pytest
 
 from interact.agents import registry as reg
+from interact.agents.events import AgentEvent
 
 
 @pytest.fixture(autouse=True)
@@ -451,3 +452,69 @@ def test_clearing_accepts_the_short_id_the_tool_prints(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     _finished("abcd1234-0000-0000-0000-000000000000")
     assert reg.forget("abcd1234") is True
+
+
+# ── What a run IS, not just what it said ────────────────────────────────────────────────────
+# "What i want is to be able to view an active running agent, context, system prompt (a file link
+# is enough), basically everything" — none of that was recorded. A run knew its name but not WHICH
+# definition produced it, so there was nothing to link to, and token use was thrown away.
+
+
+def test_a_run_remembers_the_definition_it_was_spawned_from(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    run = reg.register(run_id="r1", name="code-reviewer", provider="claude", task="t",
+                       pid=None, agent="code-reviewer")
+    assert run.agent == "code-reviewer"
+    assert reg.list_runs()[0].agent == "code-reviewer"
+
+
+def test_a_run_with_no_definition_says_so_rather_than_guessing(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert reg.register(run_id="r1", name="claude", provider="claude", task="t", pid=None).agent is None
+
+
+def test_the_definition_file_is_where_the_system_prompt_lives(tmp_path, monkeypatch):
+    """A file link is all he asked for, so the panel needs the path — resolved by the provider,
+    since only it knows where its definitions live."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    definitions = tmp_path / ".claude" / "agents"
+    definitions.mkdir(parents=True)
+    (definitions / "code-reviewer.md").write_text("---\nname: code-reviewer\n---\n")
+    reg.register(run_id="r1", name="code-reviewer", provider="claude", task="t", pid=None,
+                 agent="code-reviewer")
+    assert reg.definition_path("r1") == definitions / "code-reviewer.md"
+
+
+def test_no_definition_means_no_path_rather_than_a_broken_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="claude", provider="claude", task="t", pid=None)
+    assert reg.definition_path("r1") is None
+
+
+def test_token_use_accumulates_so_context_size_is_visible(tmp_path, monkeypatch):
+    """"context" — you cannot see how much a running agent has consumed without this."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="a", provider="claude", task="t", pid=None)
+    for _ in range(2):
+        reg.append_event("r1", AgentEvent(kind="text", text="x", input_tokens=100,
+                                          output_tokens=20))
+    stored = reg.list_runs()[0]
+    assert stored.input_tokens == 200 and stored.output_tokens == 40
+
+
+def test_tokens_accumulate_for_a_run_with_a_raw_vendor_stream(tmp_path, monkeypatch):
+    """Cost was summed from the parsed stream but tokens were not, so every real run showed its
+    price and nothing about how much context it had actually used."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="a", provider="claude", task="t", pid=None)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text("".join(
+        json.dumps({
+            "type": "assistant", "session_id": "s",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}],
+                        "usage": {"input_tokens": 500, "output_tokens": 40}},
+        }) + "\n" for _ in range(2)
+    ))
+    stored = [r for r in reg.list_runs() if r.run_id == "r1"][0]
+    assert stored.input_tokens == 1000 and stored.output_tokens == 80

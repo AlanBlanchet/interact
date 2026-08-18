@@ -129,6 +129,6 @@ async def run_agent(
     finally:
         sink.close()  # the child holds its own dup of the fd
     reg.register(run_id=run_id, pid=process.pid, provider=provider.name, name=label,
-                 task=task, cwd=cwd, model=model, parent_run_id=parent)
+                 task=task, cwd=cwd, model=model, parent_run_id=parent, agent=agent)
     pump = asyncio.create_task(_reap(run_id, process))
     return RunHandle(run_id=run_id, process=process, pump=pump)

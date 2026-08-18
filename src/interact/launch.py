@@ -149,6 +149,17 @@ def _lock_owner(lock: Path) -> int | None:
         return None
 
 
+def sandbox_profiles(display: str) -> list[Path]:
+    """Every profile this display's launches may have created — what teardown must release."""
+    root = Path.home() / ".interact" / "out" / "sandbox-profiles"
+    number = display.lstrip(":")
+    try:
+        return [p for p in root.iterdir()
+                if p.is_dir() and (p.name == f"editor-{number}" or p.name.startswith(f"{number}-"))]
+    except OSError:
+        return []
+
+
 def _prepare_profile(profile: Path) -> None:
     """Make a sandbox profile usable before an app is pointed at it.
 

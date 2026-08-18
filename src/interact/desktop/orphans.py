@@ -118,6 +118,52 @@ def is_orphan(server: XServer) -> bool:
     return _parent_is_reaper(server.ppid)
 
 
+#: Where our sandbox profiles live. A path under here is one WE created, per display, so killing
+#: what holds it cannot reach the user's own editor — which uses ~/.config/Code.
+_PROFILE_ROOT = "/.interact/out/sandbox-profiles/"
+
+
+def _process_table() -> list[tuple[int, str]]:
+    """(pid, cmdline) for every process, read from /proc.
+
+    NOT via ``ps -o args=``, which truncates to the terminal width: Chromium puts
+    ``--user-data-dir`` far into a several-thousand-character command line, so the flag fell off
+    the end and the sweep matched nothing while ``pgrep`` found four processes holding the profile.
+    """
+    rows: list[tuple[int, str]] = []
+    for pid in _all_pids():
+        try:
+            raw = (_PROC / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            continue  # gone, or another user's
+        rows.append((pid, raw.replace(b"\0", b" ").decode("utf-8", "replace")))
+    return rows
+
+
+def profile_clients(profile: str) -> list[int]:
+    """Processes holding one of OUR sandbox profiles — minus this one.
+
+    Sweeping by DISPLAY is not enough. An editor launched into the sandbox can end up on the real
+    display while still using the sandbox profile (measured: `--user-data-dir=…/editor-99` with
+    `DISPLAY=:1`), where a display sweep must never follow it. It then keeps the profile's
+    singleton, so every later launch is handed to that stale instance instead of starting fresh —
+    which looks like a rebuilt extension not changing, or a launch opening nothing at all.
+
+    Refuses any path outside our own profile directory: that constraint is the entire safety
+    argument, since the user's real editor profile would otherwise match.
+    """
+    if not profile or _PROFILE_ROOT not in profile:
+        return []
+    me = os.getpid()
+    return [pid for pid, args in _process_table()
+            if pid != me and f"--user-data-dir={profile}" in args]
+
+
+def kill_profile_clients(profile: str) -> list[int]:
+    """Terminate whatever still holds a sandbox profile; returns the pids signalled."""
+    return [pid for pid in profile_clients(profile) if _terminate(pid)]
+
+
 def display_of(cmdline: str) -> str | None:
     """The display an X server serves, read off its own command line (`Xephyr :99 …`)."""
     return next((tok for tok in cmdline.split()[1:] if re.fullmatch(r":\d+", tok)), None)

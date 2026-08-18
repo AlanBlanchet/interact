@@ -40,6 +40,10 @@ class AgentRun(BaseModel):
     project: str = ""
     pid: int | None = None
     model: str | None = None
+    #: The DEFINITION this run is — a name the provider resolves to a file holding its system
+    #: prompt and tool set (Claude Code: ``~/.claude/agents/<agent>.md``). None for a plain run.
+    #: Without it a run knows its label but not what it actually IS, so nothing can link to it.
+    agent: str | None = None
     parent_run_id: str | None = None
     started_at: float = 0.0
     finished_at: float | None = None
@@ -52,6 +56,10 @@ class AgentRun(BaseModel):
     #: API-EQUIVALENT cost. On a subscription run the user is not billed this again; they already
     #: paid for the plan. Callers must label it as equivalent value, never as fresh spend.
     cost_usd: float | None = None
+    #: Cumulative token use — how much CONTEXT this run has consumed, which is invisible from a
+    #: cost figure alone (two models at the same price consume very differently).
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     last: str = ""
 
 
@@ -102,6 +110,19 @@ def _record_path(run_id: str) -> Path:
     return agents_dir() / f"{run_id}.json"
 
 
+def definition_path(run_id: str) -> Path | None:
+    """Where a run's system prompt lives, or None when it is not a defined agent.
+
+    Only the provider knows where its definitions live, so the lookup goes through it rather than
+    hard-coding one vendor's layout here.
+    """
+    run = _read_record(run_id)
+    if run is None or not run.agent:
+        return None
+    provider = PROVIDERS.get(run.provider)
+    return provider.definition_path(run.agent) if provider is not None else None
+
+
 def messages_path(run_id: str) -> Path:
     """Messages live BESIDE the vendor stream, never inside it. The stream is the vendor's own
     file and the mirror is rewritten from it, so anything appended there is clobbered on the next
@@ -134,10 +155,11 @@ def _terminate(pid: int) -> bool:
 
 
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
-             cwd: str = "", model: str | None = None, parent_run_id: str | None = None) -> AgentRun:
+             cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
+             agent: str | None = None) -> AgentRun:
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
-                   started_at=time.time())
+                   agent=agent, started_at=time.time())
     d = agents_dir()
     d.mkdir(parents=True, exist_ok=True)
     _record_path(run_id).write_text(run.model_dump_json())
@@ -198,6 +220,10 @@ def append_event(run_id: str, event: AgentEvent) -> None:
         return
     if event.cost_usd is not None:
         stored.cost_usd = (stored.cost_usd or 0.0) + event.cost_usd
+    for field in ("input_tokens", "output_tokens"):
+        used = getattr(event, field)
+        if used is not None:
+            setattr(stored, field, (getattr(stored, field) or 0) + used)
     summary = event.summary(viewer=run_id)
     if summary:  # system/hook events summarise to nothing; they must not blank the row
         stored.last = summary
@@ -409,6 +435,12 @@ def _derive(run: AgentRun) -> AgentRun:
     if events:
         costs = [e.cost_usd for e in events if e.cost_usd is not None]
         cost = sum(costs) if costs else None
+        # Tokens the same way: cost alone hides how much CONTEXT a run consumed, and two models at
+        # the same price consume very differently.
+        for field in ("input_tokens", "output_tokens"):
+            used = [getattr(e, field) for e in events if getattr(e, field) is not None]
+            if used:
+                setattr(run, field, sum(used))
         last = next((e.summary(viewer=run.run_id) for e in reversed(events)
                      if e.summary(viewer=run.run_id)), run.last)
         run.cost_usd, run.last = cost, last
