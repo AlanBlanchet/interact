@@ -110,6 +110,30 @@ def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
             print(f"{indent}    pid {s['pid']}: v{s.get('version')} (tree is v{latest})")
 
 
+def _print_extension_status(indent: str = "  ") -> None:
+    """Flag a VS Code extension the user is running that is not the one in this tree.
+
+    The other half of the delivery gate. A version behind is the easy case; the one that catches
+    people is a MATCHING version whose build was written after the editor started — reinstalling
+    at the same version never reaches a running window, because `code <path>` is handed to that
+    instance's singleton. Nothing printed when the running editor already has this build.
+    """
+    from interact.extension_status import extension_status
+
+    st = extension_status()
+    if not st:
+        return
+    if st["reason"] == "version":
+        print(f"{indent}⚠ VS Code extension v{st['installed']} installed, tree is v{st['tree']} — "
+              "repackage and reinstall to load fixes")
+    else:
+        n, total = st.get("behind", 1), st.get("running", 1)
+        print(f"{indent}⚠ VS Code extension v{st['installed']} was rebuilt after {n} of {total} "
+              "running editor process(es) started — those are serving the OLD build")
+        print(f"{indent}   a reinstall at the same version does NOT reach a running window; "
+              "fully restart it (or use a fresh --user-data-dir)")
+
+
 def _print_sandboxes(real_display: str | None) -> None:
     """Which sandbox displays exist right now, and who owns each.
 
@@ -392,6 +416,7 @@ def doctor(*, fix: bool = False) -> None:
 
     print("interact doctor\n")
     _print_stale_servers(fix=fix)
+    _print_extension_status()
     print(f"  command       : {shutil.which('interact') or 'NOT on PATH'}")
     print(f"  config file   : {UserConfig.PATH} ({'present' if UserConfig.PATH.exists() else 'absent'})")
 
