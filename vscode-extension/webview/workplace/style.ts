@@ -325,9 +325,16 @@ body.vscode-high-contrast-light .wp {
 .wp-worker[data-depth="2"], .wp-worker[data-depth="3"] { flex: 0 0 var(--w-mini); max-width: var(--w-mini); }
 /* Scoped to the sprite, not the whole worker: filtering the figure faded the NAME PLATE too,
    down to ~4.24:1 on real pixels — a contrast a computed-style check cannot even see. Someone who
-   has finished should look finished; their name still has to be readable. */
+   has finished should look finished; their name still has to be readable.
+
+   The plate then carried an 'opacity: .82', which is the same mistake one level down: opacity
+   composites the TEXT along with the plate, onto whatever room art is behind a translucent
+   background, and visual-critic measured the result at 3.81-4.05:1 across four samples in three
+   rooms. At 10px almost every pixel of a glyph is anti-aliased, so nominal contrast is not what
+   is read — see plateContrast.test.ts, which holds the whole stack to a floor with headroom.
+   Finished is already said twice over, by the faded sprite and by the dim status mark; the name
+   does not have to whisper it a third time. */
 .wp-worker[data-status="done"] .wp-stage { filter: grayscale(.6) opacity(.58); }
-.wp-worker[data-status="done"] .wp-plate { opacity: .82; }
 .wp-worker[data-status="foreign"] { filter: opacity(.72); }
 .wp-worker:hover { filter: none; }
 .wp-worker:focus-visible { outline: 1px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 2px; }
