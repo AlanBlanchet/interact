@@ -24,12 +24,26 @@ const style = readFileSync(
   "utf8",
 );
 
-/** Pull a declaration out of the real stylesheet, so this test cannot drift from what ships. */
-function decl(selector: string, prop: string): string {
-  const block = style.split(selector)[1] ?? "";
-  const body = block.slice(0, block.indexOf("}"));
-  const m = new RegExp(`${prop}\\s*:\\s*([^;]+);`).exec(body);
-  return m ? m[1].trim() : "";
+/** The body of a rule, or a thrown error naming the selector that vanished.
+ *
+ *  Returning "" for an absent block was worse than useless here: `Number("" || 1)` reads as
+ *  "fully opaque", so a renamed selector would silently turn this into a test of nothing while
+ *  still passing. A missing rule is a broken test, not a default. */
+function block(selector: string): string {
+  const parts = style.split(selector);
+  if (parts.length < 2) throw new Error(`no rule '${selector}' in style.ts — did it get renamed?`);
+  return parts[1].slice(0, parts[1].indexOf("}"));
+}
+
+/** A declaration from a rule that MUST exist, else undefined when absent from a rule that may not. */
+function decl(selector: string, prop: string): string | undefined {
+  const m = new RegExp(`${prop}\\s*:\\s*([^;]+);`).exec(block(selector));
+  return m ? m[1].trim() : undefined;
+}
+
+/** Whether style.ts declares a rule at all. */
+function hasRule(selector: string): boolean {
+  return style.includes(selector);
 }
 
 /** `color-mix(in srgb, var(--x) N%, transparent)` -> N/100, else fully opaque. */
@@ -48,10 +62,19 @@ const THEMES: Array<{ name: string; bg: Rgb; fg: Rgb }> = [
 // A plate can sit over any room surface; these are the lightest and darkest the rooms paint.
 const BACKDROPS = [19, 34];
 
+test("the done state does not fade the plate — that is what broke the contrast", () => {
+  // Stated positively, so it fails if the rule ever comes back rather than only measuring its
+  // absence indirectly. `opacity` composites the TEXT along with its translucent background, so
+  // the name's real colour came from whatever room art sat behind it.
+  assert.equal(hasRule('.wp-worker[data-status="done"] .wp-plate'), false);
+});
+
 test("a finished worker's name stays readable on every room surface, in every theme", () => {
-  const plateBg = decl(".wp-plate {", "background");
-  const doneOpacity = Number(decl('.wp-worker[data-status="done"] .wp-plate {', "opacity") || 1);
-  const doneName = decl('.wp-worker[data-status="done"] .wp-name {', "color");
+  const plateBg = decl(".wp-plate {", "background")!;
+  const doneSel = '.wp-worker[data-status="done"] .wp-plate {';
+  const doneOpacity = Number((hasRule(doneSel) ? decl(doneSel, "opacity") : undefined) ?? 1);
+  const nameSel = '.wp-worker[data-status="done"] .wp-name {';
+  const doneName = (hasRule(nameSel) ? decl(nameSel, "color") : undefined) ?? "";
 
   const failures: string[] = [];
   for (const theme of THEMES) {
@@ -75,7 +98,7 @@ test("a finished worker's name stays readable on every room surface, in every th
 });
 
 test("a running worker's name clears the same floor", () => {
-  const plateBg = decl(".wp-plate {", "background");
+  const plateBg = decl(".wp-plate {", "background")!;
   const failures: string[] = [];
   for (const theme of THEMES) {
     for (const pct of BACKDROPS) {
@@ -86,4 +109,13 @@ test("a running worker's name clears the same floor", () => {
     }
   }
   assert.deepEqual(failures, [], `running name plate under ${SMALL_TEXT_FLOOR}:1`);
+});
+
+test("hex parsing keeps its channels straight when an alpha is present", () => {
+  // "#fff8" used to be read as three channels of "ff","f8",NaN — an alpha silently becoming part
+  // of the colour, in a module whose whole job is producing trustworthy numbers.
+  assert.deepEqual(parseHex("#fff"), parseHex("#ffffff"));
+  assert.deepEqual(parseHex("#fff8"), parseHex("#ffffff"));
+  assert.deepEqual(parseHex("#1e1e1eff"), parseHex("#1e1e1e"));
+  assert.throws(() => parseHex("#12345"));
 });

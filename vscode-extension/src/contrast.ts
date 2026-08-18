@@ -23,9 +23,14 @@ export function over(fg: Rgb, bg: Rgb, alpha: number): Rgb {
   return mix(fg, bg, alpha * 100);
 }
 
+/** `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa`. Alpha is parsed and dropped — these colours are
+ *  composited explicitly by `over`, so silently treating "#fff8" as "#fff" (and its alpha as part
+ *  of the red channel) would have quietly corrupted every ratio computed from it. */
 export function parseHex(hex: string): Rgb {
   const h = hex.replace("#", "").trim();
-  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const short = h.length === 3 || h.length === 4;
+  if (![3, 4, 6, 8].includes(h.length)) throw new Error(`not a hex colour: ${hex}`);
+  const full = short ? h.split("").map((c) => c + c).join("") : h;
   return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) as unknown as Rgb;
 }
 

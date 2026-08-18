@@ -80,6 +80,11 @@ jobs:
         run: npm ci
       - name: Typecheck + bundle
         run: npm run compile
+      # The .test.ts files were never executed by anything: there was no `test` script, CI ran
+      # only `compile`, and tsconfig excludes them from the typecheck. Sixteen test files had
+      # accumulated, all of them green locally and none of them a gate.
+      - name: Unit tests
+        run: npm test
       # Only src/generated/types.ts is tracked — settings.json/models.json/benchmarks.json are
       # gitignored and copied from the Python package at build time, so diffing them is a no-op.
       - name: Generated types are committed (in sync with the Python models)

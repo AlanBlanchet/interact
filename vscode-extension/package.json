@@ -1,7 +1,7 @@
 {
   "name": "interact",
   "displayName": "Interact",
-  "description": "Interact — browser + desktop automation via an MCP server",
+  "description": "Interact \u2014 browser + desktop automation via an MCP server",
   "version": "0.28.0",
   "preview": true,
   "publisher": "AlanBlanchet",
@@ -49,7 +49,7 @@
         "interact.projectPath": {
           "type": "string",
           "default": "",
-          "description": "DEV ONLY — path to a local interact checkout to run via 'uv run' instead of the released build. Leave EMPTY (the default) to run the published interact from GitHub via uvx (zero-config). Never auto-detected, so opening a clone of the repo does not silently run your working tree. Can also be set with the INTERACT_PROJECT_PATH env var."
+          "description": "DEV ONLY \u2014 path to a local interact checkout to run via 'uv run' instead of the released build. Leave EMPTY (the default) to run the published interact from GitHub via uvx (zero-config). Never auto-detected, so opening a clone of the repo does not silently run your working tree. Can also be set with the INTERACT_PROJECT_PATH env var."
         },
         "interact.display.currency": {
           "type": "string",
@@ -134,7 +134,7 @@
         "interact.debug.dir": {
           "type": "string",
           "default": "~/.interact/out",
-          "description": "Where interact writes the usage log + debug artifacts (blank = ~/.interact/out; point at a project's out/ when working locally). Must match INTERACT_DEBUG_DIR — the dashboard reads the usage log from here."
+          "description": "Where interact writes the usage log + debug artifacts (blank = ~/.interact/out; point at a project's out/ when working locally). Must match INTERACT_DEBUG_DIR \u2014 the dashboard reads the usage log from here."
         },
         "interact.desktop.target": {
           "type": "string",
@@ -145,14 +145,14 @@
           ],
           "enumDescriptions": [
             "Drive the real desktop session (system-wide input + capture)",
-            "Drive an isolated nested display (Xephyr) — a sandbox that never touches your real windows or cursor"
+            "Drive an isolated nested display (Xephyr) \u2014 a sandbox that never touches your real windows or cursor"
           ],
           "description": "Where desktop automation acts: the real session, or an isolated nested display"
         },
         "interact.desktop.nestedDisplay": {
           "type": "number",
           "default": 99,
-          "description": "X display number for the nested desktop target (e.g. 99 → :99)"
+          "description": "X display number for the nested desktop target (e.g. 99 \u2192 :99)"
         },
         "interact.desktop.nestedSize": {
           "type": "string",
@@ -191,7 +191,7 @@
       },
       {
         "command": "interact.agents.groupBy",
-        "title": "Group agents by…",
+        "title": "Group agents by\u2026",
         "category": "Interact",
         "icon": "$(list-tree)"
       },
@@ -335,7 +335,8 @@
     "generate-models": "uv run --project .. python scripts/generate-models.py",
     "generate-benchmarks": "uv run --project .. python scripts/generate-benchmarks.py",
     "test:vscode": "npm run compile && tsc -p tsconfig.test.json && vscode-test",
-    "build:workplace": "esbuild webview/workplace/index.ts --bundle --outfile=out/workplace.js --format=cjs --platform=node --target=es2022"
+    "build:workplace": "esbuild webview/workplace/index.ts --bundle --outfile=out/workplace.js --format=cjs --platform=node --target=es2022",
+    "test": "node --test --experimental-strip-types src/*.test.ts"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
