@@ -18,6 +18,8 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
+
+from interact.desktop.backend import SANDBOX_TITLE
 from pathlib import Path
 
 #: What one of OUR sandbox displays looks like. These re-state flags owned by
@@ -30,7 +32,9 @@ from pathlib import Path
 #: carries — we could not tell ours from one the user started. Not reclaiming a resource is a much
 #: cheaper mistake than killing someone else's server.
 _OUR_EXECUTABLE = "Xephyr"
-_OUR_MARKERS = ("-noreset", "-no-host-grab")
+#: Our own window title, which nobody else sets — unlike `-noreset -no-host-grab`, which is
+#: exactly the line a person types by hand and so never really identified anything.
+_OUR_MARKERS = (SANDBOX_TITLE,)
 
 
 @dataclass

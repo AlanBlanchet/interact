@@ -14,6 +14,7 @@ import signal
 import pytest
 
 from interact.desktop import orphans
+from interact.desktop.backend import nested_server_command
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +36,9 @@ def _proc(pid, ppid, cmdline):
     return orphans.XServer(pid=pid, ppid=ppid, cmdline=cmdline)
 
 
-_OURS = "Xephyr :99 -screen 1280x800 -br -ac -noreset -no-host-grab"
+# Derived from the real command builder, never hand-typed: a fixture that drifts from what we
+# actually spawn is how the reaper silently stops recognising our own displays.
+_OURS = " ".join(nested_server_command(":99", "1280x800", headless=False))
 
 
 def test_an_orphan_is_ours_and_has_lost_its_parent():
@@ -227,20 +230,17 @@ def test_the_markers_still_match_the_command_we_actually_spawn():
     """`_OUR_MARKERS` re-states flags owned by `nested_server_command`. If that builder changes,
     the reaper silently stops recognising our OWN displays and the leak returns with no test
     failing — so bind them here."""
-    from interact.desktop.backend import nested_server_command
-
     argv = nested_server_command(":99", "1280x800", headless=False)
     assert os.path.basename(argv[0]) == orphans._OUR_EXECUTABLE
+    joined = " ".join(argv)
     for marker in orphans._OUR_MARKERS:
-        assert marker in argv, f"{marker!r} is no longer in the command we spawn"
+        assert marker in joined, f"{marker!r} is no longer in the command we spawn"
 
 
 def test_a_headless_xvfb_is_deliberately_left_alone():
     """Headless mode is invisible (no window, so no user-facing symptom) and its flags — `-screen`,
     `-nolisten tcp` — are what ANY Xvfb carries, so we could not tell ours from the user's. Not
     reaping it is a deliberate choice in favour of never killing someone else's server."""
-    from interact.desktop.backend import nested_server_command
-
     headless = " ".join(nested_server_command(":99", "1280x800", headless=True))
     assert orphans.is_orphan(_proc(10, 1, headless)) is False
 
@@ -261,3 +261,28 @@ def test_doctor_labels_an_ownerless_sandbox_so_the_extra_window_is_explained(cap
     assert "2 open" in out
     assert "ORPHANED" in out
     assert "owner pid 4242" in out
+
+
+# ── The window says whose it is ─────────────────────────────────────────────────────────────
+# "sometimes (usually at the start) i always see 2 xephyr windows" — one per interact server is
+# by design, but an unlabelled `Xephyr on :99.0` window gives no way to know that. Titling it
+# also gives us a marker WE control: `-noreset -no-host-grab` is the canonical hand-typed Xephyr
+# line, so it could never really distinguish ours from someone else's.
+
+
+def test_the_sandbox_window_says_what_it_is():
+    argv = nested_server_command(":99", "1280x800", headless=False)
+    assert "-title" in argv
+    title = argv[argv.index("-title") + 1]
+    assert "interact" in title.lower() and ":99" in title
+
+
+def test_a_display_we_titled_is_recognised_as_ours():
+    ours = " ".join(nested_server_command(":99", "1280x800", headless=False))
+    assert orphans.is_orphan(_proc(10, 1, ours)) is True
+
+
+def test_a_hand_started_xephyr_with_the_same_plain_flags_is_NOT_ours():
+    """The old markers were exactly what someone types by hand, so they proved nothing."""
+    hand_typed = "Xephyr :50 -screen 1280x800 -br -ac -noreset -no-host-grab"
+    assert orphans.is_orphan(_proc(10, 1, hand_typed)) is False

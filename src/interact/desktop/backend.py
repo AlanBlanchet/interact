@@ -542,6 +542,10 @@ def write_sandbox_url_shims(directory, log_path) -> str:
     return str(directory)
 
 
+#: What a sandbox window is called, and how we recognise our own X servers.
+SANDBOX_TITLE = "interact sandbox"
+
+
 def nested_server_command(display: str, size: str, headless: bool) -> list[str]:
     """The nested X server command line: ``Xvfb`` when headless (runs in the
     background, no window — for CI/servers), else ``Xephyr`` (renders as a window on
@@ -549,7 +553,12 @@ def nested_server_command(display: str, size: str, headless: bool) -> list[str]:
     the agent drives via ``DISPLAY=:N``."""
     if headless:
         return ["Xvfb", display, "-screen", "0", f"{size}x24", "-nolisten", "tcp"]
-    return ["Xephyr", display, "-screen", size, "-br", "-ac", "-noreset", "-no-host-grab"]
+    # `-title` is undocumented in -help but honoured. It earns its place twice: the window on the
+    # user's desktop says whose it is (several servers means several sandboxes, which otherwise
+    # looks like a leak), and it is a marker interact CONTROLS — the plain flags below are exactly
+    # what someone types by hand, so they could never tell our display from anyone else's.
+    return ["Xephyr", display, "-title", f"{SANDBOX_TITLE} {display}",
+            "-screen", size, "-br", "-ac", "-noreset", "-no-host-grab"]
 
 
 
