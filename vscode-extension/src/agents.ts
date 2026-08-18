@@ -11,6 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { agentsDir } from "./paths";
+import { livenessOf } from "./runStatus";
 
 /** One supervised run. Mirrors Python's `AgentRun`; unknown fields are ignored so a newer
  *  writer never breaks an older reader. */
@@ -46,6 +47,12 @@ export interface AgentRun {
   foreign?: boolean;
 }
 
+/** Did this run's own stream reach an end? Read from the normalised mirror, so it costs one small
+ *  read and needs no knowledge of any vendor's dialect. */
+function streamEnded(runId: string): boolean {
+  return readAgentActivity(runId, 4).some((a) => a.kind === "done" || a.kind === "error");
+}
+
 /** Is that pid still there?
  *
  *  Node documents signal 0 as an existence probe that sends nothing — the check the Python side
@@ -78,11 +85,15 @@ export function readAgentRuns(): AgentRun[] {
       const raw = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
       if (!raw || typeof raw.run_id !== "string") continue;
       const run = raw as AgentRun;
-      // Liveness is the one field the file cannot vouch for: a crash leaves "running" behind
-      // with nothing to correct it, and a row that spins forever is worse than no row.
-      if (run.status === "running" && typeof run.pid === "number" && !alive(run.pid)) {
-        run.status = "crashed";
-      }
+      // Liveness is the one field the file cannot vouch for. The agent's own stream is consulted
+      // too: a detached run's exit code is written by nobody, so the probe alone called every
+      // finished agent a crash at the moment it succeeded.
+      run.status = livenessOf(
+        run.status,
+        run.pid,
+        typeof run.pid === "number" ? alive(run.pid) : false,
+        run.status === "running" ? streamEnded(run.run_id) : false,
+      );
       runs.push(run);
     } catch {
       continue;
