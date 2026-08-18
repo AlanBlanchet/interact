@@ -272,11 +272,19 @@ class BrowserManager:
     def is_recording(self) -> bool:
         return self._recording_dir is not None
 
+    def _active_page(self):
+        """The page every other tool is looking at. Recording used ``pages[0]``, so after a
+        ``switch_tab`` it rebuilt the session around a different page than the one being driven."""
+        pages = self._context.pages if self._context else []
+        if not pages:
+            return None
+        return pages[min(self._active_tab, len(pages) - 1)]
+
     async def start_recording(self) -> str:
         if self._recording_dir:
             raise RuntimeError("Already recording — call stop_recording first")
         await self.ensure_ready()
-        page = self._context.pages[0] if self._context.pages else None
+        page = self._active_page()
         url = page.url if page and page.url != "about:blank" else None
         cookies = await self._context.cookies() if self._context else []
         await self._context.close()
@@ -285,6 +293,7 @@ class BrowserManager:
         await self._new_context(record_video_dir=self._recording_dir.name)
         if cookies:
             await self._context.add_cookies(cookies)
+        await self.reapply_media()  # a rebuilt context drops forced media features (#110)
         page = self._context.pages[0]
         if url:
             await page.goto(url)
@@ -293,7 +302,7 @@ class BrowserManager:
     async def stop_recording(self) -> bytes:
         if not self._recording_dir:
             raise RuntimeError("Not recording — call start_recording first")
-        page = self._context.pages[0] if self._context.pages else None
+        page = self._active_page()
         url = page.url if page and page.url != "about:blank" else None
         cookies = await self._context.cookies() if self._context else []
         await self._context.close()
@@ -308,6 +317,7 @@ class BrowserManager:
         await self._new_context()
         if cookies:
             await self._context.add_cookies(cookies)
+        await self.reapply_media()  # a rebuilt context drops forced media features (#110)
         page = self._context.pages[0]
         if url:
             await page.goto(url)
@@ -402,7 +412,7 @@ class BrowserManager:
         """Recreate the context with current kwargs, preserving cookies and the open URL — for a
         setting fixed at context creation (viewport / DPR / mobile / touch) that changed
         mid-session. Mirrors the start/stop-recording swap."""
-        page = self._context.pages[0] if self._context and self._context.pages else None
+        page = self._active_page()
         url = page.url if page and page.url != "about:blank" else None
         cookies = await self._context.cookies() if self._context else []
         if self._context:
@@ -469,10 +479,10 @@ class BrowserManager:
             kw["user_agent"] = dev["user_agent"]
         if record_video_dir:
             kw["record_video_dir"] = record_video_dir
-            kw["record_video_size"] = {
-                "width": self._config.viewport_width,
-                "height": self._config.viewport_height,
-            }
+            # Must match the viewport ABOVE, emulation included. Asking for a 390px viewport and
+            # 1280x720 frames records the mobile session as a desktop layout — which reads exactly
+            # like another caller's context served your named session (#110).
+            kw["record_video_size"] = dict(kw["viewport"])
         if self._http_credentials:  # authenticate Basic-auth sites without the native dialog (#70)
             kw["http_credentials"] = self._http_credentials
         return kw
