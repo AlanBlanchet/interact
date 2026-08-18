@@ -480,15 +480,15 @@ def test_the_definition_file_is_where_the_system_prompt_lives(tmp_path, monkeypa
     definitions = tmp_path / ".claude" / "agents"
     definitions.mkdir(parents=True)
     (definitions / "code-reviewer.md").write_text("---\nname: code-reviewer\n---\n")
-    reg.register(run_id="r1", name="code-reviewer", provider="claude", task="t", pid=None,
-                 agent="code-reviewer")
-    assert reg.definition_path("r1") == definitions / "code-reviewer.md"
+    run = reg.register(run_id="r1", name="code-reviewer", provider="claude", task="t", pid=None,
+                       agent="code-reviewer")
+    assert run.definition_path == str(definitions / "code-reviewer.md")
+    assert reg._read_record("r1").definition_path == str(definitions / "code-reviewer.md")
 
 
 def test_no_definition_means_no_path_rather_than_a_broken_link(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    reg.register(run_id="r1", name="claude", provider="claude", task="t", pid=None)
-    assert reg.definition_path("r1") is None
+    assert reg.register(run_id="r1", name="claude", provider="claude", task="t", pid=None).definition_path is None
 
 
 def test_token_use_accumulates_so_context_size_is_visible(tmp_path, monkeypatch):

@@ -45,3 +45,28 @@ def test_an_agent_whose_definition_file_is_missing_records_nothing(monkeypatch):
     monkeypatch.setattr(registry.PROVIDERS["claude"], "definition_path", lambda agent: None)
     run = registry.register(run_id="r3", pid=3, provider="claude", name="x", agent="ghost")
     assert run.definition_path is None, "a link to a file that does not exist is worse than none"
+
+
+def test_a_record_written_before_the_field_existed_is_backfilled(monkeypatch, tmp_path):
+    """Otherwise the client has to keep its own copy of where a provider stores definitions —
+    which is the vendor hard-coding this change exists to remove. Records already on disk are
+    repaired on read instead, so the guess has nobody left to serve."""
+    definition = tmp_path / "researcher.md"
+    definition.write_text("# researcher\n")
+    monkeypatch.setattr(registry.PROVIDERS["claude"], "definition_path", lambda agent: definition)
+
+    run = registry.register(run_id="old", pid=1, provider="claude", name="researcher", agent="researcher")
+    # Rewrite it the way an older interact would have: with no definition_path at all.
+    stored = registry._record_path("old")
+    stored.write_text(run.model_dump_json(exclude={"definition_path"}))
+
+    assert registry._read_record("old").definition_path == str(definition)
+    assert "definition_path" in stored.read_text(), "and repaired on disk, not re-resolved forever"
+
+
+def test_backfill_does_not_touch_a_plain_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(registry.PROVIDERS["claude"], "definition_path", lambda agent: tmp_path / "x.md")
+    registry.register(run_id="plain", pid=1, provider="claude", name="a task")
+    before = registry._record_path("plain").read_text()
+    assert registry._read_record("plain").definition_path is None
+    assert registry._record_path("plain").read_text() == before, "no pointless rewrite"

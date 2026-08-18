@@ -115,19 +115,6 @@ def _record_path(run_id: str) -> Path:
     return agents_dir() / f"{run_id}.json"
 
 
-def definition_path(run_id: str) -> Path | None:
-    """Where a run's system prompt lives, or None when it is not a defined agent.
-
-    Only the provider knows where its definitions live, so the lookup goes through it rather than
-    hard-coding one vendor's layout here.
-    """
-    run = _read_record(run_id)
-    if run is None or not run.agent:
-        return None
-    provider = PROVIDERS.get(run.provider)
-    return provider.definition_path(run.agent) if provider is not None else None
-
-
 def messages_path(run_id: str) -> Path:
     """Messages live BESIDE the vendor stream, never inside it. The stream is the vendor's own
     file and the mirror is rewritten from it, so anything appended there is clobbered on the next
@@ -201,9 +188,32 @@ def stop(run_id: str) -> bool:
 
 def _read_record(run_id: str) -> AgentRun | None:
     try:
-        return AgentRun.model_validate_json(_record_path(run_id).read_text())
+        run = AgentRun.model_validate_json(_record_path(run_id).read_text())
     except (OSError, ValueError):
         return None
+    return _backfill_definition(run)
+
+
+def _backfill_definition(run: AgentRun) -> AgentRun:
+    """Repair a record written before ``definition_path`` was tracked.
+
+    Every reader of these files — the VS Code panel above all — reads them straight off disk and
+    cannot ask a provider where its definitions live. Without this, each client keeps its own copy
+    of one vendor's directory layout, which is the hard-coding the field exists to remove. Repaired
+    on disk rather than re-resolved on every read, so it costs one write per stale record, once.
+    """
+    if run.definition_path is not None or not run.agent:
+        return run
+    provider = PROVIDERS.get(run.provider)
+    resolved = provider.definition_path(run.agent) if provider is not None else None
+    if resolved is None:
+        return run
+    run.definition_path = str(resolved)
+    try:
+        _write(run)
+    except OSError:
+        pass  # a read-only or vanished registry must not break reading
+    return run
 
 
 def _write(run: AgentRun) -> None:
@@ -480,7 +490,7 @@ def list_runs(*, include_foreign: bool = False) -> list[AgentRun]:
     if d.exists():
         for path in sorted(d.glob("*.json")):
             try:
-                runs.append(AgentRun.model_validate_json(path.read_text()))
+                runs.append(_backfill_definition(AgentRun.model_validate_json(path.read_text())))
             except (OSError, ValueError):
                 continue  # a corrupt record must not hide every other run
     runs = [_derive(r) for r in runs]

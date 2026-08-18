@@ -13,30 +13,29 @@ test("the system prompt comes from what the provider actually resolved", () => {
   // would get a link to a Claude path that does not exist, so no link at all.
   const files = chatFiles(
     { ...RUN, agent: "researcher", definition_path: "/opt/codex/defs/researcher.toml" },
-    "/runs", "/home/alan", all,
+    "/runs", all,
   );
   assert.equal(files.find((f) => f.label === "system prompt")?.path, "/opt/codex/defs/researcher.toml");
 });
 
-test("a run recorded before the path was tracked still gets its link", () => {
-  const files = chatFiles({ ...RUN, agent: "researcher" }, "/runs", "/home/alan", all);
-  assert.equal(
-    files.find((f) => f.label === "system prompt")?.path,
-    "/home/alan/.claude/agents/researcher.md",
-  );
+test("a run whose provider resolved nothing offers no system prompt", () => {
+  // Never a guess at where a definition might live: that is the vendor hard-coding this exists
+  // to remove, and a link to a file that is not there is worse than no link.
+  const files = chatFiles({ ...RUN, agent: "researcher" }, "/runs", all);
+  assert.equal(files.find((f) => f.label === "system prompt"), undefined);
 });
 
 test("a plain run offers no system prompt", () => {
-  const files = chatFiles(RUN, "/runs", "/home/alan", all);
+  const files = chatFiles(RUN, "/runs", all);
   assert.equal(files.find((f) => f.label === "system prompt"), undefined);
 });
 
 test("its own artefacts are offered beside it", () => {
-  const labels = chatFiles(RUN, "/runs", "/home/alan", all).map((f) => f.label);
+  const labels = chatFiles(RUN, "/runs", all).map((f) => f.label);
   assert.deepEqual(labels, ["transcript", "raw stream", "messages"]);
 });
 
 test("a file that is not there is not offered — a button that opens nothing is worse", () => {
-  const files = chatFiles(RUN, "/runs", "/home/alan", (p) => p.endsWith(".jsonl") && !p.includes("raw"));
+  const files = chatFiles(RUN, "/runs", (p) => p.endsWith(".jsonl") && !p.includes("raw"));
   assert.deepEqual(files.map((f) => f.label), ["transcript", "messages"]);
 });
