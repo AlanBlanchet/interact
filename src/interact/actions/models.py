@@ -212,6 +212,21 @@ class HoverAction(_CoordinateTargetMixin):
 
 
 class TypeTextAction(_RefSelectorLocator, Action):
+    """Type into a field, replacing what is there unless ``clear_first`` is off.
+
+    ``clear_first`` replaces the WHOLE field, and in a mode-prefixed input the mode lives in the
+    text: VS Code's command palette opens pre-filled with ``>``, go-to-line with ``:``, symbol
+    search with ``@``. Typing a command name alone therefore does not fail to match it — it
+    silently switches the widget to a different search and reports no results, which reads like a
+    wrong command name and cost one caller four round-trips before they worked it out (#114).
+
+    So when a shortcut opened a prefixed input, type the prefix yourself (``">Interact: Show
+    Team"``), or pass ``clear_first=false`` to append to what is already there. Deliberately not
+    inferred: preserving a leading character that "looks like" a mode would mean this tool
+    carrying one editor's prefix alphabet, and would refuse to clear a field whose content
+    genuinely starts with it.
+    """
+
     type: Literal["type_text"] = "type_text"
     ref: str | None = None
     selector: str | None = None
