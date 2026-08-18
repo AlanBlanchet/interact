@@ -61,11 +61,28 @@ class _FakeKbd:
         return out
 
 
-def _uinput():
+def _uinput(declared: set[str] | None = None):
+    """A pointer with no real uinput device behind it.
+
+    `_declared` is set here rather than defaulted inside the guard: production code reading it
+    through a `getattr` default meant the check quietly did nothing wherever the attribute was
+    absent — which was most of these tests. The fixture carries the cost of using `__new__`.
+    """
     up = UinputPointer.__new__(UinputPointer)  # skip __init__ (no real uinput device)
     up._ecodes = _FakeEcodes()
     up._kbd = _FakeKbd()
+    up._declared = declared if declared is not None else _EVERY_KEY
     return up
+
+
+class _EveryKey(frozenset):
+    """The fixture's keyboard declares whatever it is asked for, unless a test says otherwise."""
+
+    def __contains__(self, item) -> bool:
+        return True
+
+
+_EVERY_KEY = _EveryKey()
 
 
 def test_uinput_chord_holds_modifier_then_releases_in_reverse():
@@ -162,8 +179,7 @@ def test_function_keys_are_declared():
 
 def test_an_undeclared_key_fails_loudly_rather_than_doing_nothing():
     """The reporter's actual complaint: 'silently gets a no-op instead of an error'."""
-    up = _uinput()
-    up._declared = {"KEY_A"}
+    up = _uinput(declared={"KEY_A"})
 
     with pytest.raises(ValueError, match="cannot send"):
         up.key("KEY_SYSRQ")
@@ -184,3 +200,31 @@ def test_the_portable_backend_also_refuses_a_key_it_cannot_resolve():
     assert b._resolve_key("x") == "x"
     with pytest.raises(ValueError, match="cannot send"):
         b._resolve_key("f13")
+
+
+def test_type_text_puts_a_shifted_character_in_ONE_frame():
+    """This is the evidence that the chord's frame-splitting is not the fix for #115.
+
+    `type_text` writes shift-down, key-down, key-up, shift-up and a single syn() — exactly the
+    "atomic frame" a chord was said to be broken by — and typing capitals is the most exercised
+    path in this module. Both cannot be true, so the theory is wrong and the cause is still open.
+    Pinned here so nobody re-derives the same wrong explanation from the chord code alone.
+    """
+    up = _uinput()
+    up._char_spec = lambda ch: ("KEY_A", True)
+    up.type_text("A")
+
+    assert up._kbd.frames() == [[
+        ("KEY_LEFTSHIFT", 1), ("KEY_A", 1), ("KEY_A", 0), ("KEY_LEFTSHIFT", 0),
+    ]]
+
+
+def test_the_guard_cannot_silently_skip_itself():
+    """It used to read `getattr(self, "_declared", None)` and do nothing when absent — the shape a
+    fixture presses onto production code. A pointer with no declared set must now fail loudly
+    rather than wave the key through."""
+    up = _uinput()
+    del up._declared
+
+    with pytest.raises(AttributeError):
+        up.key("a")

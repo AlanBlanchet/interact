@@ -120,6 +120,10 @@ class UinputPointer:
             ) from exc
 
         self._ecodes = ecodes
+        # Set BEFORE the device is opened, so the guard below can never silently no-op: it used to
+        # read through a getattr default, which meant it did nothing at all wherever the attribute
+        # was missing — including in most of its own tests.
+        self._declared = set(_keyboard_codes(ecodes))
         self.screen_w, self.screen_h, self.abs_max = screen_w, screen_h, abs_max
         capabilities = {
             ecodes.EV_KEY: [
@@ -140,9 +144,8 @@ class UinputPointer:
             # A SEPARATE keyboard node: the kernel drops key events a device never
             # declared, and a touchscreen (INPUT_PROP_DIRECT) + keyboard on one node
             # confuses libinput's classification — so typing/keys get their own device.
-            declared = _keyboard_codes(ecodes)
-            self._declared = set(declared)
-            self._kbd = UInput({ecodes.EV_KEY: declared}, name="interact-virtual-keyboard")
+            self._kbd = UInput({ecodes.EV_KEY: sorted(self._declared)},
+                               name="interact-virtual-keyboard")
         except (PermissionError, FileNotFoundError) as exc:
             raise RuntimeError(
                 "cannot open /dev/uinput — add a udev rule and join the `input` group "
@@ -193,21 +196,30 @@ class UinputPointer:
         """A uinput device may only emit codes it declared at creation; anything else the kernel
         discards without a word. That silence is the actual defect users report — the key simply
         does nothing and nothing points at why (#115)."""
-        declared = getattr(self, "_declared", None)
-        if declared is not None and code not in declared:
+        if code not in self._declared:
             raise ValueError(
-                f"cannot send {spec!r}: the virtual keyboard does not declare that key, so the "
-                "kernel would discard it silently. Add it to _keyboard_codes()."
+                f"cannot send {spec!r}: not a key this virtual keyboard declares, so the kernel "
+                "would discard it in silence. Letters, digits, F1-F12, the arrows, and "
+                "ctrl/shift/alt/super are available."
             )
 
     def key(self, name: str) -> None:
         """Press a key or chord.
 
-        Each transition gets its own SYN frame. An evdev frame is ATOMIC — writing ctrl-down and
-        p-down before the same `syn()` tells the compositor they happened simultaneously, and the
-        key can then be evaluated against the modifier state from BEFORE the frame, i.e. unmodified.
-        Real hardware never does this: the modifier is latched, then the key arrives. Shared chord
-        split with the portable backend via _parse_chord.
+        Each transition gets its own SYN frame, which is what real hardware does: the modifier is
+        latched, then the key arrives.
+
+        It is NOT the explanation for #115, and an earlier version of this docstring said it was.
+        The theory was that an atomic frame lets the key be evaluated against the modifier state
+        from before it — but ``type_text`` below writes shift-down, key-down, key-up, shift-up and
+        a SINGLE ``syn()``, and typing capitals is this module's most exercised path. If the theory
+        held, every uppercase character would be broken. So the framing here is correctness for its
+        own sake and costs nothing (frames are delimiters, not transactions); the cause of a
+        declared chord arriving unmodified is still unconfirmed. The candidate not yet excluded is
+        a settle race: X and libinput learn about the uinput node through udev AFTER
+        ``UI_DEV_CREATE``, and events written before that are dropped with no error.
+
+        Shared chord split with the portable backend via _parse_chord.
         """
         mods, final = _parse_chord(name)
         held = [self._key_code(m) for m in mods]

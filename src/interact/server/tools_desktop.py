@@ -363,8 +363,9 @@ async def _record_browser(
     session: str,
 ) -> str:
     if start:
-        url = await mgr.start_recording()
-        return _session_response(session, f"Recording started. Current URL: {url}")
+        url, trouble = await mgr.start_recording()
+        note = f" ({trouble})" if trouble else ""
+        return _session_response(session, f"Recording started. Current URL: {url}{note}")
     video_bytes = await mgr.stop_recording()
     if not video_bytes:
         return _session_response(session, "Recording stopped but no video data captured.")

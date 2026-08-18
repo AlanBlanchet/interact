@@ -27,24 +27,35 @@ def chromium_launch_kwargs(browser_type: str, headless: bool, slow_mo: int) -> d
     return kw
 
 
-async def _restore_url(page, url: str) -> str:
+def _redacted(url: str) -> str:
+    """A URL safe to log: the query string can carry a session token or a signed parameter."""
+    base, sep, _ = url.partition("?")
+    return f"{base}?…" if sep else base
+
+
+async def _restore_url(page, url: str) -> tuple[str, str | None]:
     """Put the session back where it was after a context swap, best effort.
 
     Recording rebuilds the context, so the page has to be navigated back. That navigation is the
     LEAST important thing happening here — by the time it runs the recording context already
     exists and is capturing — so a slow page must not cost the caller the whole recording. Seen in
     real client logs as three `Page.goto: Timeout exceeded` failures out of `record(start=True)`.
+
+    Returns where the page ACTUALLY is, and what went wrong if anything did. A log line does not
+    count as telling the caller: it goes to the server's stderr, while the agent reads only the
+    tool result — so a swallowed failure here is the same silent-wrong shape being fixed elsewhere
+    in this release.
     """
     try:
         await page.goto(url)
+        return page.url, None
     except Exception as exc:
+        first = str(exc).splitlines()[0]
         logging.getLogger("interact").warning(
             "could not restore %s after the recording context swap (%s) — recording continues",
-            url, exc,
+            _redacted(url), first,
         )
-    # Where the page ACTUALLY is, not where it was asked to go. `record(start=True)` reports this
-    # back as "Current URL", and a failed restore used to make that sentence simply untrue.
-    return page.url
+        return page.url, f"could not return to {_redacted(url)} ({first}) — navigate again before acting"
 
 
 class BrowserManager:
@@ -304,7 +315,7 @@ class BrowserManager:
         pages = self._context.pages if self._context else []
         return pages[self._active_index(pages)] if pages else None
 
-    async def start_recording(self) -> str:
+    async def start_recording(self) -> tuple[str, str | None]:
         if self._recording_dir:
             raise RuntimeError("Already recording — call stop_recording first")
         await self.ensure_ready()
@@ -324,9 +335,17 @@ class BrowserManager:
             # which is how one slow page ended recording permanently in a real run.
             self._recording_dir.cleanup()
             self._recording_dir = None
+            # The old context was closed before the swap, so without this the session is left
+            # with a dead one and every later action fails for a second, unrelated-looking reason.
+            try:
+                await self._new_context()
+            except Exception:
+                self._context = None
             raise
         page = self._context.pages[0]
-        return await _restore_url(page, url) if url else "about:blank"
+        if not url:
+            return "about:blank", None
+        return await _restore_url(page, url)
 
     async def stop_recording(self) -> bytes:
         if not self._recording_dir:

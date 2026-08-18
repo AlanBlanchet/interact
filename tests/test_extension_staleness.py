@@ -68,3 +68,50 @@ def test_it_reuses_the_process_start_helper():
     import interact.extension_status as es
 
     assert es._process_start is reg._process_start
+
+
+# --- code-reviewer findings: it must not crash off Linux, and it must not count language servers ---
+
+
+def test_it_does_not_crash_where_proc_does_not_exist(monkeypatch, tmp_path):
+    """`/proc` is Linux-only. Reading it unguarded means `interact doctor` — a DIAGNOSTIC, the
+    command someone runs precisely when things are wrong — tracebacks for every macOS and Windows
+    user with the extension installed. The server half already carries a platform guard; this one
+    did not, which is the same class the project has been bitten by in CI before."""
+    import interact.extension_status as es
+
+    ext = tmp_path / "alanblanchet.interact-0.28.0"
+    (ext / "out").mkdir(parents=True)
+    (ext / "out" / "extension.js").write_text("x")
+    monkeypatch.setattr(es, "_extensions_dir", lambda: tmp_path)
+    monkeypatch.setattr(es, "_tree_version", lambda: "0.28.0")
+
+    def no_proc():
+        raise FileNotFoundError("/proc")
+
+    monkeypatch.setattr(es, "_iter_proc", no_proc)
+
+    assert es.extension_status() is None  # unknown, not a crash
+
+
+def test_a_language_server_is_not_an_editor(tmp_path, monkeypatch):
+    """VS Code spawns pylance/tsserver/copilot as `code <server.js>` with ELECTRON_RUN_AS_NODE and
+    no `--type=`, so a filter of "basename is code, no --type=" counted 14 editors for one open
+    window. The verdict was still right — a server is a child, so it cannot predate its parent —
+    but a count nobody can reconcile with their screen is not a diagnostic."""
+    import interact.extension_status as es
+
+    assert es._is_editor_cmdline(b"/usr/share/code/code\x00") is True
+    assert es._is_editor_cmdline(b"/usr/share/code/code\x00--ozone-platform-hint=auto\x00") is True
+    assert es._is_editor_cmdline(b"/usr/share/code/code\x00--type=renderer\x00") is False
+    assert es._is_editor_cmdline(
+        b"/usr/share/code/code\x00/home/alan/.vscode/extensions/ms-python/server.js\x00--stdio\x00"
+    ) is False, "a language server run through the code binary is not an editor window"
+
+
+def test_other_vs_code_flavours_are_recognised():
+    """Insiders, VSCodium and code-server are the same product for this purpose."""
+    import interact.extension_status as es
+
+    for exe in (b"code-insiders", b"codium", b"code-server", b"electron"):
+        assert es._is_editor_cmdline(b"/usr/bin/" + exe + b"\x00"), exe

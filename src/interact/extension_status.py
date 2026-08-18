@@ -19,22 +19,59 @@ from pathlib import Path
 
 from interact.server_registry import _process_start
 
-#: Shared with the server half on purpose: one question, one answer.
-_process_start = _process_start
-
-_DIR_RE = re.compile(r"^alanblanchet\.interact-(\d+\.\d+\.\d+)$", re.IGNORECASE)
+#: VS Code installs an extension as `<publisher>.<name>-<version>`. Both halves already live in
+#: the manifest this module reads, so they are derived rather than spelled a second time here.
+def _dir_re() -> re.Pattern[str]:
+    manifest = _manifest()
+    publisher = (manifest.get("publisher") or "alanblanchet").lower()
+    name = (manifest.get("name") or "interact").lower()
+    return re.compile(rf"^{re.escape(publisher)}\.{re.escape(name)}-(\d+\.\d+\.\d+)$", re.IGNORECASE)
 
 
 def _extensions_dir() -> Path:
     return Path.home() / ".vscode" / "extensions"
 
 
-def _tree_version() -> str | None:
+def _manifest() -> dict:
     pkg = Path(__file__).resolve().parents[2] / "vscode-extension" / "package.json"
     try:
-        return json.loads(pkg.read_text()).get("version")
+        return json.loads(pkg.read_text())
     except (OSError, ValueError):
-        return None
+        return {}
+
+
+def _tree_version() -> str | None:
+    return _manifest().get("version")
+
+
+_EDITOR_EXES = {"code", "code-insiders", "codium", "vscodium", "code-server", "electron"}
+
+
+def _is_editor_cmdline(raw: bytes) -> bool:
+    """Whether this command line is an editor WINDOW rather than one of its helpers.
+
+    Two things masquerade as the main process. Electron helpers carry `--type=`, and several of
+    them do not NUL-separate their argv at all, so the flag has to be matched against the whole
+    blob. Language servers are subtler: VS Code runs pylance, tsserver, copilot and friends
+    through the SAME binary with ELECTRON_RUN_AS_NODE and no `--type=`, so a check of "basename is
+    code, no --type=" counted fourteen editors for one open window. They are told apart by their
+    first argument being a script to run.
+    """
+    if not raw or b"--type=" in raw:
+        return False
+    parts = [p for p in raw.split(b"\0") if p]
+    if not parts:
+        return False
+    exe = Path(parts[0].split(b" ")[0].decode(errors="ignore")).name.lower()
+    if exe not in _EDITOR_EXES:
+        return False
+    # `code /path/to/server.js --stdio` is a language server wearing the editor's binary.
+    return not any(arg.endswith(b".js") for arg in parts[1:])
+
+
+def _iter_proc():
+    """Every /proc entry, or a FileNotFoundError where /proc does not exist."""
+    return Path("/proc").iterdir()
 
 
 def _editor_starts() -> list[float]:
@@ -46,19 +83,18 @@ def _editor_starts() -> list[float]:
     argv[1:] sees nothing. Match against the raw blob instead.
     """
     out: list[float] = []
-    for proc in Path("/proc").iterdir():
+    try:
+        entries = list(_iter_proc())
+    except OSError:
+        return []  # no /proc: macOS, Windows. Unknown, not a crash — this is a diagnostic.
+    for proc in entries:
         if not proc.name.isdigit():
             continue
         try:
             raw = (proc / "cmdline").read_bytes()
         except OSError:
             continue
-        if not raw:
-            continue
-        if b"--type=" in raw:
-            continue  # a renderer / utility / zygote / broker, not the main process
-        exe = raw.split(b"\0")[0].split(b" ")[0]
-        if Path(exe.decode(errors="ignore")).name not in {"code", "electron"}:
+        if not _is_editor_cmdline(raw):
             continue
         started = _process_start(int(proc.name))
         if started is not None:
@@ -85,9 +121,10 @@ def extension_status() -> dict | None:
     """
     d = _extensions_dir()
     installed: list[tuple[str, Path]] = []
+    pattern = _dir_re()
     try:
         for child in d.iterdir():
-            m = _DIR_RE.match(child.name)
+            m = pattern.match(child.name)
             if m:
                 installed.append((m.group(1), child))
     except OSError:
