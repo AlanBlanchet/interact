@@ -164,3 +164,24 @@ test("your own session says what it is, not that it is waiting", () => {
   assert.equal(team.workers[0].zone, "entry");
   assert.match(team.workers[0].activity, /your (own )?session|not started by interact/i);
 });
+
+// "And be able to see the agents actually communicate (send messages etc...)" — a room full of
+// people who never speak to each other is a set of processes, not a team.
+
+test("an exchange between two present workers becomes a link", () => {
+  const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
+    [{ from_run: "lead", to_run: "sub", text: "check the docs too" }]);
+  assert.deepEqual(team.links, [{ from_run_id: "lead", to_run_id: "sub", text: "check the docs too" }]);
+});
+
+test("a link to someone who has been forgotten is dropped, not drawn at nobody", () => {
+  const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
+    [{ from_run: "lead", to_run: "vanished", text: "hello" }]);
+  assert.deepEqual(team.links, []);
+});
+
+test("a message from the operator is not an agent-to-agent link", () => {
+  const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
+    [{ from_run: "operator", to_run: "lead", text: "do it" }]);
+  assert.deepEqual(team.links, []);
+});

@@ -4,7 +4,7 @@
  *  there because they are fetching a page right now. This is the pure half of that — no I/O, no
  *  rendering — so the mapping can be argued with in tests rather than eyeballed on a canvas.
  */
-import type { TeamState, Worker, ZoneId } from "./team";
+import type { Link, TeamState, Worker, ZoneId } from "./team";
 
 /** One recorded step, as the panel already reads them. */
 export interface Step {
@@ -137,6 +137,7 @@ export function buildTeam(
   runs: RunLike[],
   latestStep: (runId: string) => Step | undefined,
   now: number = Date.now() / 1000,
+  messages: { from_run: string; to_run: string; text?: string }[] = [],
 ): TeamState {
   const workers: Worker[] = runs.map((run) => {
     const step = latestStep(run.run_id);
@@ -157,5 +158,11 @@ export function buildTeam(
       idle_seconds: Math.max(0, now - since),
     };
   });
-  return { workers, at: now };
+  // Only exchanges between people actually in the room: a link to someone who has been forgotten
+  // would be an arrow pointing at nobody.
+  const present = new Set(workers.map((w) => w.run_id));
+  const links: Link[] = messages
+    .filter((m) => present.has(m.from_run) && present.has(m.to_run) && m.from_run !== m.to_run)
+    .map((m) => ({ from_run_id: m.from_run, to_run_id: m.to_run, text: (m.text ?? "").slice(0, 80) }));
+  return { workers, links, at: now };
 }

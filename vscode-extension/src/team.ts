@@ -58,8 +58,20 @@ export interface Worker {
   idle_seconds: number;
 }
 
+/** One agent addressing another — the thing that makes a set of workers a TEAM rather than a
+ *  set of processes. Drawn between the rooms the two ends are standing in. */
+export interface Link {
+  from_run_id: string;
+  to_run_id: string;
+  /** What was said, clipped — enough to read the exchange, not the whole message. */
+  text: string;
+}
+
 export interface TeamState {
   workers: Worker[];
+  /** Who has spoken to whom. Optional: a renderer may ignore it, but without it the room shows
+   *  people standing in it rather than a team working together. */
+  links?: Link[];
   /** Wall-clock of this snapshot, so the view can age what it draws. */
   at: number;
 }

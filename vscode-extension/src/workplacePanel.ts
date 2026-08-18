@@ -10,7 +10,7 @@
 import * as fs from "fs";
 import * as vscode from "vscode";
 
-import { readAgentActivity, readAgentRuns } from "./agents";
+import { readAgentActivity, readAgentMessages, readAgentRuns } from "./agents";
 import { agentsDir } from "./paths";
 import { buildTeam } from "./teamState";
 import { renderWorkplace } from "./workplaceView";
@@ -59,6 +59,8 @@ export class WorkplacePanel {
       // The latest recorded step is what puts a worker in a room; one read per worker, and the
       // panel is refreshed on a debounce, so this stays cheap even with a busy registry.
       (runId) => readAgentActivity(runId, 1)[0],
+      Date.now() / 1000,
+      readAgentMessages() as never,
     );
   }
 
