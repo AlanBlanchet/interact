@@ -44,6 +44,11 @@ class AgentRun(BaseModel):
     #: prompt and tool set (Claude Code: ``~/.claude/agents/<agent>.md``). None for a plain run.
     #: Without it a run knows its label but not what it actually IS, so nothing can link to it.
     agent: str | None = None
+    #: Where that definition's system prompt actually lives, resolved at registration. The name
+    #: alone is only answerable by a caller that can import this module and ask the provider — and
+    #: the panel reads these records straight off disk, so a name it cannot resolve is a link it
+    #: cannot offer. Recorded, not derived on read, so it also survives the file being moved later.
+    definition_path: str | None = None
     parent_run_id: str | None = None
     started_at: float = 0.0
     finished_at: float | None = None
@@ -157,9 +162,12 @@ def _terminate(pid: int) -> bool:
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
              agent: str | None = None) -> AgentRun:
+    provider_impl = PROVIDERS.get(provider)
+    definition = provider_impl.definition_path(agent) if (provider_impl and agent) else None
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
-                   agent=agent, started_at=time.time())
+                   agent=agent, definition_path=str(definition) if definition else None,
+                   started_at=time.time())
     d = agents_dir()
     d.mkdir(parents=True, exist_ok=True)
     _record_path(run_id).write_text(run.model_dump_json())

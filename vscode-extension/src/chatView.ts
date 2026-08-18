@@ -15,6 +15,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
+import { chatFiles } from "./chatFiles";
 import { ChatFile, chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
@@ -86,27 +87,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       status: run?.status,
       awaitingReply: isAwaitingReply(turns),
       run: run as never,
-      files: run ? this.files(run) : [],
+      files: run ? chatFiles(run, agentsDir(), os.homedir(), fs.existsSync) : [],
       sentBy: run?.parent_run_id
         ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null
         : null,
     });
-  }
-
-  /** The files behind a run: what it IS, and everything it wrote. Only ones that exist are
-   *  offered — a button that opens nothing is worse than no button. */
-  private files(run: AgentRun): ChatFile[] {
-    const dir = agentsDir();
-    const candidates: ChatFile[] = [
-      // The system prompt. Resolved the same way the provider resolves `--agent`.
-      ...(run.agent
-        ? [{ label: "system prompt", path: path.join(os.homedir(), ".claude", "agents", `${run.agent}.md`) }]
-        : []),
-      { label: "transcript", path: path.join(dir, `${run.run_id}.jsonl`) },
-      { label: "raw stream", path: path.join(dir, `${run.run_id}.raw.jsonl`) },
-      { label: "messages", path: path.join(dir, `${run.run_id}.messages.jsonl`) },
-    ];
-    return candidates.filter((f) => fs.existsSync(f.path));
   }
 
   /** Open a file in an editor — a webview cannot, so it asks us to.

@@ -28,6 +28,10 @@ export interface AgentRun {
   pid?: number | null;
   /** The DEFINITION this run is — resolves to the file holding its system prompt. */
   agent?: string | null;
+  /** Where that definition's system prompt actually lives, resolved by Python THROUGH the
+   *  provider at registration — so the link works for a CLI that does not keep its definitions
+   *  where Claude Code does. Absent on runs registered before it was tracked. */
+  definition_path?: string | null;
   /** Cumulative token use: how much CONTEXT it has consumed, which a cost figure alone hides. */
   input_tokens?: number | null;
   output_tokens?: number | null;
