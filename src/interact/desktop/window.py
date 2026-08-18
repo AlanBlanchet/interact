@@ -414,6 +414,31 @@ class DesktopWindow(BaseModel):
             return
         await self._run("xdotool", "windowactivate", "--sync", str(self.wid))
         await self._run("xdotool", "windowfocus", "--sync", str(self.wid))
+        await self._assert_focused()
+
+    async def _assert_focused(self) -> None:
+        """Confirm the intended window really has focus before any keystroke.
+
+        ``windowactivate`` is asynchronous and best-effort: a WM can refuse it, another window can
+        take focus first, or it can simply lose the race. Typing regardless sends the keys to
+        WHATEVER holds focus — which is how a command aimed at one editor landed in another and
+        killed the session issuing it. Keystrokes are unrecoverable once delivered, so this
+        refuses rather than hoping."""
+        if self.is_screen or not self.wid:
+            return
+        try:
+            raw = await self._run("xdotool", "getwindowfocus")
+        except Exception:
+            return  # cannot verify (no xdotool / odd WM) — do not block on the check itself
+        if not isinstance(raw, str):
+            return  # a runner that returns something else cannot answer the question
+        focused = raw.strip()
+        if focused.isdigit() and int(focused) != int(self.wid):
+            raise RuntimeError(
+                f"focus did not land on {self.name!r} (wid {self.wid}); window {focused} has it. "
+                "Refusing to type, because keystrokes go to whatever is focused and cannot be "
+                "taken back. Raise the window and retry."
+            )
 
     _BUTTON_NAMES = {1: "left", 2: "middle", 3: "right"}
 

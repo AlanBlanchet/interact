@@ -181,9 +181,12 @@ async def test_desktop_click_commands(mock_run, _win, button):
 @pytest.mark.asyncio
 async def test_desktop_type_commands(mock_run, _win):
     await _win.type_text("hello world")
-    assert mock_run.call_count == 3
+    assert mock_run.call_count == 4
     mock_run.assert_any_call("xdotool", "windowactivate", "--sync", "123")
     mock_run.assert_any_call("xdotool", "windowfocus", "--sync", "123")
+    # Focus is VERIFIED before any keystroke: an async activate can lose the race, and keys go to
+    # whatever is focused. Sending them blind is how a command lands in the wrong window.
+    mock_run.assert_any_call("xdotool", "getwindowfocus")
     mock_run.assert_any_call(
         "xdotool",
         "type",
@@ -198,9 +201,12 @@ async def test_desktop_type_commands(mock_run, _win):
 @pytest.mark.asyncio
 async def test_desktop_key_commands(mock_run, _win):
     await _win.press_key("Enter")
-    assert mock_run.call_count == 3
+    assert mock_run.call_count == 4
     mock_run.assert_any_call("xdotool", "windowactivate", "--sync", "123")
     mock_run.assert_any_call("xdotool", "windowfocus", "--sync", "123")
+    # Focus is VERIFIED before any keystroke: an async activate can lose the race, and keys go to
+    # whatever is focused. Sending them blind is how a command lands in the wrong window.
+    mock_run.assert_any_call("xdotool", "getwindowfocus")
     mock_run.assert_any_call(
         "xdotool",
         "key",
@@ -213,9 +219,12 @@ async def test_desktop_key_commands(mock_run, _win):
 @pytest.mark.asyncio
 async def test_desktop_key_combo(mock_run, _win):
     await _win.press_key("Control+a")
-    assert mock_run.call_count == 3
+    assert mock_run.call_count == 4
     mock_run.assert_any_call("xdotool", "windowactivate", "--sync", "123")
     mock_run.assert_any_call("xdotool", "windowfocus", "--sync", "123")
+    # Focus is VERIFIED before any keystroke: an async activate can lose the race, and keys go to
+    # whatever is focused. Sending them blind is how a command lands in the wrong window.
+    mock_run.assert_any_call("xdotool", "getwindowfocus")
     mock_run.assert_any_call(
         "xdotool",
         "key",

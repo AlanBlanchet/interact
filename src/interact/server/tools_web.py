@@ -82,6 +82,7 @@ async def run_actions(
     target: str | None = None,
     session: str = _DEFAULT_SESSION,
     record: bool = False,
+    allow_self: bool = False,
 ) -> str:
     """Execute a sequence of actions on a browser session or desktop window.
 
@@ -159,6 +160,9 @@ async def run_actions(
         frames are sampled to config.video_max_frames, so a short interaction keeps every step and
         a long one is evenly down-sampled.
     debug_dir: when set, dump inputs/outputs/screenshots to this directory for debugging.
+    allow_self: permit driving the editor window hosting THIS session. Refused by default,
+        because a command typed there (a reload, a close) can kill the agent mid-task. Prefer
+        opening a separate window — a fresh one also picks up a rebuilt extension.
     """
     inv = Debug.inv()
     Debug.dump_input(inv, {"tool": "run_actions", "actions": [a.model_dump() for a in actions],
@@ -167,6 +171,15 @@ async def run_actions(
     win, mgr, err = targets._resolve_target(target, session)
     if err:
         return err
+    # The blast radius of an action must never include the actor: typing into the editor that
+    # hosts this session can end the session issuing the command (a reload or a close kills the
+    # agent mid-task, with nothing left to notice or repair it). Observation stays allowed —
+    # this guards INPUT, not looking.
+    if win is not None and not allow_self and any(a.mutates for a in actions):
+        from interact.desktop.selfguard import is_self_window, self_target_error
+
+        if is_self_window(win.name):
+            return self_target_error(win.name)
     # When recording, capture a frame per step and let the video model read the sequence; the
     # action run itself returns its normal step report (so the query goes to the frames, not the
     # final state, avoiding a duplicate analysis).
