@@ -1,5 +1,6 @@
 import sys
 import subprocess
+import logging
 import tempfile
 from collections import deque
 import time
@@ -24,6 +25,26 @@ def chromium_launch_kwargs(browser_type: str, headless: bool, slow_mo: int) -> d
         kw["args"] = ["--disable-blink-features=AutomationControlled"]
         kw["ignore_default_args"] = ["--enable-automation"]
     return kw
+
+
+async def _restore_url(page, url: str) -> str:
+    """Put the session back where it was after a context swap, best effort.
+
+    Recording rebuilds the context, so the page has to be navigated back. That navigation is the
+    LEAST important thing happening here — by the time it runs the recording context already
+    exists and is capturing — so a slow page must not cost the caller the whole recording. Seen in
+    real client logs as three `Page.goto: Timeout exceeded` failures out of `record(start=True)`.
+    """
+    try:
+        await page.goto(url)
+    except Exception as exc:
+        logging.getLogger("interact").warning(
+            "could not restore %s after the recording context swap (%s) — recording continues",
+            url, exc,
+        )
+    # Where the page ACTUALLY is, not where it was asked to go. `record(start=True)` reports this
+    # back as "Current URL", and a failed restore used to make that sentence simply untrue.
+    return page.url
 
 
 class BrowserManager:
@@ -293,13 +314,19 @@ class BrowserManager:
         await self._context.close()
         self._element_map.clear()
         self._recording_dir = tempfile.TemporaryDirectory()
-        await self._new_context(record_video_dir=self._recording_dir.name)
-        if cookies:
-            await self._context.add_cookies(cookies)
+        try:
+            await self._new_context(record_video_dir=self._recording_dir.name)
+            if cookies:
+                await self._context.add_cookies(cookies)
+        except Exception:
+            # Whatever went wrong, this session is NOT recording. Leaving the marker set makes
+            # every later attempt fail with "Already recording" for the rest of the session —
+            # which is how one slow page ended recording permanently in a real run.
+            self._recording_dir.cleanup()
+            self._recording_dir = None
+            raise
         page = self._context.pages[0]
-        if url:
-            await page.goto(url)
-        return url or "about:blank"
+        return await _restore_url(page, url) if url else "about:blank"
 
     async def stop_recording(self) -> bytes:
         if not self._recording_dir:
@@ -321,7 +348,7 @@ class BrowserManager:
             await self._context.add_cookies(cookies)
         page = self._context.pages[0]
         if url:
-            await page.goto(url)
+            await _restore_url(page, url)
         return video_bytes
 
     async def close(self):
