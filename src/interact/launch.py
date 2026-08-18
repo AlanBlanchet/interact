@@ -147,8 +147,20 @@ def _editor_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
     # Same home as the browser profiles, so all sandbox state lives in one place a user
     # can inspect or delete.
     profile = Path.home() / ".interact" / "out" / "sandbox-profiles" / f"editor-{display.lstrip(':')}"
+    # A fresh profile means FIRST-RUN state: the welcome walkthrough, the workspace-trust modal,
+    # release notes, an extension's sign-in prompt. Each is a modal that swallows the very
+    # keystrokes an agent sends next, so the editor looks unresponsive for reasons that have
+    # nothing to do with the task. Suppress them so the sandbox opens ready to drive.
     return (
-        [*argv, f"--user-data-dir={profile}", "--disable-gpu", "--no-sandbox"],
+        [*argv,
+         f"--user-data-dir={profile}",
+         "--disable-gpu",
+         "--no-sandbox",
+         "--skip-welcome",
+         "--skip-release-notes",
+         "--disable-workspace-trust",
+         "--disable-telemetry",
+         "--disable-updates"],
         f" (isolated the editor into its own profile at {profile}: launching it otherwise hands "
         "the window to your already-running instance on the real desktop, and the sandbox stays "
         "empty)",

@@ -83,3 +83,13 @@ def test_the_rewrite_is_actually_applied_by_the_launcher():
 
     argv, note = apply_launch_rewrites(["code", "/tmp/proj"], ":99")
     assert "--user-data-dir" in " ".join(argv) and note
+
+
+def test_first_run_modals_are_suppressed():
+    """A fresh profile opens the welcome walkthrough and the workspace-trust modal, and each
+    swallows the keystrokes an agent sends next — the editor then looks unresponsive for reasons
+    unrelated to the task."""
+    argv, _ = _editor_isolate(["code", "/tmp/p"], ":99")
+    joined = " ".join(argv)
+    for flag in ("--skip-welcome", "--disable-workspace-trust", "--skip-release-notes"):
+        assert flag in joined, f"{flag} missing — a modal will eat the first keystrokes"
