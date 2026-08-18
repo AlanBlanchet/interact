@@ -221,3 +221,12 @@ test("nothing in the chat can shrink a column to one character", () => {
   assert.equal(/overflow-wrap:\s*anywhere/.test(html), false);
   assert.match(html, /overflow-wrap:\s*break-word/);
 });
+
+test("the details panel remembers whether it was open", () => {
+  // It holds session id, cwd and the system-prompt path — what a debugging user opens first —
+  // and the document is rebuilt on every agent switch, so it collapsed again each time.
+  const html = chatDocument({ nonce: "n", name: "g", status: "done", turns: [], run: RUN });
+  assert.match(html, /vscode\.getState\(\)/);
+  assert.match(html, /detailsOpen/);
+  assert.match(html, /addEventListener\("toggle"/);
+});

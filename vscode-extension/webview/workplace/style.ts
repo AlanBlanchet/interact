@@ -338,6 +338,10 @@ body.vscode-high-contrast-light .wp {
 .wp-worker[data-status="foreign"] { filter: opacity(.72); }
 .wp-worker:hover { filter: none; }
 .wp-worker:focus-visible { outline: 1px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 2px; }
+/* A worker carries role="button" and opens its conversation, and the pointer said otherwise.
+   No screenshot can show this — the cursor property puts nothing in the frame — so it survived
+   pass until a critic read the computed style instead of looking. */
+.wp-worker { cursor: pointer; }
 
 /* Activity is the liveliest thing here — it changes about once a second while an agent works —
    so it is the biggest text in the room, above the head, not a caption under a name. */
@@ -448,8 +452,12 @@ body.vscode-high-contrast-light .wp {
    Mixed toward --wp-dim rather than toward the background, so it stays dark in the light theme
    instead of washing out. */
 .wp-since {
-  font-size: 10px;
-  color: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-dim));
+  /* 11px, not 10. Measured on real pixels this text came in at 4.64:1 against a 9.40 nominal —
+     AA on a small glyph eats about half — so it cleared the floor by 0.14, which is not headroom.
+     Size is the stronger lever than colour here: the mix cannot go much past the name's own
+     contrast without the two reading as equals, but a larger glyph keeps more of its ink. */
+  font-size: 11px;
+  color: color-mix(in srgb, var(--wp-fg) 90%, var(--wp-dim));
   font-variant-numeric: tabular-nums;
   flex: none;
 }

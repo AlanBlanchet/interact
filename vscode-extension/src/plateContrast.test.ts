@@ -71,7 +71,7 @@ const BACKDROPS = [19, 34];
 // measuring 1.5-2.6:1 — worse than the original complaint that started all this.
 const PLATE_TEXT = [
   { selector: ".wp-name {", px: 10, floor: 8 },
-  { selector: ".wp-since {", px: 10, floor: 8.5 },
+  { selector: ".wp-since {", px: 11, floor: 9.5 },
 ];
 
 function plateSurface(theme: { bg: Rgb; fg: Rgb }, roomPct: number, plateBg: string): Rgb {

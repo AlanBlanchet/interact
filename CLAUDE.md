@@ -116,6 +116,24 @@ doubt, file as feedback and let triage decide; never spam the tracker with every
 Note: the editable install is live, so a reconnecting client can momentarily run half-edited
 source — verify a surprising logged error against committed code before treating it as a bug.
 
+## Delivery: a fix isn't live until the running instance runs it
+
+interact runs as a long-lived MCP server for other editor windows AND as a VS Code extension
+host — both freeze the code they imported at startup. "Committed + tests green" is not "the
+servers the user runs are fixed". Before claiming a fix delivered:
+
+- **MCP servers**: `interact doctor` lists any server running older code than the tree. Stale →
+  `interact doctor --fix` restarts them (each editor respawns interact on the next tool call).
+  This bit hard: four issue fixes shipped while two servers sat on a version two releases old,
+  and a `visual-critic` BLOCKING finding ("panel shows crashed for a clean run") turned out to
+  be that staleness, not a bug in the panel.
+- **VS Code extension**: `code <path>` on a RUNNING instance is handed to that instance's
+  singleton — the new window is served by the OLD extension host, so reinstalling the same
+  version never reaches it. Repackage, reinstall, then fully restart the window (or use a fresh
+  `--user-data-dir`), and confirm the new build is what is loaded.
+- **Editable install** caches the version — `uv tool install --force --editable .` to refresh
+  `interact --version`.
+
 ## Testing
 
 - Bug fix → write the failing test first.

@@ -281,6 +281,21 @@ ${header}
 ${composer}
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
+
+// "about this agent" holds the session id, the working directory and the path to the system
+// prompt — the first things wanted when something looks wrong. The document is rebuilt on every
+// agent switch, so a <details> reopened by hand collapsed again the moment you moved to the next
+// agent: one extra click, every time, for exactly the information a debugging user came for.
+// Remembered across renders in the webview's own state, which survives the rebuild.
+const details = document.querySelector("details.details");
+if (details) {
+  const state = vscode.getState() || {};
+  if (state.detailsOpen) details.open = true;
+  details.addEventListener("toggle", () => {
+    vscode.setState({ ...(vscode.getState() || {}), detailsOpen: details.open });
+  });
+}
+
 const form = document.getElementById("composer");
 if (form) {
   const box = document.getElementById("message");
