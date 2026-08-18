@@ -13,7 +13,7 @@ import * as fs from "fs";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { chatDocument } from "./conversationFormat";
+import { chatDocument, isAwaitingReply } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -52,13 +52,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private render(): void {
     if (!this.view) return;
     const run = this.run();
+    const turns = run ? readAgentActivity(run.run_id, 300) : [];
     this.view.webview.html = chatDocument({
       // A fresh nonce per render: the CSP admits only scripts carrying it, so nothing that
       // arrives in an agent's output can execute even if the escaping were ever wrong.
       nonce: Math.random().toString(36).slice(2) + Date.now().toString(36),
-      turns: run ? readAgentActivity(run.run_id, 300) : [],
+      turns,
       name: run?.name,
       status: run?.status,
+      awaitingReply: isAwaitingReply(turns),
     });
   }
 

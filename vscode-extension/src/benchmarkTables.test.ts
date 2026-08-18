@@ -51,3 +51,26 @@ test("an EMPTY live table never replaces a populated snapshot", () => {
   assert.equal(merged.benchmarks[0].published.retrieved, "2026-06-07",
     "and it keeps the OLD date, so the row still admits how old it is");
 });
+
+test("a live table OLDER than the bundled snapshot does not replace it", () => {
+  // OpenVLM's MMMU board last published 2025-09; the packaged snapshot is 2026-06. "Live" is not
+  // the same as "current" — the freshest DATED source wins, whichever side it is on.
+  const merged = mergeLiveTables(baked, {
+    mmmu: { retrieved: "2025-09-17", entries: [{ model_name: "GPT-5-20250807", score: 0.71 }] },
+  });
+  assert.equal(merged.benchmarks[0].published.entries[0].model_name, "OldModel");
+  assert.equal(merged.benchmarks[0].published.retrieved, "2026-06-07");
+});
+
+test("a live table NEWER than the snapshot does replace it", () => {
+  const merged = mergeLiveTables(baked, {
+    mmmu: { retrieved: "2026-08-18", entries: [{ model_name: "Fresh", score: 0.99 }] },
+  });
+  assert.equal(merged.benchmarks[0].published.entries[0].model_name, "Fresh");
+});
+
+test("an undated live table is taken when the snapshot has no date either", () => {
+  const undated = { benchmarks: [{ id: "x", published: { entries: [{ model_name: "B", score: 1 }] } }] };
+  const merged = mergeLiveTables(undated, { x: { entries: [{ model_name: "A", score: 2 }] } });
+  assert.equal(merged.benchmarks[0].published.entries[0].model_name, "A");
+});

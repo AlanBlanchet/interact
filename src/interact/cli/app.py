@@ -547,12 +547,13 @@ def agents_events(run_id: str, limit: int = 30) -> None:
     """Print what an agent run has been doing. Takes the short id `agents list` prints."""
     from interact.agents import registry as reg
 
-    events = reg.read_events(reg.resolve_run_id(run_id) or run_id)
+    resolved = reg.resolve_run_id(run_id) or run_id
+    events = reg.read_events(resolved)
     if not events:
         print(f"No events for {run_id!r}.")
         return
     for event in events[-max(1, limit):]:
-        print(f"  {event.kind:11} {event.summary()}")
+        print(f"  {event.kind:11} {event.summary(viewer=resolved)}")
 
 
 @agents_app.command(name="stop")
@@ -669,7 +670,7 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
         while True:
             events = reg.read_events(handle.run_id)
             for event in events[seen:]:
-                print(f"  {event.kind:11} {event.summary()}")
+                print(f"  {event.kind:11} {event.summary(viewer=handle.run_id)}")
             seen = len(events)
             if handle.process.returncode is not None:
                 break

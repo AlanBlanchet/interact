@@ -42,6 +42,10 @@ class AgentEvent(BaseModel):
     #: exchange, so a sequence view can draw the arrow from either transcript.
     from_run: str | None = None
     to_run: str | None = None
+    #: Where this sits in the vendor's raw stream — for a MESSAGE, how many raw lines existed when
+    #: it was sent. The vendor writes no timestamps, so this is what lets a message be shown where
+    #: it actually happened instead of dumped after every reply it caused.
+    raw_index: int | None = None
     # Cost is API-EQUIVALENT: on a subscription run the user is not billed this, they already paid
     # for the plan. The dashboard must label it accordingly rather than implying fresh spend.
     cost_usd: float | None = None
@@ -49,16 +53,51 @@ class AgentEvent(BaseModel):
     output_tokens: int | None = None
     raw_type: str = ""
 
-    def summary(self) -> str:
+    def summary(self, viewer: str | None = None) -> str:
         """One line for a supervisor row — what this agent is doing right now."""
         if self.kind == "tool":
             return f"using {self.tool}" if self.tool else "using a tool"
         if self.kind == "rate_limit":
             return self.text or "rate limited"
         if self.kind == "message":
-            return f"→ {self.to_run[:8]}: {self.text[:80]}" if self.to_run else self.text[:80]
+            return self._message_summary(viewer)
         if self.kind == "done":
             return "done"
         if self.kind == "error":
             return self.text or "failed"
         return " ".join(self.text.split())[:120]
+
+    def _message_summary(self, viewer: str | None) -> str:
+        """A message, from the reading agent's point of view.
+
+        This used to render "→ <to_run>" always, so a message the agent RECEIVED showed an arrow
+        pointing at its own id — indistinguishable from the agent-to-agent traffic the panel
+        exists to show, while showing none of it. Direction is relative to whoever is reading, and
+        the other end is named rather than hashed.
+        """
+        body = (self.text or "")[:80]
+        if not self.to_run:
+            return body
+        if viewer and self.to_run == viewer:
+            return f"← {_who(self.from_run)}: {body}"
+        if viewer and self.from_run == viewer:
+            return f"→ {_who(self.to_run)}: {body}"
+        return f"{_who(self.from_run)} → {_who(self.to_run)}: {body}"
+
+
+def _who(run_id: str | None) -> str:
+    """A run's name, for a reader. "operator" is a person, not a run; an id we cannot resolve
+    falls back to its short form rather than a bare empty string.
+
+    Reads the stored record DIRECTLY rather than going through ``list_runs``: that derives each
+    run's `last` line, which summarises an event, which asks who it was from — a loop that
+    recursed until the stack ran out.
+    """
+    if not run_id:
+        return "?"
+    if run_id == "operator":
+        return "operator"
+    from interact.agents import registry as reg
+
+    run = reg._read_record(run_id)
+    return run.name if run is not None else run_id[:8]

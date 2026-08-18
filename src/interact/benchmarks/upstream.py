@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime
 import logging
 import re
 import sys
@@ -90,6 +91,27 @@ class UpstreamSource(RegistryMixin, BaseModel):
             return resp.text
 
 
+def _leaderboard_date(data: dict) -> str:
+    """A leaderboard's own publication date as YYYY-MM-DD, or "" if it does not carry one.
+
+    The two OpenVLM boards stamp `time` differently — the image one 14 digits
+    (``YYYYMMDDHHMMSS``), the video one 12 (``YYMMDDHHMMSS``). Slicing eight characters off both
+    turned ``250625130006`` into "2506-25-13" and printed that at the user, so the result is
+    parsed as a real date and discarded when it is not one.
+    """
+    raw = str(data.get("time") or "")
+    if not raw.isdigit():
+        return ""
+    formats = {14: "%Y%m%d%H%M%S", 12: "%y%m%d%H%M%S", 8: "%Y%m%d", 6: "%y%m%d"}
+    fmt = formats.get(len(raw))
+    if fmt is None:
+        return ""
+    try:
+        return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""  # digits in the right shape but not a real date
+
+
 class GroundingLeaderboardJS(UpstreamSource):
     """Fetches the GUI-Agent grounding-leaderboard JSON result file.
 
@@ -100,6 +122,10 @@ class GroundingLeaderboardJS(UpstreamSource):
     - ScreenSpot v2:  ``data[name]['results']['overall_avg']``
     """
 
+    #: Where the model map lives inside the payload. OpenVLM wraps it — `{"time", "results"}` —
+    #: and the parser used to iterate the top level, so it matched nothing and returned an EMPTY
+    #: table. Empty is a silent failure: the panel just keeps serving the packaged snapshot.
+    root_path: tuple[str, ...] = ()
     score_path: tuple[str, ...] = ("results", "overall", "avg")
     # Multiply raw scores to normalise to [0,1]; OpenCompass reports 0–100, so set 0.01 there.
     score_scale: float = 1.0
@@ -109,8 +135,15 @@ class GroundingLeaderboardJS(UpstreamSource):
         data = json.loads(text)
         if not isinstance(data, dict):
             raise ValueError("expected top-level JSON object")
+        stamped = _leaderboard_date(data)
+        models: object = data
+        for key in self.root_path:
+            models = models.get(key) if isinstance(models, dict) else None
+        if not isinstance(models, dict):
+            return PublishedTable(source_url=self.url, retrieved=self.retrieved or _today(),
+                                  entries=[])
         entries: list[PublishedEntry] = []
-        for name, payload in data.items():
+        for name, payload in models.items():
             if not isinstance(payload, dict):
                 continue
             cur: object = payload
@@ -126,7 +159,9 @@ class GroundingLeaderboardJS(UpstreamSource):
         entries.sort(key=lambda e: e.score, reverse=True)
         return PublishedTable(
             source_url=self.url,
-            retrieved=self.retrieved or _today(),
+            # The leaderboard's OWN timestamp when it publishes one: stamping today's date on a
+            # table that stopped updating in 2025 is exactly how stale data passes for current.
+            retrieved=self.retrieved or stamped or _today(),
             lib_recommendation=entries[0].model_name if entries else None,
             entries=entries,
         )
@@ -222,8 +257,10 @@ UpstreamSource._register(
 # Image + Video: OpenCompass OpenVLM is the only machine-readable aggregate covering these
 # benchmark families (no clean no-auth alternative exists — researched 2026-06-07). It serves a
 # valid JSON body but the HTTPS cert is expired (the official HF leaderboard Spaces fetch it the
-# same way), so `insecure=True`. One object keyed by model; the score for a benchmark lives at
-# data[model][<field>] as a 0–100 number → score_scale=0.01. Field keys per OpenVLM/video JSON.
+# same way), so `insecure=True`. Shape: {"time": "YYYYMMDD…", "results": {model: {<field>:
+# {"Overall": 0–100}}}} → root_path/score_path below, score_scale=0.01. NOTE: the leaderboard
+# itself last published 2025-09, so its numbers are OLDER than the packaged snapshot; whichever
+# source carries the newer `retrieved` date is the one that should be shown.
 _OPENVLM = "https://opencompass.openxlab.space/assets/OpenVLM.json"
 _OPENVLM_VIDEO = "https://opencompass.openxlab.space/utils/video_leaderboard.json"
 for _bid, _field, _name in [
@@ -233,7 +270,8 @@ for _bid, _field, _name in [
     UpstreamSource._register(
         GroundingLeaderboardJS(
             id=f"{_bid}_openvlm", name=_name, url=_OPENVLM, benchmark_id=_bid,
-            score_path=(_field,), score_scale=0.01, insecure=True,
+            root_path=("results",), score_path=(_field, "Overall"), score_scale=0.01,
+            insecure=True,
         )
     )
 for _bid, _field, _name in [
@@ -243,7 +281,8 @@ for _bid, _field, _name in [
     UpstreamSource._register(
         GroundingLeaderboardJS(
             id=f"{_bid}_openvlm", name=_name, url=_OPENVLM_VIDEO, benchmark_id=_bid,
-            score_path=(_field,), score_scale=0.01, insecure=True,
+            root_path=("results",), score_path=(_field, "Overall"), score_scale=0.01,
+            insecure=True,
         )
     )
 

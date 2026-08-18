@@ -13,6 +13,9 @@ export interface Turn {
   text?: string;
   tool?: string | null;
   tool_input?: string;
+  /** For a message: who sent it. "operator" is a person, anything else is another agent. */
+  from_run?: string | null;
+  to_run?: string | null;
 }
 
 /** Escape for HTML text AND attribute contexts. The webview's CSP blocks inline scripts, but a
@@ -29,7 +32,8 @@ export function escapeHtml(value: string): string {
 /** One CSS class per kind, so the eye can separate speech from machinery. An unknown kind falls
  *  back to `other` rather than going unstyled — a future provider event must still render. */
 export function turnClass(kind: string): string {
-  const known = ["text", "thinking", "tool", "tool_result", "started", "done", "error", "rate_limit"];
+  const known = ["text", "thinking", "tool", "tool_result", "started", "done", "error",
+                 "rate_limit", "message", "prompt", "spawn"];
   return `turn turn-${known.includes(kind) ? kind : "other"}`;
 }
 
@@ -58,7 +62,17 @@ const LABEL: Record<string, string> = {
   done: "finished",
   error: "error",
   rate_limit: "rate limit",
+  prompt: "you",
+  spawn: "spawned",
 };
+
+/** Who a message is from, as the reader sees it. Unlabelled, an incoming message looked like
+ *  noise — and the point of this panel is being able to tell who said what. */
+function messageLabel(turn: Turn): string {
+  const from = turn.from_run;
+  if (!from || from === "operator") return "you";
+  return `from ${from}`;
+}
 
 /** One turn as HTML. A tool call leads with its NAME and carries its arguments beneath, because
  *  the name alone ("used Bash") is the status line the tree already shows. */
@@ -70,7 +84,9 @@ export function renderTurn(turn: Turn): string {
     return `<div class="${cls}"><div class="who">🔧 ${name}</div>${args}</div>`;
   }
   if (NOT_A_TURN.has(turn.kind)) return ""; // run infrastructure, not something the agent said
-  const label = LABEL[turn.kind] ?? escapeHtml(turn.kind);
+  const label = turn.kind === "message"
+    ? escapeHtml(messageLabel(turn))
+    : LABEL[turn.kind] ?? escapeHtml(turn.kind);
   const raw = turn.text ?? "";
   if (!raw.trim()) return "";
   const body = escapeHtml(clipLines(raw));
@@ -108,15 +124,22 @@ export interface ChatDocument {
   turns: Turn[];
   name: string | undefined;
   status: string | undefined;
+  /** A message has been delivered and nothing has come back yet. Without this the panel looks
+   *  identical whether the agent is thinking or the send silently failed — a reviewer read the
+   *  silence as a broken button while the reply was on its way. */
+  awaitingReply?: boolean;
 }
 
-export function chatDocument({ nonce, turns, name, status }: ChatDocument): string {
+export function chatDocument({ nonce, turns, name, status, awaitingReply }: ChatDocument): string {
   const header = name
     ? `<header><span class="who">${escapeHtml(name)}</span>` +
       `<span class="status">${escapeHtml(status ?? "")}</span></header>`
     : "";
+  const pending = awaitingReply
+    ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
+    : "";
   const body = name
-    ? renderTranscript(turns)
+    ? renderTranscript(turns) + pending
     : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
   const composer = name
     ? `<form id="composer">
@@ -172,12 +195,20 @@ const STYLE = `
   .status { color: var(--vscode-descriptionForeground); font-size: .9em; }
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
   .hint { color: var(--vscode-descriptionForeground); }
+  .pending { color: var(--vscode-descriptionForeground); font-style: italic; }
+  .pending::after { content: ""; animation: blink 1.2s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: .4 } }
   .turn { margin: 0 0 .7em; line-height: 1.45; }
   .turn-thinking { color: var(--vscode-descriptionForeground); font-style: italic; }
   .turn-tool, .turn-tool_result { font-family: var(--vscode-editor-font-family);
            background: var(--vscode-textCodeBlock-background); border-radius: 4px; padding: .4em .6em;
            white-space: pre-wrap; overflow-wrap: anywhere; }
   .turn-error { color: var(--vscode-errorForeground); }
+  /* What YOU (or another agent) said — set apart from the agent's own turns, so a conversation
+     reads as two sides rather than one voice. */
+  .turn-message, .turn-prompt { background: var(--vscode-textBlockQuote-background);
+           border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+           border-radius: 3px; padding: .4em .6em; }
   #composer { display: flex; flex-direction: column; gap: .4em; padding: .6em .8em;
               border-top: 1px solid var(--vscode-panel-border); }
   textarea { resize: vertical; font: inherit; color: var(--vscode-input-foreground);
@@ -189,3 +220,20 @@ const STYLE = `
            background: var(--vscode-button-background); }
   button:hover { background: var(--vscode-button-hoverBackground); }
 `;
+
+
+/** Whether a message has been delivered with nothing back yet.
+ *
+ *  Derived from the transcript rather than from a flag the send sets, so it survives a reload and
+ *  is true for a message sent from anywhere — the composer, the row icon, another agent, the CLI.
+ */
+export function isAwaitingReply(turns: Turn[]): boolean {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].kind === "message") return true;
+    // Anything the agent itself produced after the message means it is already answering.
+    if (["text", "thinking", "tool", "tool_result", "done", "error"].includes(turns[i].kind)) {
+      return false;
+    }
+  }
+  return false;
+}

@@ -124,6 +124,10 @@ export interface AgentActivity {
   /** The tool's arguments, already summarised by Python. "used Bash" without the command is a
    *  status line; with it, it is a transcript. */
   tool_input?: string;
+  /** For a message: who sent it and who received it. "operator" is a person; anything else is
+   *  another agent — which is the difference between you talking to it and a TEAM talking. */
+  from_run?: string | null;
+  to_run?: string | null;
 }
 
 /** A run's recent activity, oldest last. Bounded by `limit` because a long run's transcript is
@@ -148,6 +152,10 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
           text: String(raw.text ?? ""),
           tool: raw.tool ?? null,
           tool_input: String(raw.tool_input ?? ""),
+          // Who a message is from — without it every message reads as yours, so an agent
+          // talking to another agent looked exactly like you talking to it.
+          from_run: raw.from_run ?? null,
+          to_run: raw.to_run ?? null,
         });
       }
     } catch {

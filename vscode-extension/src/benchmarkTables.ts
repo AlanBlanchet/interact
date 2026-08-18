@@ -42,9 +42,23 @@ export function mergeLiveTables(bundled: any, live: Record<string, LiveTable>): 
   return {
     ...bundled,
     benchmarks: (bundled?.benchmarks ?? []).map((b: any) =>
-      byId[b.id] ? { ...b, published: { ...b.published, ...byId[b.id] } } : b,
+      byId[b.id] && isFresher(byId[b.id].retrieved, b.published?.retrieved)
+        ? { ...b, published: { ...b.published, ...byId[b.id] } }
+        : b,
     ),
   };
+}
+
+/** Whether a fetched table is at least as recent as the one it would replace.
+ *
+ *  "Live" is not the same as "current": OpenVLM's MMMU board last published in 2025, older than
+ *  the packaged snapshot, so taking it merely because it came off the network would have made the
+ *  panel worse. The freshest DATED source wins, whichever side it is on.
+ */
+function isFresher(fetched: string | undefined, bundled: string | undefined): boolean {
+  if (!bundled) return true;
+  if (!fetched) return false;
+  return fetched >= bundled; // ISO dates compare correctly as strings
 }
 
 /** Shown ON the row. A retrieved date hidden in a tooltip reads as current, which is the whole

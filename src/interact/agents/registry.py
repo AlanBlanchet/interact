@@ -198,7 +198,7 @@ def append_event(run_id: str, event: AgentEvent) -> None:
         return
     if event.cost_usd is not None:
         stored.cost_usd = (stored.cost_usd or 0.0) + event.cost_usd
-    summary = event.summary()
+    summary = event.summary(viewer=run_id)
     if summary:  # system/hook events summarise to nothing; they must not blank the row
         stored.last = summary
     _write(stored)
@@ -214,19 +214,55 @@ def record_message(*, from_run: str, to_run: str, text: str) -> bool:
     """
     if _read_record(to_run) is None:
         return False
-    event = AgentEvent(kind="message", text=text, from_run=from_run, to_run=to_run)
     for side in (from_run, to_run):
+        # Anchored to THIS side's raw stream: the message belongs before whatever that agent
+        # writes next, and the two sides are at different points in their own streams.
+        event = AgentEvent(kind="message", text=text, from_run=from_run, to_run=to_run,
+                           raw_index=_raw_line_count(side))
         path = messages_path(side)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
             f.write(event.model_dump_json() + "\n")
     # Keep the run rows current: a message is the most recent thing that happened to both.
+    # Each side sees the exchange from its own point of view: the recipient reads "← sender",
+    # the sender "→ recipient". One shared string would show one of them an arrow pointing at
+    # itself, which is what made real messaging indistinguishable from noise.
     for side in (from_run, to_run):
         stored = _read_record(side)
         if stored is not None:
-            stored.last = event.summary()
+            stored.last = event.summary(viewer=side)
             _write(stored)
     return True
+
+
+def _raw_line_count(run_id: str) -> int:
+    """How many lines the vendor stream holds right now — where a message lands in it."""
+    try:
+        return sum(1 for _ in raw_events_path(run_id).open("rb"))
+    except OSError:
+        return 0
+
+
+def _interleave(parsed: list[AgentEvent], messages: list[AgentEvent],
+                total_raw: int) -> list[AgentEvent]:
+    """Both streams in the order they happened.
+
+    The vendor writes no timestamps, so a message carries the raw-line count at the moment it was
+    sent: it belongs before every parsed event that came from a later line. Appending messages at
+    the end instead showed each question after the answer it prompted.
+    """
+    def anchor(event: AgentEvent) -> int:
+        # An event with no anchor is placed at the END: we do not know when it happened, and
+        # reading "unknown" as position zero put every such message above the run's first turn.
+        return event.raw_index if event.raw_index is not None else total_raw
+
+    out: list[AgentEvent] = []
+    pending = sorted(messages, key=anchor)
+    for event in parsed:
+        while pending and anchor(pending[0]) <= anchor(event):
+            out.append(pending.pop(0))
+        out.append(event)
+    return out + pending
 
 
 def _read_messages(run_id: str) -> list[AgentEvent]:
@@ -278,15 +314,18 @@ def read_events(run_id: str) -> list[AgentEvent]:
     # of date. The mirror below is derived from it, and re-reading both would double-count.
     if provider is not None and raw_lines:
         parsed: list[AgentEvent] = []
-        for line in raw_lines:
+        for index, line in enumerate(raw_lines):
             try:
                 event = provider.parse(line)
             except Exception:
                 continue
             if event is not None:
-                parsed.append(event)
-        _mirror_normalised(run_id, parsed)
-        return parsed + _read_messages(run_id)
+                parsed.append(event.model_copy(update={"raw_index": index}))
+        merged = _interleave(parsed, _read_messages(run_id), len(raw_lines))
+        # The mirror is what the VS Code panel reads, so it must carry the WHOLE conversation.
+        # Written without messages, the chat showed the agent talking to nobody.
+        _mirror_normalised(run_id, merged)
+        return merged
 
     # No raw stream — events were appended directly (a test, or a provider that has none).
     out: list[AgentEvent] = []
@@ -306,18 +345,20 @@ def _mirror_normalised(run_id: str, events: list[AgentEvent]) -> None:
 
     The VS Code panel cannot parse a vendor dialect — teaching it every provider's JSON would
     duplicate the adapters in a second language. Translating once here means the panel reads one
-    stable shape whatever produced it. Rewritten only when the length changed, so a settled run
-    costs nothing to re-read.
+    stable shape whatever produced it. Rewritten only when the CONTENT changed, so a settled run
+    costs nothing to re-read — comparing the LENGTH alone was not enough, because a change to how
+    events are ordered or rendered leaves the count identical, so the panel kept serving the old
+    shape forever and the only symptom was the UI quietly disagreeing with the CLI.
     """
     path = events_path(run_id)
+    payload = "".join(e.model_dump_json() + "\n" for e in events)
     try:
-        existing = sum(1 for _ in path.open())
+        if path.read_text() == payload:
+            return
     except OSError:
-        existing = -1
-    if existing == len(events):
-        return
+        pass
     try:
-        path.write_text("".join(e.model_dump_json() + "\n" for e in events))
+        path.write_text(payload)
     except OSError:
         pass
 
@@ -368,7 +409,8 @@ def _derive(run: AgentRun) -> AgentRun:
     if events:
         costs = [e.cost_usd for e in events if e.cost_usd is not None]
         cost = sum(costs) if costs else None
-        last = next((e.summary() for e in reversed(events) if e.summary()), run.last)
+        last = next((e.summary(viewer=run.run_id) for e in reversed(events)
+                     if e.summary(viewer=run.run_id)), run.last)
         run.cost_usd, run.last = cost, last
     # Persist whatever we healed — status included. The panel reads these files directly and does
     # its own (downgrade-only) liveness check, so a status left stale on disk reappears there as

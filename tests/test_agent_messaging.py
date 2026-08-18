@@ -110,3 +110,125 @@ def test_delivery_accepts_the_id_the_list_printed(monkeypatch):
     monkeypatch.setattr(messaging, "provider_for", lambda name: _Ok())
     run, error = messaging.check_deliverable("abcd1234")
     assert error is None and run.run_id.startswith("abcd1234")
+
+
+# ── A message says WHO, and which way ───────────────────────────────────────────────────────
+# The row read "reviewer → 2b7642ee: ..." where 2b7642ee is reviewer's OWN id — an arrow pointing
+# at itself. It looks exactly like the agent-to-agent messaging the owner asked to SEE, while
+# actually showing nothing of the kind. A message needs a direction and a name.
+
+
+def test_a_message_the_agent_RECEIVED_points_inward_and_names_the_sender():
+    from interact.agents.events import AgentEvent
+
+    event = AgentEvent(kind="message", from_run="operator", to_run="r1", text="check the tests")
+    assert event.summary(viewer="r1") == "← operator: check the tests"
+
+
+def test_a_message_the_agent_SENT_points_outward_and_names_the_recipient(tmp_path, monkeypatch):
+    from interact.agents.events import AgentEvent
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r2", name="perf", provider="claude", task="t", pid=None)
+    event = AgentEvent(kind="message", from_run="r1", to_run="r2", text="numbers look fine")
+    assert event.summary(viewer="r1") == "→ perf: numbers look fine"
+
+
+def test_with_no_viewer_it_still_names_both_ends_rather_than_a_bare_hash(tmp_path, monkeypatch):
+    from interact.agents.events import AgentEvent
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
+    reg.register(run_id="r2", name="perf", provider="claude", task="t", pid=None)
+    event = AgentEvent(kind="message", from_run="r1", to_run="r2", text="hi")
+    assert event.summary() == "reviewer → perf: hi"
+
+
+def test_an_unknown_id_falls_back_to_its_short_form():
+    from interact.agents.events import AgentEvent
+
+    event = AgentEvent(kind="message", from_run="operator", to_run="deadbeef-1111", text="hi")
+    assert event.summary(viewer="deadbeef-1111") == "← operator: hi"
+
+
+# ── The conversation shows BOTH sides, in order ─────────────────────────────────────────────
+# Messages live in their own file and were APPENDED to the end of the event list, and the mirror
+# the VS Code panel reads was written WITHOUT them at all. So the chat showed the agent talking to
+# nobody: you could not see what you had asked, and an agent-to-agent exchange was invisible in
+# the very view built to show it.
+
+
+def test_a_message_is_placed_where_it_was_sent_not_at_the_end(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    # One turn, then a message arrives, then the reply.
+    raw.write_text(_assistant("first answer") + "\n")
+    reg.record_message(from_run="operator", to_run="r1", text="now do the other thing")
+    with raw.open("a") as f:
+        f.write(_assistant("second answer") + "\n")
+
+    kinds = [(e.kind, (e.text or "")[:20]) for e in reg.read_events("r1")]
+    assert kinds == [
+        ("text", "first answer"),
+        ("message", "now do the other thi"),
+        ("text", "second answer"),
+    ]
+
+
+def test_the_mirror_the_panel_reads_contains_the_messages(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
+    reg.raw_events_path("r1").parent.mkdir(parents=True, exist_ok=True)
+    reg.raw_events_path("r1").write_text(_assistant("hi") + "\n")
+    reg.record_message(from_run="operator", to_run="r1", text="hello")
+    reg.read_events("r1")  # writes the mirror
+
+    mirrored = reg.events_path("r1").read_text()
+    assert '"message"' in mirrored, "the panel reads this file; a missing message is invisible"
+
+
+def _assistant(text):
+    import json
+
+    return json.dumps({
+        "type": "assistant", "session_id": "s",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": text}], "usage": {}},
+    })
+
+
+def test_a_message_with_no_anchor_goes_LAST_not_first(tmp_path, monkeypatch):
+    """Messages recorded before the anchor existed carry none. We do not know where they belong,
+    so they go at the end — `(index or 0)` silently read "unknown" as "the very beginning" and
+    dropped every one of them above the run's own first turn."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(_assistant("a turn") + "\n")
+    from interact.agents.events import AgentEvent
+
+    reg.messages_path("r1").write_text(
+        AgentEvent(kind="message", text="unanchored", from_run="operator",
+                   to_run="r1").model_dump_json() + "\n"
+    )
+    assert [e.kind for e in reg.read_events("r1")] == ["text", "message"]
+
+
+def test_the_mirror_updates_when_the_CONTENT_changes_not_only_its_length(tmp_path, monkeypatch):
+    """The mirror was rewritten only when the event COUNT changed, so a fix to how events are
+    ordered or rendered never reached the panel — it kept serving the old shape forever, and the
+    only way to notice was that the UI disagreed with the CLI."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
+    events_file = reg.events_path("r1")
+    events_file.parent.mkdir(parents=True, exist_ok=True)
+    from interact.agents.events import AgentEvent
+
+    stale = [AgentEvent(kind="text", text="WRONG"), AgentEvent(kind="text", text="ORDER")]
+    events_file.write_text("".join(e.model_dump_json() + "\n" for e in stale))
+
+    fresh = [AgentEvent(kind="text", text="ORDER"), AgentEvent(kind="text", text="RIGHT")]
+    reg._mirror_normalised("r1", fresh)  # same LENGTH, different content
+    assert "RIGHT" in events_file.read_text()

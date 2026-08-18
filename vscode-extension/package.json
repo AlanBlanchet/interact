@@ -244,13 +244,17 @@
           "id": "interactAgents.board",
           "name": "Agents",
           "contextualTitle": "Interact agents",
-          "icon": "media/agents.svg"
+          "icon": "media/agents.svg",
+          "visibility": "visible",
+          "initialSize": 3
         },
         {
           "id": "interactAgents.chat",
           "name": "Chat",
           "type": "webview",
-          "contextualTitle": "Interact agent chat"
+          "contextualTitle": "Interact agent chat",
+          "visibility": "visible",
+          "initialSize": 5
         }
       ]
     },

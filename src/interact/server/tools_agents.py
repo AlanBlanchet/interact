@@ -109,14 +109,15 @@ async def agent_list(include_foreign: bool = True) -> str:
 @instrumented
 async def agent_events(run_id: str, limit: int = 20) -> str:
     """What an agent has actually been doing — its most recent events, oldest first."""
-    events = reg.read_events(run_id)
+    resolved = reg.resolve_run_id(run_id) or run_id
+    events = reg.read_events(resolved)
     if not events:
         known = {r.run_id for r in reg.list_runs()}
-        if run_id not in known:
+        if resolved not in known:
             return f"ERROR: no agent run {run_id!r}. Use agent_list to see the run ids."
         return f"{run_id[:8]}: no events yet (it may still be starting)."
     shown = events[-max(1, limit):]
-    return "\n".join(f"  {e.kind}: {e.summary()}" for e in shown)
+    return "\n".join(f"  {e.kind}: {e.summary(viewer=resolved)}" for e in shown)
 
 
 @mcp.tool()
