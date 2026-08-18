@@ -8,7 +8,35 @@
 import { ZONES, leads, reportsOf } from "./team";
 import type { TeamState, Worker } from "./team";
 
-export function renderWorkplace(state: TeamState, nonce: string): string {
+/** The pixel-art renderer, loaded once. Bundled from `webview/workplace/` by
+ *  `npm run build:workplace` and required at runtime rather than imported: it lives outside
+ *  tsc's rootDir on purpose, so the visual can be reworked without recompiling the data layer. */
+let art: ((state: TeamState, nonce: string) => string) | null | undefined;
+
+export function renderWorkplace(
+  state: TeamState,
+  nonce: string,
+  log?: { appendLine(line: string): void },
+): string {
+  if (art === undefined) {
+    try {
+      art = require("./workplace.js").renderWorkplace;
+    } catch (err) {
+      // Reported, not swallowed: a bundle that fails to load would otherwise degrade silently on
+      // every render for the life of the session, with nothing anywhere saying why.
+      log?.appendLine(`workplace art unavailable, using the plain room: ${err}`);
+      art = null;
+    }
+  }
+  if (art) {
+    try {
+      return art(state, nonce);
+    } catch (err) {
+      log?.appendLine(`workplace art failed to render: ${err}`);
+    }
+  }
+  // A missing or broken renderer degrades to a plain room rather than an empty panel: the team is
+  // still legible, just not beautiful.
   return plainRoom(state, nonce);
 }
 
@@ -33,7 +61,7 @@ function worker(w: Worker, all: Worker[]): string {
   </div>`;
 }
 
-function plainRoom(state: TeamState, nonce: string): string {
+export function plainRoom(state: TeamState, nonce: string): string {
   const rooms = ZONES.map((zone) => {
     const here = leads(state.workers).filter((w) => w.zone === zone.id);
     return `<section class="zone"><h2>${esc(zone.label)}</h2>

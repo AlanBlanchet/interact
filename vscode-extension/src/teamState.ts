@@ -70,12 +70,38 @@ export function zoneOf(step: Step | undefined, status: string, agent?: string | 
   return "managers";
 }
 
-/** The last path-looking token in a tool's arguments — what a person would name. */
+//: Kinds that say nothing about what a worker is DOING. The vendor emits housekeeping constantly,
+//: so the newest event is usually one of these — taking it literally showed a researcher in the
+//: middle of a web search as "waiting".
+//: An ALLOWLIST, not a denylist: a kind nobody has taught us defaults to silent rather than
+//: leaking onto a worker's plate. `tool_result` is deliberately absent — it is meaningful, but it
+//: is what came BACK, not what the worker is doing, and showing it put raw file bytes in a speech
+//: bubble where "reading style.ts" belonged.
+const MEANINGFUL = new Set(["tool", "spawn", "thinking", "message", "text", "done", "error"]);
+
+/** The most recent step that actually says something, oldest-first input. */
+export function latestMeaningful(steps: Step[]): Step | undefined {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (MEANINGFUL.has(steps[i].kind)) return steps[i];
+  }
+  return undefined;
+}
+
+/** What a person would NAME as the subject of the work: a file, a query, a target.
+ *
+ *  A path wins. Otherwise a quoted phrase, but only one that reads as a name — a shell command's
+ *  arguments are full of quoted CODE, and taking it produced "running \${\" in a speech bubble
+ *  where a filename belonged.
+ */
 function subject(input: string | undefined): string | null {
-  const match = (input ?? "").match(/[\w./-]*\/([\w.-]+\.\w+)/);
-  if (match) return match[1];
-  const quoted = (input ?? "").match(/'([^']{3,40})'|"([^"]{3,40})"/);
-  return quoted ? quoted[1] ?? quoted[2] ?? null : null;
+  const path = (input ?? "").match(/[\w./-]*\/([\w.-]+\.\w+)/);
+  if (path) return path[1];
+  for (const match of (input ?? "").matchAll(/'([^']{3,40})'|"([^"]{3,40})"/g)) {
+    const value = (match[1] ?? match[2] ?? "").trim();
+    // Letters, digits and the punctuation a name actually contains — nothing that reads as code.
+    if (value && /^[\w .,'’&:/-]+$/.test(value) && /[a-zA-Z]/.test(value)) return value;
+  }
+  return null;
 }
 
 /** What they would SAY they are doing. "reading registry.py", not "tool: Read". */
@@ -89,6 +115,8 @@ export function activityOf(step: Step | undefined): string {
   }
   if (step.kind === "spawn") return `sending out ${step.text || "a teammate"}`;
   if (step.kind === "thinking") return "thinking";
+  if (step.kind === "done") return "finished";
+  if (step.kind === "error") return step.text || "failed";
   if (step.kind === "message") return "in conversation";
   const said = (step.text ?? "").trim().replace(/\s+/g, " ");
   return said ? clip(said) : "waiting";

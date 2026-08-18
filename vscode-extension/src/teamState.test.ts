@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { activityOf, zoneOf } from "./teamState.ts";
+import { activityOf, latestMeaningful, zoneOf } from "./teamState.ts";
 
 // A worker stands where the WORK is. The zone has to come from what the agent is actually doing
 // right now, or the workplace is just a list with sprites on it.
@@ -184,4 +184,81 @@ test("a message from the operator is not an agent-to-agent link", () => {
   const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
     [{ from_run: "operator", to_run: "lead", text: "do it" }]);
   assert.deepEqual(team.links, []);
+});
+
+// The newest recorded event is often housekeeping, so "the last step" is not "what they are
+// doing". Taking it literally showed a researcher mid-web-search as "waiting".
+
+test("the newest MEANINGFUL step is what a worker is doing", () => {
+  const steps = [
+    { kind: "tool", tool: "WebSearch", tool_input: "query='vscode webview'" },
+    { kind: "other", text: "" },
+    { kind: "other", text: "" },
+  ];
+  assert.equal(latestMeaningful(steps)?.tool, "WebSearch");
+});
+
+test("a later real step wins over an earlier one", () => {
+  const steps = [
+    { kind: "tool", tool: "Read" },
+    { kind: "tool", tool: "WebSearch" },
+    { kind: "other" },
+  ];
+  assert.equal(latestMeaningful(steps)?.tool, "WebSearch");
+});
+
+test("nothing meaningful at all is undefined, which reads as waiting", () => {
+  assert.equal(latestMeaningful([{ kind: "other" }, { kind: "rate_limit" }]), undefined);
+  assert.equal(latestMeaningful([]), undefined);
+});
+
+test("a tool RESULT is not what someone is doing — the tool call is", () => {
+  // Live capture: a reviewer reading a file showed `84: ? \`<span class="wp-...` as its activity,
+  // which is the file's contents. A person says "reading style.ts", not the bytes they got back.
+  const steps = [
+    { kind: "tool", tool: "Read", tool_input: "file_path='/a/style.ts'" },
+    { kind: "tool_result", text: "84: ? `<span class=\"wp-snooze\">${draw(SNOOZE.grid)}" },
+  ];
+  assert.equal(latestMeaningful(steps)?.tool, "Read");
+  assert.match(activityOf(latestMeaningful(steps)), /reading style\.ts/);
+});
+
+// The activity line is read by a person at a glance, so its subject has to be a NAME — a file, a
+// query, a target. Live capture showed `running \${\` after a shell command whose arguments
+// contained template literals: the quoted-string fallback grabbed code, not a name.
+
+test("a shell command names the command, never a fragment of its code", () => {
+  const step = { kind: "tool", tool: "Bash", tool_input: "command='echo \"${x}\" | grep -o \\`y\\`'" };
+  const said = activityOf(step);
+  assert.ok(!/[${}`\\]/.test(said), `activity should carry no code noise: ${said}`);
+});
+
+test("a path is still preferred as the subject", () => {
+  assert.match(activityOf({ kind: "tool", tool: "Read", tool_input: "file_path='/a/b/style.ts'" }),
+    /reading style\.ts/);
+});
+
+test("a plain quoted phrase is still a good subject", () => {
+  assert.match(activityOf({ kind: "tool", tool: "WebSearch", tool_input: "query='pixel art css'" }),
+    /pixel art css/);
+});
+
+// From a code-reviewer run on this diff: a denylist leaks. A vendor-added kind we have never seen
+// would become someone's activity line, and silencing `done` made a finished run narrate its last
+// utterance forever instead of saying it had finished.
+
+test("a kind nobody has taught us is silent, not leaked onto the plate", () => {
+  assert.equal(latestMeaningful([{ kind: "text", text: "hi" }, { kind: "some_future_kind" }])?.kind,
+    "text");
+});
+
+test("finishing is meaningful — it is the last true thing about a run", () => {
+  assert.equal(latestMeaningful([{ kind: "text", text: "hi" }, { kind: "done" }])?.kind, "done");
+});
+
+test("a tool call still beats the result that follows it", () => {
+  assert.equal(
+    latestMeaningful([{ kind: "tool", tool: "WebSearch" }, { kind: "tool_result", text: "..." }])?.tool,
+    "WebSearch",
+  );
 });

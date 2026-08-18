@@ -518,3 +518,45 @@ def test_tokens_accumulate_for_a_run_with_a_raw_vendor_stream(tmp_path, monkeypa
     ))
     stored = [r for r in reg.list_runs() if r.run_id == "r1"][0]
     assert stored.input_tokens == 1000 and stored.output_tokens == 80
+
+
+# ── A detached run that finished cleanly is not a crash ─────────────────────────────────────
+# `agents spawn` returns immediately, so nobody is left waiting to record the exit code. Status
+# was inferred from the pid alone, so every detached run read as "crashed" the moment it finished
+# — measured live: a tester that reported "68 passed" was shown with a crash warning.
+
+
+def test_a_run_whose_stream_ENDED_cleanly_is_done_not_crashed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="tester", provider="claude", task="t", pid=999_999)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "session_id": "s", "stop_reason": "end_turn",
+    }) + "\n")
+    assert [r for r in reg.list_runs() if r.run_id == "r1"][0].status == "done"
+
+
+def test_a_run_whose_stream_ENDED_in_error_is_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="tester", provider="claude", task="t", pid=999_999)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(json.dumps({
+        "type": "result", "subtype": "error", "is_error": True, "session_id": "s",
+    }) + "\n")
+    assert [r for r in reg.list_runs() if r.run_id == "r1"][0].status == "failed"
+
+
+def test_a_run_that_stopped_MID_STREAM_is_still_a_crash(tmp_path, monkeypatch):
+    """The real crash must keep reading as one: it stopped with no ending recorded anywhere."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="r1", name="tester", provider="claude", task="t", pid=999_999)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(json.dumps({
+        "type": "assistant", "session_id": "s",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "half way"}]},
+    }) + "\n")
+    assert [r for r in reg.list_runs() if r.run_id == "r1"][0].status == "crashed"

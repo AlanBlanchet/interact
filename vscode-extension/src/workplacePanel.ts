@@ -12,7 +12,7 @@ import * as vscode from "vscode";
 
 import { readAgentActivity, readAgentMessages, readAgentRuns } from "./agents";
 import { agentsDir } from "./paths";
-import { buildTeam } from "./teamState";
+import { buildTeam, latestMeaningful } from "./teamState";
 import { renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
 
@@ -56,9 +56,9 @@ export class WorkplacePanel {
   private state(): TeamState {
     return buildTeam(
       readAgentRuns() as never,
-      // The latest recorded step is what puts a worker in a room; one read per worker, and the
-      // panel is refreshed on a debounce, so this stays cheap even with a busy registry.
-      (runId) => readAgentActivity(runId, 1)[0],
+      // The most recent MEANINGFUL step is what puts a worker in a room. A short window, not one
+      // event: the vendor emits housekeeping constantly, so the newest line is usually silent.
+      (runId) => latestMeaningful(readAgentActivity(runId, STEP_WINDOW)),
       Date.now() / 1000,
       readAgentMessages() as never,
     );
@@ -66,7 +66,7 @@ export class WorkplacePanel {
 
   private render(): void {
     try {
-      this.panel.webview.html = renderWorkplace(this.state(), nonce());
+      this.panel.webview.html = renderWorkplace(this.state(), nonce(), this.log);
     } catch (err) {
       this.log.appendLine(`workplace render failed: ${err}`);
       this.panel.webview.html = `<!DOCTYPE html><body>${String(err)}</body>`;
@@ -93,6 +93,10 @@ export class WorkplacePanel {
     WorkplacePanel.current = undefined;
   }
 }
+
+//: How far back to look for the step that says what someone is doing. Enough to see past a run
+//: of housekeeping lines, small enough that a busy registry stays cheap to read per refresh.
+const STEP_WINDOW = 12;
 
 /** A fresh nonce per render: the CSP admits only scripts carrying it. */
 function nonce(): string {
