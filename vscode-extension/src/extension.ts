@@ -349,8 +349,15 @@ export async function activate(
   const agentsProvider = new AgentsProvider(context.globalState);
   context.subscriptions.push(
     agentsProvider,
-    vscode.window.registerTreeDataProvider("interact.agentsView", agentsProvider),
+    vscode.window.registerTreeDataProvider("interactAgents.board", agentsProvider),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    // VS Code lets an extension declare a view container only in the activity bar (left). Putting
+    // it beside Claude Code / Codex in the SECONDARY side bar is a user move that VS Code then
+    // remembers — so this focuses the view and opens the mover rather than leaving you to drag it.
+    vscode.commands.registerCommand("interact.agents.moveRight", async () => {
+      await vscode.commands.executeCommand("interactAgents.board.focus");
+      await vscode.commands.executeCommand("workbench.action.moveFocusedView");
+    }),
     vscode.commands.registerCommand("interact.agents.openConversation", async (arg?: string | { run?: { run_id: string } }) => {
       const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
       if (!runId) return;

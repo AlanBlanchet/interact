@@ -212,21 +212,26 @@
         "title": "Open agent conversation",
         "category": "Interact",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "interact.agents.moveRight",
+        "title": "Move Agents panel to the secondary side bar",
+        "category": "Interact"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "interact",
+          "id": "interactAgents",
           "title": "Interact",
           "icon": "media/agents.svg"
         }
       ]
     },
     "views": {
-      "interact": [
+      "interactAgents": [
         {
-          "id": "interact.agentsView",
+          "id": "interactAgents.board",
           "name": "Agents",
           "contextualTitle": "Interact agents",
           "icon": "media/agents.svg"
@@ -237,34 +242,34 @@
       "view/title": [
         {
           "command": "interact.agents.groupBy",
-          "when": "view == interact.agentsView",
+          "when": "view == interactAgents.board",
           "group": "navigation@1"
         },
         {
           "command": "interact.agents.refresh",
-          "when": "view == interact.agentsView",
+          "when": "view == interactAgents.board",
           "group": "navigation@2"
         },
         {
           "command": "interact.openDashboard",
-          "when": "view == interact.agentsView",
+          "when": "view == interactAgents.board",
           "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
           "command": "interact.agents.openConversation",
-          "when": "view == interact.agentsView && viewItem =~ /interact(Running|Foreign)?Run/",
+          "when": "view == interactAgents.board && viewItem =~ /interact(Running|Foreign)?Run/",
           "group": "inline@0"
         },
         {
           "command": "interact.agents.stop",
-          "when": "view == interact.agentsView && viewItem == interactRunningRun",
+          "when": "view == interactAgents.board && viewItem == interactRunningRun",
           "group": "inline"
         },
         {
           "command": "interact.agents.showEvents",
-          "when": "view == interact.agentsView && viewItem =~ /interact(Running)?Run/",
+          "when": "view == interactAgents.board && viewItem =~ /interact(Running)?Run/",
           "group": "inline"
         }
       ]
