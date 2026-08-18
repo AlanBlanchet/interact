@@ -67,12 +67,16 @@ def _keyboard_codes(ecodes) -> list[int]:
     names = (
         [f"KEY_{c}" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"]
         + [f"KEY_{d}" for d in "0123456789"]
-        + [
+        + [f"KEY_F{i}" for i in range(1, 13)]  # F1 was resolvable but never declared, so `key("F1")`
+        + [                                    # wrote an event the kernel dropped, in silence (#115)
             "KEY_SPACE", "KEY_ENTER", "KEY_TAB", "KEY_BACKSPACE", "KEY_ESC", "KEY_DELETE",
             "KEY_MINUS", "KEY_EQUAL", "KEY_DOT", "KEY_COMMA", "KEY_SLASH", "KEY_SEMICOLON",
             "KEY_APOSTROPHE", "KEY_LEFTBRACE", "KEY_RIGHTBRACE", "KEY_BACKSLASH", "KEY_GRAVE",
-            "KEY_LEFTSHIFT", "KEY_LEFTCTRL", "KEY_LEFTALT",
-            "KEY_HOME", "KEY_END", "KEY_PAGEUP", "KEY_PAGEDOWN",
+            # Every modifier `_UINPUT_MODIFIERS` can produce must be here or the chord arrives
+            # UNMODIFIED — KEY_LEFTMETA was missing, so every `super+`/`cmd+` chord was a no-op.
+            "KEY_LEFTSHIFT", "KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_LEFTMETA",
+            "KEY_RIGHTSHIFT", "KEY_RIGHTCTRL", "KEY_RIGHTALT",
+            "KEY_HOME", "KEY_END", "KEY_PAGEUP", "KEY_PAGEDOWN", "KEY_INSERT",
             "KEY_UP", "KEY_DOWN", "KEY_LEFT", "KEY_RIGHT",
         ]
     )
@@ -136,7 +140,9 @@ class UinputPointer:
             # A SEPARATE keyboard node: the kernel drops key events a device never
             # declared, and a touchscreen (INPUT_PROP_DIRECT) + keyboard on one node
             # confuses libinput's classification — so typing/keys get their own device.
-            self._kbd = UInput({ecodes.EV_KEY: _keyboard_codes(ecodes)}, name="interact-virtual-keyboard")
+            declared = _keyboard_codes(ecodes)
+            self._declared = set(declared)
+            self._kbd = UInput({ecodes.EV_KEY: declared}, name="interact-virtual-keyboard")
         except (PermissionError, FileNotFoundError) as exc:
             raise RuntimeError(
                 "cannot open /dev/uinput — add a udev rule and join the `input` group "
@@ -183,21 +189,45 @@ class UinputPointer:
         )
         return getattr(self._ecodes, name)
 
+    def _check_declared(self, code, spec: str) -> None:
+        """A uinput device may only emit codes it declared at creation; anything else the kernel
+        discards without a word. That silence is the actual defect users report — the key simply
+        does nothing and nothing points at why (#115)."""
+        declared = getattr(self, "_declared", None)
+        if declared is not None and code not in declared:
+            raise ValueError(
+                f"cannot send {spec!r}: the virtual keyboard does not declare that key, so the "
+                "kernel would discard it silently. Add it to _keyboard_codes()."
+            )
+
     def key(self, name: str) -> None:
-        # Hold modifiers, tap the final key, release modifiers — so a chord like "ctrl+a" works,
-        # not just a single key (previously getattr(ecodes, "KEY_CTRL+A") raised). Shared chord
-        # split with the portable backend via _parse_chord.
+        """Press a key or chord.
+
+        Each transition gets its own SYN frame. An evdev frame is ATOMIC — writing ctrl-down and
+        p-down before the same `syn()` tells the compositor they happened simultaneously, and the
+        key can then be evaluated against the modifier state from BEFORE the frame, i.e. unmodified.
+        Real hardware never does this: the modifier is latched, then the key arrives. Shared chord
+        split with the portable backend via _parse_chord.
+        """
         mods, final = _parse_chord(name)
         held = [self._key_code(m) for m in mods]
         target = self._key_code(final)
-        for code in held:
-            self._kbd.write(self._ecodes.EV_KEY, code, 1)
+        for code, spec in zip(held, mods):
+            self._check_declared(code, spec)
+        self._check_declared(target, final)
+
+        if held:
+            for code in held:
+                self._kbd.write(self._ecodes.EV_KEY, code, 1)
+            self._kbd.syn()  # modifiers latched BEFORE the key exists
         self._kbd.write(self._ecodes.EV_KEY, target, 1)
         self._kbd.syn()
         self._kbd.write(self._ecodes.EV_KEY, target, 0)
-        for code in reversed(held):
-            self._kbd.write(self._ecodes.EV_KEY, code, 0)
-        self._kbd.syn()
+        self._kbd.syn()  # key up while the modifiers are still down, as on real hardware
+        if held:
+            for code in reversed(held):
+                self._kbd.write(self._ecodes.EV_KEY, code, 0)
+            self._kbd.syn()
 
     def _char_spec(self, ch: str) -> tuple[str, bool] | None:
         """Map a character to its evdev key name + whether Shift is held (US layout).

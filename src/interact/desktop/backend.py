@@ -412,7 +412,17 @@ class PortableBackend(DesktopBackend):
     def _resolve_key(self, token: str):
         if len(token) == 1:
             return token  # a literal character
-        return getattr(self._Key, self._KEYS.get(token.lower(), token.lower()), token)
+        name = self._KEYS.get(token.lower(), token.lower())
+        resolved = getattr(self._Key, name, None)
+        if resolved is None:
+            # Falling back to the raw token made pynput TYPE the key's name as text — so
+            # `key("f13")` wrote "f13" into the document instead of failing. Same silent-wrong
+            # class as the uinput backend discarding an undeclared code (#115).
+            raise ValueError(
+                f"cannot send {token!r}: not a key this backend knows. Use a single character "
+                "or a named key (enter, tab, esc, f1-f20, up/down/left/right, ctrl/shift/alt/cmd)."
+            )
+        return resolved
 
     def key(self, name: str) -> None:
         mods, final = _parse_chord(name)
