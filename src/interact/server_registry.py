@@ -52,12 +52,25 @@ def latest_version() -> str:
 
 
 def register_server() -> Path | None:
-    """Record this MCP server's pid + the version it loaded. Best-effort; returns the file to remove."""
+    """Record this MCP server's pid, the version it loaded, and the SOURCE it loaded it from.
+
+    The source is recorded because a server is the only thing that knows which tree it actually
+    imported. Judging it later by comparing a process start time against whatever tree the CHECKER
+    happens to be in gives the wrong answer the moment those differ — two checkouts on one machine,
+    or a doctor run from an editable clone against a server running the installed package. It also
+    needed /proc, which is Linux-only, and start times, which say nothing about WHICH code ran.
+    """
     try:
         d = _runtime_dir()
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"{os.getpid()}.json"
-        path.write_text(json.dumps({"pid": os.getpid(), "version": installed_version()}))
+        root = _source_root()
+        path.write_text(json.dumps({
+            "pid": os.getpid(),
+            "version": installed_version(),
+            "source_root": str(root),
+            "source_mtime": _newest_mtime(root),
+        }))
         return path
     except OSError:
         return None
@@ -169,20 +182,27 @@ def kill_stale_servers() -> list[int]:
     return killed
 
 
-def _source_mtime() -> float:
-    """When the installed interact source was last written.
+def _source_root() -> Path:
+    """The tree this process imported interact from."""
+    return Path(__file__).resolve().parent
+
+
+def _newest_mtime(root: Path, pattern: str = "*.py") -> float:
+    """When anything under ``root`` was last written.
 
     An editable install serves the tree directly, so this moves every time a fix lands — which is
     exactly when a long-lived server becomes stale, and exactly when the version string does NOT
     move, because this project bumps once per release rather than once per change.
     """
-    root = Path(__file__).resolve().parent
     newest = 0.0
-    for f in root.rglob("*.py"):
-        try:
-            newest = max(newest, f.stat().st_mtime)
-        except OSError:
-            continue
+    try:
+        for f in root.rglob(pattern):
+            try:
+                newest = max(newest, f.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        return 0.0
     return newest
 
 
@@ -208,18 +228,6 @@ def _process_start(pid: int) -> float | None:
     return time.time() - uptime + ticks / hz
 
 
-def running_older_code(pid: int) -> bool:
-    """Whether ``pid`` started BEFORE the source it imported was last edited.
-
-    A process cannot be running code written after it started, so this catches the staleness the
-    version comparison structurally cannot: a fix committed between releases.
-    """
-    started = _process_start(pid)
-    if started is None:
-        return False  # gone, or a platform without /proc — pruning handles the first
-    return started < _source_mtime()
-
-
 def stale_servers() -> list[dict]:
     """Live MCP servers whose loaded version is behind :func:`latest_version` (→ serving old code;
     reconnect them). Prunes registry files for dead pids as a side effect, so a crashed server
@@ -240,8 +248,11 @@ def stale_servers() -> list[dict]:
             continue
         if info.get("version") != latest:
             out.append({**info, "reason": "version"})
-        elif running_older_code(pid):
-            # Same version, older code. Between releases this is the ONLY way to see it, and it
-            # is the common case: the version moves once per release, the code moves every fix.
+            continue
+        # Same version, older code. Between releases this is the ONLY way to see it, and it is
+        # the common case: the version moves once per release, the code moves every fix. Compared
+        # against the tree the SERVER recorded, not the one this checker happens to be running in.
+        root, loaded = info.get("source_root"), info.get("source_mtime")
+        if root and loaded is not None and loaded < _newest_mtime(Path(root)):
             out.append({**info, "reason": "code"})
     return out
