@@ -419,6 +419,34 @@ def list_runs(*, include_foreign: bool = False) -> list[AgentRun]:
     return sorted(runs, key=lambda r: r.started_at)
 
 
+def forget(run_id: str) -> bool:
+    """Remove a finished run and everything it wrote. False if it is still running, or unknown.
+
+    Nothing could remove a run before, so the panel grew forever — every agent ever spawned stayed
+    listed, with its transcript and raw stream on disk. A live run is never forgotten: the record
+    is the only handle on the process, so dropping it would leave an agent still working and
+    invisible.
+    """
+    resolved = resolve_run_id(run_id)
+    if resolved is None:
+        return False
+    run = _read_record(resolved)
+    if run is None or _status_for(run) == "running":
+        return False
+    for path in (_record_path(resolved), events_path(resolved),
+                 messages_path(resolved), raw_events_path(resolved)):
+        try:
+            path.unlink()
+        except OSError:
+            pass  # already gone, or not ours to delete — never fail a cleanup over one file
+    return True
+
+
+def clear_finished() -> list[str]:
+    """Forget every run that has stopped; returns the ids removed."""
+    return [r.run_id for r in list_runs() if not r.foreign and forget(r.run_id)]
+
+
 def resolve_run_id(prefix: str) -> str | None:
     """The full run id a prefix names, or None if it names none or more than one.
 

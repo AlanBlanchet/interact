@@ -616,6 +616,22 @@ def agents_send(run_id: str, message: str) -> None:
     print(f"Delivered to {run.name} ({run_id[:8]}). It is answering now.")
 
 
+@agents_app.command(name="clear")
+def agents_clear(run_id: str | None = None) -> None:
+    """Forget finished agent runs — all of them, or one by the short id `agents list` prints.
+
+    A running agent is never forgotten: its record is the only handle on the process.
+    """
+    from interact.agents import registry as reg
+
+    if run_id:
+        print(f"Forgot {run_id}." if reg.forget(run_id)
+              else f"Kept {run_id!r} — unknown, or still running.")
+        return
+    cleared = reg.clear_finished()
+    print(f"Forgot {len(cleared)} finished run(s)." if cleared else "Nothing finished to clear.")
+
+
 @agents_app.command(name="providers")
 def agents_providers() -> None:
     """Which agent CLIs can be spawned here, and the named agents each can resolve."""

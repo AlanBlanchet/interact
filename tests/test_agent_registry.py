@@ -15,6 +15,8 @@ reintroduced at the feature level. `server_registry._runtime_dir` is pinned for 
 
 import json
 
+import os
+
 import pytest
 
 from interact.agents import registry as reg
@@ -404,3 +406,48 @@ def test_the_repo_root_itself_resolves_to_itself(tmp_path):
     (repo / ".git").mkdir(parents=True)
     (repo / "pyproject.toml").write_text("")
     assert reg.project_for(str(repo)) == "myrepo"
+
+
+# ── Forgetting a run ────────────────────────────────────────────────────────────────────────
+# Nothing could ever remove a run, so the panel grew forever: every agent ever spawned stayed
+# listed with its transcript and raw stream on disk. A list backed by an unbounded collection is
+# only usable for as long as you have not used it much.
+
+
+def _finished(run_id="r1", name="reviewer"):
+    run = reg.register(run_id=run_id, name=name, provider="claude", task="t", pid=None)
+    reg.finish(run_id, exit_code=0)
+    return run
+
+
+def test_forgetting_a_run_removes_it_and_everything_it_wrote(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _finished()
+    reg.raw_events_path("r1").write_text("{}\n")
+    reg.messages_path("r1").write_text("{}\n")
+    assert reg.forget("r1") is True
+    assert not any(p.exists() for p in (reg.raw_events_path("r1"), reg.messages_path("r1")))
+    assert [r.run_id for r in reg.list_runs()] == []
+
+
+def test_a_RUNNING_agent_is_never_forgotten(tmp_path, monkeypatch):
+    """Removing a live run's record would orphan the process: still working, now invisible."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    reg.register(run_id="live", name="worker", provider="claude", task="t", pid=os.getpid())
+    assert reg.forget("live") is False
+    assert [r.run_id for r in reg.list_runs()] == ["live"]
+
+
+def test_clearing_finished_leaves_the_running_ones_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _finished("done1")
+    _finished("done2")
+    reg.register(run_id="live", name="worker", provider="claude", task="t", pid=os.getpid())
+    assert sorted(reg.clear_finished()) == ["done1", "done2"]
+    assert [r.run_id for r in reg.list_runs()] == ["live"]
+
+
+def test_clearing_accepts_the_short_id_the_tool_prints(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _finished("abcd1234-0000-0000-0000-000000000000")
+    assert reg.forget("abcd1234") is True
