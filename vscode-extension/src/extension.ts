@@ -390,6 +390,11 @@ export async function activate(
       },
     }),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    // The team as a workplace: who is here, and what room the work has them in.
+    vscode.commands.registerCommand("interact.agents.team", async () => {
+      const { WorkplacePanel } = await import("./workplacePanel");
+      WorkplacePanel.show(log);
+    }),
     vscode.commands.registerCommand("interact.agents.sequence", async () => {
       const { SequencePanel } = await import("./sequencePanel");
       SequencePanel.show();

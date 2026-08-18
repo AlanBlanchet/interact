@@ -65,12 +65,23 @@ def test_the_hint_is_the_project_name_not_a_path():
 
 def test_run_actions_refuses_the_callers_own_editor(monkeypatch):
     """A helper nobody calls is not a guard. Mutating input aimed at the caller's own editor must
-    be refused at the point the action is dispatched."""
+    be refused at the point the action is dispatched.
+
+    The window list is STUBBED: reading the real desktop made this test depend on which windows
+    the user happens to have open, and it failed the moment one of them was retitled — a guard
+    this important cannot have a pass/fail that moves with someone's editor tabs.
+    """
     import asyncio
 
     import interact.server as srv
 
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/home/alan/dev/interact")
+    # Stub the RESOLUTION, not the desktop: what matters is that a resolved window bearing the
+    # caller's own project name is refused.
+    class _Win:
+        name = "interact - Visual Studio Code"
+
+    monkeypatch.setattr(srv.targets, "_resolve_target", lambda target, session: (_Win(), None, None))
     from interact.actions import KeyPressAction
 
     out = asyncio.run(
@@ -82,16 +93,47 @@ def test_run_actions_refuses_the_callers_own_editor(monkeypatch):
     assert "REFUSED" in out and "hosting THIS session" in out
 
 
-def test_reading_the_callers_own_window_is_still_allowed(monkeypatch):
-    """Looking is harmless and useful — the guard is about INPUT, not observation. Blocking a
-    screenshot would make the agent blind to its own editor for no safety gain."""
-    import asyncio
+def test_reading_the_callers_own_window_is_NOT_refused():
+    """Looking is harmless and useful — the guard is about INPUT. Blocking a read would make the
+    agent blind to its own editor for no safety gain."""
+    from interact.actions import HoverAction
+    from interact.desktop.selfguard import refusal_for
 
-    import interact.server as srv
+    assert refusal_for("interact - Visual Studio Code", [HoverAction(x=1, y=1)],
+                       allow_self=False) is None
 
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/home/alan/dev/interact")
-    out = asyncio.run(srv.screenshot(target="interact - Visual Studio Code"))
-    assert "REFUSED" not in str(out)
+
+def test_input_at_the_callers_own_window_IS_refused():
+    from interact.actions import KeyPressAction
+    from interact.desktop.selfguard import refusal_for
+
+    out = refusal_for("interact - Visual Studio Code", [KeyPressAction(key="ctrl+r")],
+                      allow_self=False)
+    assert out and "REFUSED" in out and "hosting THIS session" in out
+
+
+def test_one_mutating_action_in_a_batch_is_enough_to_refuse():
+    """A read followed by a keystroke is still a keystroke into the caller's own editor."""
+    from interact.actions import HoverAction, KeyPressAction
+    from interact.desktop.selfguard import refusal_for
+
+    batch = [HoverAction(x=1, y=1), KeyPressAction(key="ctrl+r")]
+    assert refusal_for("interact - Visual Studio Code", batch, allow_self=False)
+
+
+def test_allow_self_is_the_deliberate_escape_hatch():
+    from interact.actions import KeyPressAction
+    from interact.desktop.selfguard import refusal_for
+
+    assert refusal_for("interact - Visual Studio Code", [KeyPressAction(key="ctrl+r")],
+                       allow_self=True) is None
+
+
+def test_another_window_is_never_refused():
+    from interact.actions import KeyPressAction
+    from interact.desktop.selfguard import refusal_for
+
+    assert refusal_for("some-other-app", [KeyPressAction(key="ctrl+r")], allow_self=False) is None
 
 
 # ── typing must land where it was aimed ──────────────────────────────────────────────────────

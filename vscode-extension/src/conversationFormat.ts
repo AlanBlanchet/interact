@@ -155,6 +155,21 @@ export interface ChatDocument {
   awaitingReply?: boolean;
 }
 
+/** Just the transcript, for patching into a live view.
+ *
+ *  The panel used to be re-rendered by replacing the whole document, which threw away the scroll
+ *  position and anything half-typed in the composer every time the registry changed — the exact
+ *  moments you are watching. The document is built once; this is what gets swapped after.
+ */
+export function transcriptFragment(
+  { turns, name, awaitingReply }: { turns: Turn[]; name: string | undefined; awaitingReply?: boolean },
+): string {
+  const pending = awaitingReply
+    ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
+    : "";
+  return renderTranscript(turns) + pending;
+}
+
 export function chatDocument(
   { nonce, turns, name, status, awaitingReply, run, files }: ChatDocument,
 ): string {
@@ -215,7 +230,24 @@ document.addEventListener("click", (event) => {
   vscode.postMessage({ type: "open", path: button.getAttribute("data-path") });
 });
 const main = document.getElementById("transcript");
-if (main) main.scrollTop = main.scrollHeight;
+// Stick to the bottom only while the reader IS at the bottom: yanking someone back down while
+// they are reading further up is worse than not following at all.
+function atBottom() {
+  return !main || main.scrollHeight - main.scrollTop - main.clientHeight < 40;
+}
+function follow(wasAtBottom) {
+  if (main && wasAtBottom) main.scrollTop = main.scrollHeight;
+}
+// Later turns arrive as a PATCH, not a reload — a reload would discard the scroll position and
+// whatever is half-typed in the composer, which is exactly when you are watching.
+window.addEventListener("message", (event) => {
+  const msg = event.data;
+  if (!msg || msg.type !== "transcript" || !main) return;
+  const wasAtBottom = atBottom();
+  main.innerHTML = msg.html;
+  follow(wasAtBottom);
+});
+follow(true);
 </script>
 </body>
 </html>`;

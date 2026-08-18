@@ -175,11 +175,11 @@ async def run_actions(
     # hosts this session can end the session issuing the command (a reload or a close kills the
     # agent mid-task, with nothing left to notice or repair it). Observation stays allowed —
     # this guards INPUT, not looking.
-    if win is not None and not allow_self and any(a.mutates for a in actions):
-        from interact.desktop.selfguard import is_self_window, self_target_error
+    from interact.desktop.selfguard import refusal_for
 
-        if is_self_window(win.name):
-            return self_target_error(win.name)
+    refusal = refusal_for(win.name if win is not None else None, actions, allow_self=allow_self)
+    if refusal:
+        return refusal
     # When recording, capture a frame per step and let the video model read the sequence; the
     # action run itself returns its normal step report (so the query goes to the frames, not the
     # final state, avoiding a duplicate analysis).

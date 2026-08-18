@@ -15,7 +15,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { ChatFile, chatDocument, isAwaitingReply } from "./conversationFormat";
+import { ChatFile, chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -54,8 +54,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return readAgentRuns().find((r) => r.run_id === this.runId);
   }
 
+  /** Which run the live document was built for. A different agent needs a new document; the SAME
+   *  agent going on working needs only its transcript swapped. */
+  private rendered: string | undefined;
+
   private render(): void {
     if (!this.view) return;
+    const current = this.run();
+    if (current && this.rendered === current.run_id) {
+      // Same agent, more to say: patch the transcript and leave the rest of the view alone.
+      const turns = readAgentActivity(current.run_id, 300);
+      void this.view.webview.postMessage({
+        type: "transcript",
+        html: transcriptFragment({
+          turns,
+          name: current.name,
+          awaitingReply: isAwaitingReply(turns),
+        }),
+      });
+      return;
+    }
+    this.rendered = current?.run_id;
     const run = this.run();
     const turns = run ? readAgentActivity(run.run_id, 300) : [];
     this.view.webview.html = chatDocument({

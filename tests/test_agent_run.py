@@ -6,6 +6,7 @@ on a vendor binary being installed.
 """
 
 import asyncio
+import json
 import sys
 
 import pytest
@@ -145,3 +146,74 @@ async def test_events_survive_the_spawning_loop_ending(tmp_path):
     listed = [r for r in reg.list_runs() if r.run_id == run.run_id][0]
     assert listed.cost_usd == pytest.approx(0.5), "cost was lost with the supervising task"
     assert listed.last == "done"
+
+
+# ── Seeing a response as it arrives ─────────────────────────────────────────────────────────
+# The child writes only the RAW vendor stream; the normalised copy the VS Code panel reads is
+# produced on demand. So while an agent was actually working, the panel saw nothing at all — a
+# live run showed "waiting" from start to finish, and "view responses as they come in" was
+# impossible by construction.
+
+
+@pytest.mark.asyncio
+async def test_the_normalised_stream_is_kept_current_while_a_run_is_alive(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from interact.agents import registry as reg
+    from interact.agents.run import _mirror_while_alive
+
+    reg.register(run_id="r1", name="a", provider="claude", task="t", pid=None)
+    raw = reg.raw_events_path("r1")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(json.dumps({
+        "type": "assistant", "session_id": "s",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "first"}]},
+    }) + "\n")
+
+    alive = {"value": True}
+    task = asyncio.create_task(_mirror_while_alive("r1", lambda: alive["value"], interval=0.02))
+    await asyncio.sleep(0.1)
+    assert "first" in reg.events_path("r1").read_text(), "the panel reads this file"
+
+    with raw.open("a") as f:
+        f.write(json.dumps({
+            "type": "assistant", "session_id": "s",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "second"}]},
+        }) + "\n")
+    await asyncio.sleep(0.1)
+    assert "second" in reg.events_path("r1").read_text(), "a later turn must appear without a poke"
+
+    alive["value"] = False
+    await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_the_pump_stops_when_the_run_does(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from interact.agents import registry as reg
+    from interact.agents.run import _mirror_while_alive
+
+    reg.register(run_id="r1", name="a", provider="claude", task="t", pid=None)
+    task = asyncio.create_task(_mirror_while_alive("r1", lambda: False, interval=0.01))
+    await asyncio.wait_for(task, timeout=2)  # must not spin forever on a finished run
+
+
+@pytest.mark.asyncio
+async def test_a_broken_read_never_kills_the_pump(tmp_path, monkeypatch):
+    """It runs beside a live agent; a transient read failure must not take the stream down."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from interact.agents import registry as reg
+    from interact.agents.run import _mirror_while_alive
+
+    calls = {"n": 0}
+
+    def _boom(run_id):
+        calls["n"] += 1
+        raise OSError("transient")
+
+    monkeypatch.setattr(reg, "read_events", _boom)
+    alive = {"value": True}
+    task = asyncio.create_task(_mirror_while_alive("r1", lambda: alive["value"], interval=0.01))
+    await asyncio.sleep(0.08)
+    alive["value"] = False
+    await asyncio.wait_for(task, timeout=2)
+    assert calls["n"] > 1, "it kept going after the failure"

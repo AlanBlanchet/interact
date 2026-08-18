@@ -227,6 +227,11 @@
         "command": "interact.agents.send",
         "title": "Send message to agent",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "interact.agents.team",
+        "title": "Interact: Show Team",
+        "icon": "$(organization)"
       }
     ],
     "viewsContainers": {
@@ -260,6 +265,11 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "interact.agents.team",
+          "when": "view == interactAgents.board",
+          "group": "navigation@0"
+        },
         {
           "command": "interact.agents.sequence",
           "when": "view == interactAgents.board",

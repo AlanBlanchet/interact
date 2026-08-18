@@ -6,6 +6,7 @@ those orphaned. Same reason the sandbox does it (#92).
 """
 
 import asyncio
+from contextlib import suppress
 import json
 import os
 import shutil
@@ -61,6 +62,27 @@ class RunHandle:
         """Block until the run has ended AND every event has been persisted."""
         await self.pump
         return await self.process.wait()
+
+
+async def _mirror_while_alive(run_id: str, alive, *, interval: float = 1.0) -> None:
+    """Keep the NORMALISED stream current while a run works.
+
+    The child writes only the vendor's RAW stream; the provider-agnostic copy the VS Code panel
+    reads is produced by ``read_events``. Nothing called it during a run, so a working agent
+    looked idle for its whole life and "watch the responses arrive" was impossible.
+
+    Cheap by construction: ``read_events`` rewrites the mirror only when the content actually
+    changed, so a quiet run costs a parse and no write. Failures are swallowed — this runs beside
+    a live agent, and a transient read must never take its stream down.
+    """
+    while alive():
+        try:
+            reg.read_events(run_id)
+        except Exception:
+            pass
+        await asyncio.sleep(interval)
+    with suppress(Exception):
+        reg.read_events(run_id)  # one last pass so the final turn is not left unmirrored
 
 
 async def _reap(run_id: str, process) -> None:
@@ -131,4 +153,9 @@ async def run_agent(
     reg.register(run_id=run_id, pid=process.pid, provider=provider.name, name=label,
                  task=task, cwd=cwd, model=model, parent_run_id=parent, agent=agent)
     pump = asyncio.create_task(_reap(run_id, process))
+    # Keep the panel's copy of the stream current WHILE it works, so a running agent can be
+    # watched rather than only read afterwards.
+    asyncio.create_task(
+        _mirror_while_alive(run_id, lambda: process.returncode is None)
+    )
     return RunHandle(run_id=run_id, process=process, pump=pump)

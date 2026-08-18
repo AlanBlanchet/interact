@@ -106,7 +106,11 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
   getChildren(node?: Node): Node[] {
     if (!node) return this.roots();
     if (node.kind === "group") return this.runsFor(String(node.label));
-    if (node.kind === "run" && node.run) return this.activityFor(node.run);
+    // A run's children are the agents it SENT OUT first, then its own activity: a sub-agent
+    // belongs inside its parent's context, not loose beside it as a sibling of its own boss.
+    if (node.kind === "run" && node.run) {
+      return [...this.reportsFor(node.run), ...this.activityFor(node.run)];
+    }
     return [];
   }
 
@@ -142,13 +146,26 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
   }
 
   private runsFor(label: string): Node[] {
-    return readAgentRuns()
+    const all = readAgentRuns();
+    const ids = new Set(all.map((r) => r.run_id));
+    return all
       .filter((r) => groupKeyFor(r, this.groupBy) === label)
+      // Only the leads at this level — a sub-agent is shown under whoever sent it. A run whose
+      // parent is not in the list (its parent has been forgotten) is a lead again, never lost.
+      .filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id))
+      .map((r) => this.runNode(r));
+  }
+
+  /** The agents this run sent out. */
+  private reportsFor(run: AgentRun): Node[] {
+    return readAgentRuns()
+      .filter((r) => r.parent_run_id === run.run_id)
       .map((r) => this.runNode(r));
   }
 
   private runNode(run: AgentRun): Node {
-    const hasActivity = readAgentActivity(run.run_id, 1).length > 0;
+    const hasReports = readAgentRuns().some((r) => r.parent_run_id === run.run_id);
+    const hasActivity = hasReports || readAgentActivity(run.run_id, 1).length > 0;
     const node = new Node(
       run.name || run.run_id.slice(0, 8),
       hasActivity ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,

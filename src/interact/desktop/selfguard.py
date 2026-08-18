@@ -64,3 +64,21 @@ def self_target_error(title: str) -> str:
         "(a fresh window also picks up a rebuilt extension). If you genuinely mean to drive your "
         "own editor, pass allow_self=True."
     )
+
+
+def refusal_for(window_name: str | None, actions, *, allow_self: bool) -> str | None:
+    """The refusal to return for this dispatch, or None to proceed.
+
+    The whole policy in one place: INPUT aimed at the caller's own editor is refused, observation
+    is not, and `allow_self` is the deliberate escape hatch. It lives here rather than inline at
+    the call site so it can be tested without a window, a display, or a dispatch — the earlier
+    test drove the real desktop, which made it depend on the user's open windows and capture
+    their screen.
+    """
+    if window_name is None or allow_self:
+        return None
+    if not any(getattr(a, "mutates", True) for a in actions):
+        return None  # looking is harmless; the guard is about input
+    if not is_self_window(window_name):
+        return None
+    return self_target_error(window_name)

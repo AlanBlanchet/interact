@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { chatDocument, CHAT_EMPTY_HINT, isAwaitingReply, turnClass } from "./conversationFormat.ts";
+import { chatDocument, CHAT_EMPTY_HINT, isAwaitingReply, transcriptFragment, turnClass } from "./conversationFormat.ts";
 
 // "We have the configuration panel for interact, but not a seperate chat panel !!!!" — the
 // transcript existed, but only as a read-only EDITOR tab. A chat panel lives in the side bar
@@ -179,4 +179,20 @@ test("a file's PATH is shown, not hidden behind a label", () => {
   const html = chatDocument({ nonce: "n", name: "g", status: "done", turns: [], run: RUN,
     files: [{ label: "system prompt", path: "/home/alan/.claude/agents/g.md" }] });
   assert.match(html, /\/home\/alan\/\.claude\/agents\/g\.md/);
+});
+
+// Watching a response arrive means the view UPDATES, not reloads. Replacing the whole document on
+// every registry write threw away scroll position and whatever was half-typed in the composer.
+
+test("the transcript can be rendered on its own, for patching in", () => {
+  const html = transcriptFragment({
+    turns: [{ kind: "text", text: "hello" }], name: "r", awaitingReply: false,
+  });
+  assert.match(html, /hello/);
+  assert.ok(!/<html|<body|<script/.test(html), "a fragment, not a document");
+});
+
+test("the fragment carries the answering state too", () => {
+  const html = transcriptFragment({ turns: [], name: "r", awaitingReply: true });
+  assert.match(html, /answering/i);
 });
