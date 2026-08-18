@@ -22,8 +22,7 @@ from interact.vision.critique import (
 from interact.debug_utils import Debug
 from interact.desktop import DesktopElement
 from interact.vision.detect import _crop_image, _desktop_context, _page_signature
-from interact.vision.measure import blank_frame_reason
-from interact.vision.measure import format_measure, measure
+from interact.vision.measure import blank_frame_reason, format_measure, measure
 from interact.models import is_audio_model, is_transcription_only_model
 from interact.server import capture, core, targets, vlm
 from interact.server.core import _DEFAULT_SESSION, _audio_mime, _session_response, config, instrumented, mcp
