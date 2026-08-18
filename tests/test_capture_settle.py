@@ -108,3 +108,31 @@ async def test_an_element_capture_settles_too():
         assert b > 200 and r < 60, f"annotated capture is pre-scroll: rgb({r},{g},{b})"
     finally:
         await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_a_smooth_scroll_inside_a_nested_scroller_is_waited_for():
+    """Sampling window.scrollX/Y cannot see a scroller that is not the window — and a panel, a
+    modal, a virtualised list or anything reached by scrollIntoView scrolls its own container.
+    The document never moves, so three stable samples pass immediately and the capture photographs
+    the pre-scroll frame: the same defect as #109, one element down."""
+    mgr = BrowserManager(Config(headless=True, browser_type="chromium"))
+    try:
+        await mgr.ensure_ready()
+    except Exception as exc:
+        pytest.skip(f"no launchable chromium: {exc}")
+    try:
+        page = await mgr.get_page()
+        await page.set_content(
+            "<style>body{margin:0}#box{height:100vh;overflow-y:scroll;scroll-behavior:smooth}"
+            "#box>div{height:100vh}</style><div id=box>"
+            "<div style='background:#ff0000'></div><div style='background:#0000ff'></div></div>"
+        )
+        await page.evaluate("() => { const b = document.getElementById('box');"
+                            "  b.scrollTo({ top: b.clientHeight }); }")
+        state = await PageState.capture(page)
+        assert await page.evaluate("() => document.getElementById('box').scrollTop") > 0, "setup"
+        r, g, b = _centre(state.screenshot_base64)
+        assert b > 200 and r < 60, f"captured the pre-scroll panel: rgb({r},{g},{b})"
+    finally:
+        await mgr.close()

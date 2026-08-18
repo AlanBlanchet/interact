@@ -12,39 +12,48 @@ Every wait here is bounded and best-effort: a spinner, a marquee, or a page that
 forever must never block a tool call.
 """
 
+import asyncio
+
 from playwright.async_api import Page
 
 # ~1s each at 60fps. A page still moving after that is moving on purpose (carousel, marquee).
 _SCROLL_FRAMES = 60
 _ANIMATION_TIMEOUT_MS = 1000
+# A page whose rAF never fires would otherwise wait forever on a frame counter.
+_WALL_CLOCK_CAP = 2.0
 
 # One round trip, one rAF loop, both conditions. Splitting this into a scroll wait and an
 # animation wait cost two evaluates and ~45ms on a page where nothing was moving at all.
 #
-# The position is sampled SYNCHRONOUSLY before the first frame, so the wait costs three frames on
-# a page that is already still. THREE consecutive identical samples, not two: a smooth scroll is
-# started by the compositor on a frame of its own choosing, and under CPU load it can still be
-# sitting at its origin two frames after the call that requested it — measured, by watching this
-# very check pass an annotated capture of the pre-scroll screen on a loaded machine. Every extra
-# sample spans a whole frame, so the guard costs ~16ms and buys a much wider window.
+# Scrolling is watched with a CAPTURE-PHASE listener on the document rather than by sampling
+# window.scrollX/Y. Sampling the window is blind by construction to a scroller that is not the
+# window — a panel, a modal, a virtualised list, anything reached by scrollIntoView — and there
+# the document never moves, so a position check passes instantly and the capture photographs the
+# pre-scroll frame. Scroll events do not bubble, but they do CAPTURE, so one listener on the
+# document sees every element's.
+#
+# Settling needs three frames with no scroll event rather than one: a smooth scroll is started by
+# the compositor on a frame of its own choosing, and under CPU load it can still be at its origin
+# two frames after the call that requested it — measured, by watching this check pass an annotated
+# capture of the pre-scroll screen on a loaded machine.
 _SETTLE_JS = """
 () => new Promise((resolve) => {
-  const CAP = %d;
-  const at = () => window.scrollX + ',' + window.scrollY;
-  let last = at(), still = 0, frames = 0;
+  const CAP = %d, QUIET = 3;
+  let frames = 0, lastScroll = 0;
+  const onScroll = () => { lastScroll = frames; };
+  document.addEventListener('scroll', onScroll, true);
+  const done = (n) => { document.removeEventListener('scroll', onScroll, true); resolve(n); };
   const animating = () => {
     try {
       return document.getAnimations()
         .filter(a => { try { return a.effect.getComputedTiming().iterations !== Infinity; }
                        catch (e) { return true; } })
         .some(a => a.playState === 'running');
-    } catch (e) { return false; }  // no animations API — scroll stability is all we have
+    } catch (e) { return false; }  // no animations API — the scroll watch is all we have
   };
   const tick = () => {
-    const pos = at();
-    if (pos === last) still++; else { still = 0; last = pos; }
     frames++;
-    if ((still >= 3 && !animating()) || frames >= CAP) resolve(frames);
+    if ((frames - lastScroll >= QUIET && !animating()) || frames >= CAP) done(frames);
     else requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -74,6 +83,9 @@ async def settle_page(page: Page) -> None:
     """Wait (bounded) for the page to stop moving — scroll AND finite animations — before a
     capture opens the shutter (#109, #49)."""
     try:
-        await page.evaluate(_SETTLE_JS)
+        # Bounded in TIME as well as in frames. The frame cap assumes rAF keeps firing, and it
+        # does not in an occluded or backgrounded window — which would hang the whole tool call
+        # on a wait whose entire purpose is to be cheap insurance.
+        await asyncio.wait_for(page.evaluate(_SETTLE_JS), _WALL_CLOCK_CAP)
     except Exception:
-        pass  # navigated mid-wait, or a context that cannot run rAF — never block the capture
+        pass  # navigated mid-wait, a frozen rAF, or a context that cannot run it — never block
