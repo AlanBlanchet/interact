@@ -87,6 +87,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       awaitingReply: isAwaitingReply(turns),
       run: run as never,
       files: run ? this.files(run) : [],
+      sentBy: run?.parent_run_id
+        ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null
+        : null,
     });
   }
 

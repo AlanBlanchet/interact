@@ -196,3 +196,18 @@ test("the fragment carries the answering state too", () => {
   const html = transcriptFragment({ turns: [], name: "r", awaitingReply: true });
   assert.match(html, /answering/i);
 });
+
+test("a sub-agent says who sent it — that is half of 'its own context'", () => {
+  const html = chatDocument({
+    nonce: "n", name: "researcher", status: "running", turns: [],
+    run: { ...RUN, name: "researcher", agent: "researcher" } as any,
+    sentBy: "reviewer",
+  });
+  assert.match(html, /sent by/i);
+  assert.match(html, /reviewer/);
+});
+
+test("a top-level run does not claim a sender it never had", () => {
+  const html = chatDocument({ nonce: "n", name: "r", status: "running", turns: [], run: RUN });
+  assert.ok(!/sent by/i.test(html));
+});

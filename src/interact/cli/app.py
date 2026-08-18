@@ -646,6 +646,40 @@ def agents_providers() -> None:
             print(f"           agents: {', '.join(definitions)}")
 
 
+async def _run_agent_for_cli(provider, task, **kwargs):
+    """Indirection the tests replace — spawning for real costs money and a live CLI."""
+    from interact.agents.run import run_agent
+
+    return await run_agent(provider, task, **kwargs)
+
+
+@agents_app.command(name="spawn")
+def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
+                 name: str | None = None, model: str | None = None,
+                 cwd: str | None = None) -> None:
+    """Start an agent and return its id immediately, without waiting for it to finish.
+
+    `agents run` streams until the agent is done, which is right at a terminal and useless to a
+    UI — the panel needs the id NOW so it can show the agent working. Nothing is lost by letting
+    go: the child leads its own session and writes its own stream, so it outlives this process.
+    """
+    import asyncio
+    import os
+
+    from interact.agents.providers import provider_for
+
+    async def _go():
+        handle = await _run_agent_for_cli(
+            provider_for(provider), task, name=name or agent or provider,
+            cwd=cwd or os.getcwd(), agent=agent, model=model,
+        )
+        # Give the child a moment to be alive before this process exits out from under it.
+        await asyncio.sleep(0.2)
+        return handle.run_id
+
+    print(asyncio.run(_go()))
+
+
 @agents_app.command(name="run")
 def agents_run(task: str, provider: str = "claude", agent: str | None = None,
                name: str | None = None, model: str | None = None, cwd: str | None = None) -> None:

@@ -390,6 +390,44 @@ export async function activate(
       },
     }),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    // Starting an agent from the panel. Without this the panel could only WATCH — you had to
+    // leave it for a terminal to put anyone to work, which is not a team you manage.
+    vscode.commands.registerCommand("interact.agents.spawn", async () => {
+      const { execFile } = await import("child_process");
+      const definitions = await new Promise<string[]>((resolve) => {
+        execFile("interact", ["agents", "providers"], (err, stdout) => {
+          if (err) return resolve([]);
+          const line = stdout.split("\n").find((l) => l.includes("agents:"));
+          resolve(line ? line.split("agents:")[1].split(",").map((n) => n.trim()).filter(Boolean) : []);
+        });
+      });
+      const picked = await vscode.window.showQuickPick(
+        [{ label: "claude", description: "a plain agent, no definition" },
+         ...definitions.map((d) => ({ label: d, description: "~/.claude/agents/" + d + ".md" }))],
+        { title: "Which agent?", placeHolder: "the definition it will run as" },
+      );
+      if (!picked) return;
+      const task = await vscode.window.showInputBox({
+        title: `Brief for ${picked.label}`,
+        prompt: "It cannot ask you a follow-up — write a complete brief.",
+        placeHolder: "e.g. review the uncommitted diff for correctness",
+        ignoreFocusOut: true,
+      });
+      if (!task) return;
+      const args = ["agents", "spawn", task];
+      if (picked.label !== "claude") args.push("--agent", picked.label);
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (cwd) args.push("--cwd", cwd);
+      execFile("interact", args, (err, stdout, stderr) => {
+        const said = (stdout || stderr || "").trim();
+        if (err) {
+          void vscode.window.showErrorMessage(`Interact: could not start ${picked.label} — ${said || err}`);
+          return;
+        }
+        void vscode.window.showInformationMessage(`${picked.label} is working (${said.slice(0, 8)}).`);
+        agentsProvider.refresh();
+      });
+    }),
     // The team as a workplace: who is here, and what room the work has them in.
     vscode.commands.registerCommand("interact.agents.team", async () => {
       const { WorkplacePanel } = await import("./workplacePanel");

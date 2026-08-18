@@ -217,3 +217,29 @@ async def test_a_broken_read_never_kills_the_pump(tmp_path, monkeypatch):
     alive["value"] = False
     await asyncio.wait_for(task, timeout=2)
     assert calls["n"] > 1, "it kept going after the failure"
+
+
+# ── Starting an agent without waiting for it ────────────────────────────────────────────────
+# `agents run` streams until the agent finishes, which is right at a terminal and useless to a
+# UI: the panel needs the run id NOW so it can show the agent working. The child already writes
+# its own stream and leads its own session, so nothing is lost by letting go of it.
+
+
+def test_spawn_returns_the_run_id_without_waiting(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import importlib
+
+    # `interact.cli.app` is BOTH a module and the cyclopts App object the package re-exports; the
+    # attribute shadows the module, so import it explicitly rather than by attribute access.
+    cli = importlib.import_module("interact.cli.app")
+
+    class _Handle:
+        run_id = "abcd1234-0000-0000-0000-000000000000"
+
+    async def _fake_run(provider, task, **kw):
+        assert kw["agent"] == "code-reviewer"
+        return _Handle()
+
+    monkeypatch.setattr(cli, "_run_agent_for_cli", _fake_run, raising=False)
+    cli.agents_spawn("review the diff", agent="code-reviewer")
+    assert "abcd1234" in capsys.readouterr().out

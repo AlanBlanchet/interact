@@ -43,8 +43,11 @@ test("a finished worker has gone back to the entrance", () => {
   assert.equal(zoneOf({ kind: "tool", tool: "Read" }, "done"), "entry");
 });
 
-test("an editor session interact did not start is idle, never mid-task", () => {
-  assert.equal(zoneOf({ kind: "tool", tool: "Read" }, "foreign"), "idle");
+test("your own editor sessions stand at the main entrance — that is where work comes from", () => {
+  // They are real people working, not idle. But they are never shown mid-task: interact does not
+  // supervise them, and drawing one "in the code" would claim a supervision it does not have.
+  assert.equal(zoneOf({ kind: "tool", tool: "Read" }, "foreign"), "entry");
+  assert.equal(zoneOf({ kind: "tool", tool: "WebFetch" }, "foreign", "researcher"), "entry");
 });
 
 test("an unknown tool does not throw a worker out of the building", () => {
@@ -147,4 +150,17 @@ test("an unknown role falls back to the managers' room, not to nowhere", () => {
 
 test("a finished worker is at the entrance whatever their role", () => {
   assert.equal(zoneOf({ kind: "thinking" }, "done", "librarian"), "entry");
+});
+
+test("your own session says what it is, not that it is waiting", () => {
+  // interact does not supervise your editor sessions, so it must not narrate their work — but
+  // "waiting" is worse than saying nothing: it claims they are doing nothing at all.
+  const team = buildTeam(
+    [{ run_id: "mine", name: "interact-32", status: "foreign", parent_run_id: null,
+       started_at: 1, project: "interact" } as any],
+    () => undefined,
+    100,
+  );
+  assert.equal(team.workers[0].zone, "entry");
+  assert.match(team.workers[0].activity, /your (own )?session|not started by interact/i);
 });

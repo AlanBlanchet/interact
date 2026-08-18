@@ -232,6 +232,11 @@
         "command": "interact.agents.team",
         "title": "Interact: Show Team",
         "icon": "$(organization)"
+      },
+      {
+        "command": "interact.agents.spawn",
+        "title": "Interact: Start an Agent",
+        "icon": "$(add)"
       }
     ],
     "viewsContainers": {
@@ -265,6 +270,11 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "interact.agents.spawn",
+          "when": "view == interactAgents.board",
+          "group": "navigation@0"
+        },
         {
           "command": "interact.agents.team",
           "when": "view == interactAgents.board",

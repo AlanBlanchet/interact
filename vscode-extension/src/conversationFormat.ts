@@ -149,6 +149,8 @@ export interface ChatDocument {
   run?: ChatRun;
   /** Files worth opening: the system prompt, the raw stream, the transcript. */
   files?: ChatFile[];
+  /** Who sent this agent out, by name. Half of "its own context" is knowing whose errand it is. */
+  sentBy?: string | null;
   /** A message has been delivered and nothing has come back yet. Without this the panel looks
    *  identical whether the agent is thinking or the send silently failed — a reviewer read the
    *  silence as a broken button while the reply was on its way. */
@@ -171,7 +173,7 @@ export function transcriptFragment(
 }
 
 export function chatDocument(
-  { nonce, turns, name, status, awaitingReply, run, files }: ChatDocument,
+  { nonce, turns, name, status, awaitingReply, run, files, sentBy }: ChatDocument,
 ): string {
   const header = name
     ? `<header><span class="who">${escapeHtml(name)}</span>` +
@@ -181,7 +183,7 @@ export function chatDocument(
     ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
     : "";
   const body = name
-    ? renderDetails(run, files) + renderTranscript(turns) + pending
+    ? renderDetails(run, files, sentBy) + renderTranscript(turns) + pending
     : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
   const composer = name
     ? `<form id="composer">
@@ -348,10 +350,15 @@ function tokens(n: number | null | undefined): string {
  *  Files are BUTTONS, not links: a webview cannot open a workspace file itself, so each posts a
  *  message and the extension opens it in an editor.
  */
-export function renderDetails(run: ChatRun | undefined, files: ChatFile[] | undefined): string {
+export function renderDetails(
+  run: ChatRun | undefined,
+  files: ChatFile[] | undefined,
+  sentBy?: string | null,
+): string {
   if (!run) return "";
   const rows: [string, string][] = [];
   if (run.agent) rows.push(["definition", run.agent]);
+  if (sentBy) rows.push(["sent by", sentBy]);
   rows.push(["provider", [run.provider, run.model].filter(Boolean).join(" · ") || "—"]);
   rows.push([
     "context",

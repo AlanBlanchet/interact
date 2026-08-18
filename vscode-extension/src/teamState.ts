@@ -49,7 +49,10 @@ const HOME: [ZoneId, RegExp][] = [
  * Only then their ROLE, so a thinking agent sits somewhere that means something.
  */
 export function zoneOf(step: Step | undefined, status: string, agent?: string | null): ZoneId {
-  if (status === "foreign") return "idle";
+  // Your own editor sessions stand at the main entrance: that is where work originates. Never
+  // placed mid-task — interact does not supervise them, and drawing one "in the code" would
+  // claim a supervision it does not have.
+  if (status === "foreign") return "entry";
   if (status !== "running") return "entry";
   if (step?.kind === "spawn") return "managers";
   if (step?.kind === "tool" && step.tool) {
@@ -144,7 +147,9 @@ export function buildTeam(
       agent: run.agent ?? null,
       status: (run.status as Worker["status"]) ?? "done",
       zone: zoneOf(step, run.status, run.agent ?? null),
-      activity: activityOf(step),
+      // A session interact did not start gets named, never narrated: we do not read its stream,
+      // and "waiting" would claim it is doing nothing when it is somebody working.
+      activity: run.status === "foreign" ? "your own session" : activityOf(step),
       parent_run_id: run.parent_run_id ?? null,
       project: run.project ?? "",
       cost_usd: run.cost_usd ?? null,
