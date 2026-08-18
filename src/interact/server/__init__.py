@@ -128,6 +128,7 @@ from interact.server.tools_agents import (  # noqa: F401
     agent_events,
     agent_list,
     agent_providers,
+    agent_send,
     agent_spawn,
     agent_stop,
 )

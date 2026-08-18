@@ -18,6 +18,7 @@ EventKind = Literal[
     "thinking",    # the model's own reasoning, kept distinct so a reader can fold it away
     "tool",        # the agent used a tool — the live "what is it doing" line
     "tool_result", # what that tool gave back
+    "message",     # one agent addressing another — the edge in a sequence/graph view
     "rate_limit",  # the account's pooled limit spoke; a run can die here
     "done",        # terminal: carries the run's cost and token totals
     "error",       # terminal: it failed
@@ -35,6 +36,10 @@ class AgentEvent(BaseModel):
     #: A compact rendering of the tool's arguments. A conversation view showing "used Bash" without
     #: the command is a status line, not a transcript — this is what makes it readable.
     tool_input: str = ""
+    #: For a "message": which run sent it and which received it. Both sides record the same
+    #: exchange, so a sequence view can draw the arrow from either transcript.
+    from_run: str | None = None
+    to_run: str | None = None
     # Cost is API-EQUIVALENT: on a subscription run the user is not billed this, they already paid
     # for the plan. The dashboard must label it accordingly rather than implying fresh spend.
     cost_usd: float | None = None
@@ -48,6 +53,8 @@ class AgentEvent(BaseModel):
             return f"using {self.tool}" if self.tool else "using a tool"
         if self.kind == "rate_limit":
             return self.text or "rate limited"
+        if self.kind == "message":
+            return f"→ {self.to_run[:8]}: {self.text[:80]}" if self.to_run else self.text[:80]
         if self.kind == "done":
             return "done"
         if self.kind == "error":

@@ -50,6 +50,10 @@ class AgentProvider(ABC):
 
     name: ClassVar[str]
     binary: ClassVar[str]
+    #: Can a finished/running session be CONTINUED with a new message? This is what makes
+    #: agent-to-agent messaging possible without inventing a mailbox: the recipient keeps its
+    #: own context instead of being handed a cold summary of it.
+    can_resume: ClassVar[bool] = False
     #: False when the flags below were written from documentation but never exercised against a
     #: real binary — the adapter says so instead of pretending to be tested.
     verified: ClassVar[bool] = True
@@ -69,6 +73,10 @@ class AgentProvider(ABC):
     def parse(self, line: str) -> AgentEvent | None:
         """One stdout line → a normalised event, or None if the line carries nothing."""
 
+    def resume_command(self, run_id: str, message: str) -> list[str]:
+        """The argv that delivers ``message`` into an existing session."""
+        raise NotImplementedError(f"{type(self).__name__} cannot resume a session")
+
     def discover(self) -> list[dict]:
         """Agent sessions this provider can see that interact did NOT spawn — the user's own
         interactive windows included. Optional; a provider with no such view returns []."""
@@ -84,6 +92,7 @@ class ClaudeCodeProvider(AgentProvider):
 
     name = "claude"
     binary = "claude"
+    can_resume = True
 
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None) -> list[str]:
@@ -102,6 +111,17 @@ class ClaudeCodeProvider(AgentProvider):
         if mcp_config:
             argv += ["--mcp-config", mcp_config]
         return argv
+
+    def resume_command(self, run_id: str, message: str) -> list[str]:
+        """Continue an existing session. Our run_id IS Claude Code's session id (we set it at
+        spawn), so the recipient answers with its full context intact and the reply lands in the
+        same transcript — which is what makes the exchange readable afterwards."""
+        return [
+            self.binary, "-p", message,
+            "--resume", run_id,
+            "--output-format", "stream-json",
+            "--verbose",
+        ]
 
     def parse(self, line: str) -> AgentEvent | None:
         line = line.strip()

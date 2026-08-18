@@ -283,3 +283,52 @@ def test_the_raw_stream_is_mirrored_into_a_provider_agnostic_file():
     mirrored = [json.loads(l) for l in (reg.agents_dir() / "r1.jsonl").read_text().splitlines()]
     assert [m["kind"] for m in mirrored] == ["started", "done"]
     assert all("kind" in m and "text" in m for m in mirrored)  # the shape agents.ts expects
+
+
+# ── the message ledger: who said what to whom ────────────────────────────────────────────────
+# A sequence view (lanes per agent, time down, arrows between them) needs the EXCHANGE recorded,
+# not just each side's monologue. So a message is written to BOTH transcripts — the sender's, so
+# its own history shows what it asked for, and the recipient's, so the reply has context above it.
+
+
+def test_a_message_lands_in_both_transcripts():
+    _record(run_id="a", name="lead")
+    _record(run_id="b", name="reviewer")
+    reg.record_message(from_run="a", to_run="b", text="please review the diff")
+
+    sent = [e for e in reg.read_events("a") if e.kind == "message"]
+    got = [e for e in reg.read_events("b") if e.kind == "message"]
+    assert sent and got, "an exchange invisible to one side is not an exchange"
+    assert sent[0].to_run == "b" and got[0].from_run == "a"
+    assert "review the diff" in got[0].text
+
+
+def test_messages_are_listed_for_a_sequence_view():
+    _record(run_id="a", name="lead")
+    _record(run_id="b", name="reviewer")
+    reg.record_message(from_run="a", to_run="b", text="one")
+    reg.record_message(from_run="b", to_run="a", text="two")
+    pairs = [(m.from_run, m.to_run, m.text) for m in reg.messages()]
+    assert pairs == [("a", "b", "one"), ("b", "a", "two")], "order is the whole point of a sequence"
+
+
+def test_a_message_to_an_unknown_run_is_refused():
+    _record(run_id="a")
+    assert reg.record_message(from_run="a", to_run="ghost", text="hi") is False
+
+
+def test_a_message_survives_a_run_that_has_a_raw_vendor_stream():
+    """The real-world case the tests above miss: once a run has its own vendor transcript, that
+    stream is authoritative and the mirror is rewritten from it — so a message appended into the
+    mirror would be silently clobbered. Messages live beside the stream, not inside it."""
+    _record(run_id="a", name="lead")
+    _record(run_id="b", name="reviewer")
+    reg.raw_events_path("b").write_text(
+        '{"type":"system","subtype":"init","cwd":"/tmp","tools":[],"session_id":"s"}\n'
+    )
+    reg.record_message(from_run="a", to_run="b", text="please review")
+    reg.read_events("b")  # forces the mirror rewrite
+
+    kinds = [e.kind for e in reg.read_events("b")]
+    assert "message" in kinds, "the message was lost behind the vendor stream"
+    assert "started" in kinds, "the vendor's own events must still be there"

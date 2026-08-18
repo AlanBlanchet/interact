@@ -61,6 +61,13 @@ def _record_path(run_id: str) -> Path:
     return agents_dir() / f"{run_id}.json"
 
 
+def messages_path(run_id: str) -> Path:
+    """Messages live BESIDE the vendor stream, never inside it. The stream is the vendor's own
+    file and the mirror is rewritten from it, so anything appended there is clobbered on the next
+    read — a message must outlive that."""
+    return agents_dir() / f"{run_id}.messages.jsonl"
+
+
 def events_path(run_id: str) -> Path:
     return agents_dir() / f"{run_id}.jsonl"
 
@@ -155,6 +162,62 @@ def append_event(run_id: str, event: AgentEvent) -> None:
     _write(stored)
 
 
+def record_message(*, from_run: str, to_run: str, text: str) -> bool:
+    """Record one agent addressing another, on BOTH transcripts.
+
+    Written to each side because an exchange visible to only one of them is not an exchange: the
+    sender's history should show what it asked for, and the recipient's should show the request
+    directly above whatever it did next. Returns False for an unknown recipient rather than
+    writing a message nobody can receive.
+    """
+    if _read_record(to_run) is None:
+        return False
+    event = AgentEvent(kind="message", text=text, from_run=from_run, to_run=to_run)
+    for side in (from_run, to_run):
+        path = messages_path(side)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(event.model_dump_json() + "\n")
+    # Keep the run rows current: a message is the most recent thing that happened to both.
+    for side in (from_run, to_run):
+        stored = _read_record(side)
+        if stored is not None:
+            stored.last = event.summary()
+            _write(stored)
+    return True
+
+
+def _read_messages(run_id: str) -> list[AgentEvent]:
+    try:
+        lines = messages_path(run_id).read_text().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            out.append(AgentEvent.model_validate_json(line))
+        except ValueError:
+            continue
+    return out
+
+
+def messages() -> list[AgentEvent]:
+    """Every recorded exchange, in order — the edges a sequence or graph view draws. Deduped,
+    since each message is stored on both sides."""
+    seen: set[tuple] = set()
+    out: list[AgentEvent] = []
+    for run in list_runs():
+        for event in read_events(run.run_id):
+            if event.kind != "message":
+                continue
+            key = (event.from_run, event.to_run, event.text)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(event)
+    return out
+
+
 def read_events(run_id: str) -> list[AgentEvent]:
     """Every event of a run, normalised.
 
@@ -181,7 +244,7 @@ def read_events(run_id: str) -> list[AgentEvent]:
             if event is not None:
                 parsed.append(event)
         _mirror_normalised(run_id, parsed)
-        return parsed
+        return parsed + _read_messages(run_id)
 
     # No raw stream — events were appended directly (a test, or a provider that has none).
     out: list[AgentEvent] = []
@@ -193,7 +256,7 @@ def read_events(run_id: str) -> list[AgentEvent]:
                 continue
     except OSError:
         pass
-    return out
+    return out + _read_messages(run_id)
 
 
 def _mirror_normalised(run_id: str, events: list[AgentEvent]) -> None:

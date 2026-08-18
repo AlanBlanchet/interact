@@ -179,3 +179,23 @@ def test_a_named_agent_definition_is_passed_through():
 def test_no_agent_flag_when_none_is_named():
     argv = ClaudeCodeProvider().command("t", cwd="/tmp", model=None, mcp_config=None, run_id="r")
     assert "--agent" not in argv
+
+
+# ── agents talking to each other ─────────────────────────────────────────────────────────────
+# Delivery is not a bespoke protocol either: our run_id IS the vendor's session id, so resuming
+# that session with a message continues the SAME conversation — the recipient keeps its context
+# and its transcript grows in place, which is what makes the exchange visible afterwards.
+
+
+def test_resume_continues_the_same_session_with_the_message():
+    argv = ClaudeCodeProvider().resume_command("11111111-2222-3333-4444-555555555555", "ping")
+    assert argv[0] == "claude"
+    assert argv[argv.index("--resume") + 1] == "11111111-2222-3333-4444-555555555555"
+    assert "ping" in argv
+    # Still a parseable stream, or the reply would never reach the transcript.
+    assert "--output-format" in argv and "stream-json" in argv and "--verbose" in argv
+
+
+def test_a_provider_that_cannot_resume_says_so():
+    assert CodexProvider().can_resume is False
+    assert ClaudeCodeProvider().can_resume is True

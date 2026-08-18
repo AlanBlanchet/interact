@@ -132,3 +132,63 @@ async def agent_providers() -> str:
         note = f" — {p.caveat}" if not p.verified else ""
         lines.append(f"  {p.name}: {state}{note}")
     return "Agent providers:\n" + "\n".join(lines)
+
+
+@mcp.tool()
+@instrumented
+async def agent_send(run_id: str, message: str, wait: bool = False) -> str:
+    """Send a message to another agent — it answers with its full context intact.
+
+    Delivery resumes the recipient's own session rather than handing it a cold summary, so it
+    remembers everything it has already done and its reply lands in the same transcript. That is
+    what makes the exchange readable afterwards, and what a sequence view draws its arrows from.
+
+    Use it to ask a teammate for something and to answer one. The exchange is recorded on BOTH
+    sides, so either agent's history shows it.
+
+    run_id: the agent to address (agent_list shows the ids).
+    message: what to say — write it as a complete request; it cannot ask you a follow-up.
+    wait: block until it has replied, instead of returning as soon as the message is delivered.
+    """
+    import asyncio
+    import os
+
+    run = next((r for r in reg.list_runs() if r.run_id == run_id), None)
+    if run is None:
+        return f"ERROR: no agent run {run_id!r}. Use agent_list to see the run ids."
+    if run.foreign:
+        return (f"ERROR: {run.name!r} is one of your own editor sessions, not an agent interact "
+                "started — interact can watch it, but must not type into it.")
+    try:
+        prov = provider_for(run.provider)
+    except ValueError as e:
+        return f"ERROR: {e}"
+    if not prov.can_resume:
+        return (f"ERROR: the {run.provider!r} CLI cannot continue a session, so a message would "
+                "arrive with no context. Spawn a new agent with agent_spawn instead.")
+
+    sender = os.environ.get("INTERACT_RUN_ID") or "operator"
+    if not reg.record_message(from_run=sender, to_run=run_id, text=message):
+        return f"ERROR: could not record the message to {run_id!r}."
+
+    # The reply continues the recipient's OWN transcript, so it is appended to that run's stream.
+    argv = prov.resume_command(run_id, message)
+    raw = reg.raw_events_path(run_id)
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    sink = raw.open("ab")  # append: this is another turn of the same conversation
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv, cwd=run.cwd or os.getcwd(), stdout=sink,
+            stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
+        )
+    except OSError as e:
+        return f"ERROR: could not deliver to {run.name} — {e}"
+    finally:
+        sink.close()
+    if wait:
+        await process.wait()
+        replies = [e for e in reg.read_events(run_id) if e.kind == "text"]
+        answer = replies[-1].text if replies else "(no reply text)"
+        return f"{run.name} replied:\n{answer}"
+    return (f"Delivered to {run.name} ({run_id[:8]}). It is answering now — "
+            f"agent_events(run_id=\"{run_id}\") to read the reply.")
