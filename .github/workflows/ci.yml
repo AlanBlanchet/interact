@@ -43,8 +43,11 @@ jobs:
       - name: Version files in sync (single source of truth)
         run: uv run python -m interact.versioning check
 
+      # -rs lists every SKIP with its reason. Without it a test that quietly stops running —
+      # a browser that will not launch, a missing display — is indistinguishable from one that
+      # passed, and the suite keeps reporting green over a shrinking amount of actual coverage.
       - name: Run tests (integration + desktop auto-skip here)
-        run: uv run pytest -m "not integration" -q
+        run: uv run pytest -m "not integration" -q -rs
 
       # The macOS/Windows runners are real GUI sessions, so drive the PortableBackend (mss + pynput)
       # on them and SHOW the per-test result (-rs prints skip reasons): this is the visible mac/win
