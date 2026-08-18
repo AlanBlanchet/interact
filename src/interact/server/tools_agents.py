@@ -64,6 +64,12 @@ async def agent_spawn(
         return (f"ERROR: the {provider!r} CLI is not installed on this machine "
                 f"(installed providers: {installed}). interact drives the vendor's own binary, "
                 f"so it has to be present and signed in.")
+    if agent is not None and not prov.valid_definition(agent):
+        # At the edge: this value becomes a filesystem path, is recorded on the run, and is
+        # offered by the panel as a clickable "system prompt" link.
+        known = ", ".join(prov.agent_definitions()) or "none"
+        return (f"ERROR: {provider} has no agent definition {agent!r}. "
+                f"Available definitions: {known}.")
     if not prov.verified:
         # Never let an unexercised adapter look as trustworthy as a tested one.
         pass

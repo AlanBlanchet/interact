@@ -75,6 +75,23 @@ class AgentProvider(ABC):
         concept. A link to it is what makes "what IS this agent" answerable from a panel."""
         return None
 
+    def valid_definition(self, agent: str) -> bool:
+        """Whether ``agent`` names a definition this CLI actually has.
+
+        Checked at the edge, because the value arrives from a tool caller and ends up as a
+        filesystem path that the VS Code panel offers as a clickable link — so a name like
+        ``../../x`` would walk out of the definitions directory into something a person clicks.
+        A CLI with no definitions concept accepts nothing, which is correct: there is nothing for
+        the name to resolve to.
+        """
+        if not agent or "/" in agent or "\\" in agent or agent.startswith("."):
+            return False  # absolute: this becomes a path, and a path is what must not escape
+        known = self.agent_definitions()
+        # Enumeration is ADVISORY. A CLI that cannot list its definitions — none installed yet, a
+        # layout we do not know how to read — must not thereby reject every name: that would turn
+        # a hardening check into an outage. Unknown is only an error when we can prove it unknown.
+        return agent in known if known else True
+
     def agent_definitions(self) -> list[str]:
         """Names this CLI can resolve as ``agent=``, sorted. Empty when it has no such concept.
 
