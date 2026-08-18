@@ -12,7 +12,8 @@ import * as vscode from "vscode";
 
 import { readAgentActivity, readAgentMessages, readAgentRuns } from "./agents";
 import { agentsDir } from "./paths";
-import { buildTeam, latestMeaningful } from "./teamState";
+import { buildTeam } from "./teamState";
+import { selectedRunId } from "./workplaceMessage";
 import { renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
 
@@ -29,9 +30,11 @@ export class WorkplacePanel {
     // A click in the room aims the side-bar Chat at that agent: the workplace is where you SEE
     // the team, the chat is where you talk to one of them, and this is the seam between.
     this.panel.webview.onDidReceiveMessage((msg) => {
-      if (msg?.type === "focus" && typeof msg.runId === "string") {
-        void vscode.commands.executeCommand("interact.agents.chat", msg.runId);
-      }
+      // Two shapes on purpose: `select`/`run_id` is what the pixel-art scene posts, `focus`/`runId`
+      // what the plain fallback does. Accepting only one was why clicking a sprite did nothing at
+      // all — the hook was there, the two halves just never agreed on the word.
+      const runId = selectedRunId(msg);
+      if (runId) void vscode.commands.executeCommand("interact.agents.chat", runId);
     });
     this.watch();
     this.render();
@@ -56,9 +59,9 @@ export class WorkplacePanel {
   private state(): TeamState {
     return buildTeam(
       readAgentRuns() as never,
-      // The most recent MEANINGFUL step is what puts a worker in a room. A short window, not one
-      // event: the vendor emits housekeeping constantly, so the newest line is usually silent.
-      (runId) => latestMeaningful(readAgentActivity(runId, STEP_WINDOW)),
+      // The whole recent window, not one event: the vendor emits housekeeping constantly, and a
+      // finished worker's room is found by walking back to the last thing it actually did.
+      (runId) => readAgentActivity(runId, STEP_WINDOW),
       Date.now() / 1000,
       readAgentMessages() as never,
     );

@@ -394,11 +394,11 @@ export async function activate(
     // leave it for a terminal to put anyone to work, which is not a team you manage.
     vscode.commands.registerCommand("interact.agents.spawn", async () => {
       const { execFile } = await import("child_process");
+      // A machine-readable list, not the human providers table: scraping that would empty the
+      // picker the day its wording changed.
       const definitions = await new Promise<string[]>((resolve) => {
-        execFile("interact", ["agents", "providers"], (err, stdout) => {
-          if (err) return resolve([]);
-          const line = stdout.split("\n").find((l) => l.includes("agents:"));
-          resolve(line ? line.split("agents:")[1].split(",").map((n) => n.trim()).filter(Boolean) : []);
+        execFile("interact", ["agents", "definitions"], (err, stdout) => {
+          resolve(err ? [] : stdout.split("\n").map((n) => n.trim()).filter(Boolean));
         });
       });
       const picked = await vscode.window.showQuickPick(

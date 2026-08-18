@@ -85,6 +85,33 @@ async def _mirror_while_alive(run_id: str, alive, *, interval: float = 1.0) -> N
         reg.read_events(run_id)  # one last pass so the final turn is not left unmirrored
 
 
+async def _mirror_running_runs(alive, *, interval: float = 1.0) -> None:
+    """Keep EVERY live run's normalised stream current, not only the ones this process spawned.
+
+    `agents spawn` detaches, so the pump started beside a run dies with its parent. The child keeps
+    writing its raw stream, but the copy the VS Code panel reads is produced on demand — so a
+    detached agent's activity froze on screen until something happened to call Python. This runs
+    in the MCP server, the process alive whenever the user is working.
+
+    Settled runs are skipped (nothing changes, so re-reading is waste) and so are sessions interact
+    did not start: reading someone else's transcript is not ours to do.
+    """
+    while alive():
+        try:
+            # `foreign` is checked as well as excluded by the query: reading someone else's
+            # transcript is not ours to do, and that guarantee should not rest on one argument.
+            runs = [r for r in reg.list_runs(include_foreign=False)
+                    if r.status == "running" and not getattr(r, "foreign", False)]
+        except Exception:
+            runs = []
+        for run in runs:
+            try:
+                reg.read_events(run.run_id)
+            except Exception:
+                continue  # one half-written stream must not stop the rest
+        await asyncio.sleep(interval)
+
+
 async def _reap(run_id: str, process) -> None:
     """Record how the run ended. The EVENTS do not depend on this coroutine — the child writes
     them to disk itself (see :func:`run_agent`) — so losing this task costs an exit code, never

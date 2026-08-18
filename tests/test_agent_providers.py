@@ -325,3 +325,31 @@ def test_no_usage_at_all_reports_nothing_rather_than_zero():
         "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
     }))
     assert event.input_tokens is None
+
+
+# ── A machine-readable list of definitions ──────────────────────────────────────────────────
+# The panel's "start an agent" picker was scraping the human-readable `agents providers` output by
+# splitting on "agents:" and commas — a display change would silently empty the picker.
+
+
+def test_definitions_command_prints_one_name_per_line(capsys, tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = tmp_path / ".claude" / "agents"
+    home.mkdir(parents=True)
+    for name in ("code-reviewer", "researcher"):
+        (home / f"{name}.md").write_text("---\n---\n")
+    cli = importlib.import_module("interact.cli.app")
+    cli.agents_definitions()
+    assert capsys.readouterr().out.split() == ["code-reviewer", "researcher"]
+
+
+def test_definitions_command_is_silent_when_there_are_none(capsys, tmp_path, monkeypatch):
+    """Empty output, not a message: the caller is a parser, and prose would become a fake agent."""
+    import importlib
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cli = importlib.import_module("interact.cli.app")
+    cli.agents_definitions()
+    assert capsys.readouterr().out.strip() == ""

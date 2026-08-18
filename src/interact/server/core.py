@@ -189,13 +189,19 @@ async def _lifespan(_: FastMCP) -> AsyncIterator[None]:
     # Opt-out, because it is the only outbound call a server makes on its own initiative.
     if config.refresh_live_data:
         live_sources.refresh_in_background()
+    # Keep every live agent's normalised stream current. A detached run's own pump dies with the
+    # process that started it, so without this the panel's view of a working agent freezes.
+    from interact.agents.run import _mirror_running_runs
+
+    mirror = asyncio.create_task(_mirror_running_runs(lambda: True))
     reaper = asyncio.create_task(sandbox._idle_session_reaper(config.session_idle_ttl))
     try:
         yield
     finally:
-        reaper.cancel()
-        with suppress(asyncio.CancelledError):
-            await reaper
+        for task in (mirror, reaper):
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
         await _sessions.close_all()
         sandbox._close_sandbox()
         unregister_server(reg)

@@ -52,6 +52,9 @@ body {
   --wp-floor-line: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
   --wp-lamp: color-mix(in srgb, var(--wp-h3) 22%, transparent);
   --wp-slab: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
+  /* A plate that carries BACKGROUND-coloured text, so it has to be light enough to read against
+     the background — the decorative slab above is not (measured 2.38:1 dark, 1.89:1 light). */
+  --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
 
   --wp-metal: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
   --wp-wood: color-mix(in srgb, #8a5a2b 74%, var(--wp-bg));
@@ -127,7 +130,7 @@ body.vscode-high-contrast-light .wp {
   align-items: baseline;
   gap: 8px;
   padding: 3px 9px;
-  background: var(--wp-slab);
+  background: var(--wp-plate);
   color: var(--wp-bg);
   border: 1px solid var(--wp-ink);
   box-shadow: 2px 2px 0 0 var(--wp-ink);
@@ -314,7 +317,11 @@ body.vscode-high-contrast-light .wp {
 }
 .wp-worker[data-depth="0"] { flex: 0 0 var(--w-lead); max-width: var(--w-lead); }
 .wp-worker[data-depth="2"], .wp-worker[data-depth="3"] { flex: 0 0 var(--w-mini); max-width: var(--w-mini); }
-.wp-worker[data-status="done"] { filter: grayscale(.6) opacity(.58); }
+/* Scoped to the sprite, not the whole worker: filtering the figure faded the NAME PLATE too,
+   down to ~4.24:1 on real pixels — a contrast a computed-style check cannot even see. Someone who
+   has finished should look finished; their name still has to be readable. */
+.wp-worker[data-status="done"] .wp-stage { filter: grayscale(.6) opacity(.58); }
+.wp-worker[data-status="done"] .wp-plate { opacity: .82; }
 .wp-worker[data-status="foreign"] { filter: opacity(.72); }
 .wp-worker:hover { filter: none; }
 .wp-worker:focus-visible { outline: 1px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 2px; }

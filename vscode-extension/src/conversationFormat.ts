@@ -255,50 +255,78 @@ follow(true);
 </html>`;
 }
 
-//: Themed entirely from VS Code's own variables so the panel belongs to whatever theme is set.
+//: One visual language with the workplace.
+//:
+//: An independent critic put it plainly: the side bar was "stock VS Code tree, plain text,
+//: monospace transcript" while the team tab was "vivid custom pixel art" — "two unrelated
+//: products". Both derive their colour from the same `--vscode-*` variables; what differed was
+//: the TREATMENT. So the chat borrows the room's own devices: signs are uppercase and letter-
+//: spaced on a light plate, panels sit on a hard 2px offset shadow with a solid ink border, and
+//: nothing is rounded softer than the pixel grid allows.
 const STYLE = `
+  :root {
+    --wp-bg: var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e));
+    --wp-fg: var(--vscode-editor-foreground, #d4d4d4);
+    --wp-dim: var(--vscode-descriptionForeground, #9a9a9a);
+    --wp-ink: color-mix(in srgb, var(--wp-fg) 62%, var(--wp-bg));
+    --wp-line: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
+    --wp-wall: color-mix(in srgb, var(--wp-fg) 7%, var(--wp-bg));
+    /* Carries background-coloured text, so it is light enough to read against the background. */
+    --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
+  }
   body { margin: 0; display: flex; flex-direction: column; height: 100vh;
          font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
-         color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
-  header { display: flex; align-items: baseline; gap: .5em; padding: .6em .8em;
-           border-bottom: 1px solid var(--vscode-panel-border); }
-  .who { font-weight: 600; }
-  .status { color: var(--vscode-descriptionForeground); font-size: .9em; }
+         color: var(--wp-fg); background: var(--wp-bg); }
+
+  /* The sign over the door, exactly as a room wears it. */
+  header { display: flex; align-items: center; gap: .5em; margin: .7em .8em .4em;
+           padding: 3px 9px; background: var(--wp-plate); color: var(--wp-bg);
+           border: 1px solid var(--wp-ink); box-shadow: 2px 2px 0 0 var(--wp-ink);
+           align-self: flex-start; }
+  .who { font-weight: 700; letter-spacing: .18em; font-size: 11px; text-transform: uppercase; }
+  .status { font-size: 10px; opacity: .78; }
+
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
-  .hint { color: var(--vscode-descriptionForeground); }
-  .pending { color: var(--vscode-descriptionForeground); font-style: italic; }
+  .hint { color: var(--wp-dim); }
+  .pending { color: var(--wp-dim); font-style: italic; }
+  .pending::after { content: ""; animation: blink 1.2s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: .4 } }
+
+  .turn { margin: 0 0 .7em; line-height: 1.45; }
+  .turn .who { font-weight: 600; letter-spacing: .1em; font-size: 10px; text-transform: uppercase;
+               color: var(--wp-dim); }
+  .turn-thinking { color: var(--wp-dim); font-style: italic; }
+  /* Machine surfaces sit on the wall colour with an ink edge — the room's own panels. */
+  .turn-tool, .turn-tool_result { font-family: var(--vscode-editor-font-family);
+           background: var(--wp-wall); border: 1px solid var(--wp-line); padding: .4em .6em;
+           white-space: pre-wrap; overflow-wrap: anywhere; }
+  .turn-error { color: var(--vscode-errorForeground); }
+  /* What YOU or another agent said: a plate, like a worker's speech in the room. */
+  .turn-message, .turn-prompt { background: var(--wp-wall); border: 1px solid var(--wp-line);
+           box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .4em .6em; }
+
   .details { margin: 0 0 .8em; font-size: .95em; }
-  .details summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+  .details summary { cursor: pointer; color: var(--wp-dim); letter-spacing: .04em; }
   .details .grid { display: grid; grid-template-columns: auto 1fr; gap: .15em .8em; margin: .5em 0; }
-  .details .k { color: var(--vscode-descriptionForeground); }
+  .details .k { color: var(--wp-dim); }
   .details .v { overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
   .details .brief p { margin: .2em 0 .6em; white-space: pre-wrap; }
   .details .files { margin-top: .5em; }
   .details .file { color: var(--vscode-textLink-foreground); overflow-wrap: anywhere; }
-  .pending::after { content: ""; animation: blink 1.2s steps(1) infinite; }
-  @keyframes blink { 50% { opacity: .4 } }
-  .turn { margin: 0 0 .7em; line-height: 1.45; }
-  .turn-thinking { color: var(--vscode-descriptionForeground); font-style: italic; }
-  .turn-tool, .turn-tool_result { font-family: var(--vscode-editor-font-family);
-           background: var(--vscode-textCodeBlock-background); border-radius: 4px; padding: .4em .6em;
-           white-space: pre-wrap; overflow-wrap: anywhere; }
-  .turn-error { color: var(--vscode-errorForeground); }
-  /* What YOU (or another agent) said — set apart from the agent's own turns, so a conversation
-     reads as two sides rather than one voice. */
-  .turn-message, .turn-prompt { background: var(--vscode-textBlockQuote-background);
-           border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
-           border-radius: 3px; padding: .4em .6em; }
+
   #composer { display: flex; flex-direction: column; gap: .4em; padding: .6em .8em;
-              border-top: 1px solid var(--vscode-panel-border); }
+              border-top: 1px solid var(--wp-line); }
   textarea { resize: vertical; font: inherit; color: var(--vscode-input-foreground);
              background: var(--vscode-input-background);
-             border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px;
-             padding: .4em; }
-  button { align-self: flex-end; font: inherit; cursor: pointer; border: none; border-radius: 4px;
-           padding: .35em 1em; color: var(--vscode-button-foreground);
-           background: var(--vscode-button-background); }
+             border: 1px solid var(--wp-line); padding: .4em; }
+  button { align-self: flex-end; font: inherit; cursor: pointer; border: 1px solid var(--wp-ink);
+           box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .35em 1em;
+           color: var(--vscode-button-foreground); background: var(--vscode-button-background);
+           letter-spacing: .08em; text-transform: uppercase; font-size: 11px; font-weight: 600; }
   button:hover { background: var(--vscode-button-hoverBackground); }
+  button:active { box-shadow: 0 0 0 0 var(--wp-ink); transform: translate(2px, 2px); }
 `;
+
 
 
 /** Whether a message has been delivered with nothing back yet.

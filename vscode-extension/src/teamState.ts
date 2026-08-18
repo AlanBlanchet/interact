@@ -70,6 +70,25 @@ export function zoneOf(step: Step | undefined, status: string, agent?: string | 
   return "managers";
 }
 
+/** Where a worker stands, given everything it has done.
+ *
+ *  A FINISHED worker keeps the room it was last working in. Sending it back to the entrance
+ *  emptied every room the moment a team stopped — which is the state a team is in most of the
+ *  time — and collapsed the building into one crowded grid, the exact shape this view replaced.
+ *  Only someone who never worked anywhere stands at the door.
+ */
+export function zoneOfSteps(steps: Step[], status: string, agent?: string | null): ZoneId {
+  if (status === "foreign") return "entry";
+  if (status === "running") return zoneOf(latestMeaningful(steps), status, agent);
+  // Walk back to the last step that actually put them somewhere.
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const zone = zoneOf(steps[i], "running", null);
+    if (zone !== "managers" && zone !== "idle") return zone;
+  }
+  const home = agent ? zoneOf({ kind: "thinking" }, "running", agent) : "managers";
+  return home === "managers" ? "entry" : home;
+}
+
 //: Kinds that say nothing about what a worker is DOING. The vendor emits housekeeping constantly,
 //: so the newest event is usually one of these — taking it literally showed a researcher in the
 //: middle of a web search as "waiting".
@@ -163,19 +182,21 @@ export interface RunLike {
  */
 export function buildTeam(
   runs: RunLike[],
-  latestStep: (runId: string) => Step | undefined,
+  recentSteps: (runId: string) => Step[],
   now: number = Date.now() / 1000,
   messages: { from_run: string; to_run: string; text?: string }[] = [],
 ): TeamState {
   const workers: Worker[] = runs.map((run) => {
-    const step = latestStep(run.run_id);
+    const steps = recentSteps(run.run_id);
+    const step = latestMeaningful(steps);
     const since = run.finished_at ?? run.started_at ?? now;
     return {
       run_id: run.run_id,
       name: run.name || run.run_id.slice(0, 8),
       agent: run.agent ?? null,
       status: (run.status as Worker["status"]) ?? "done",
-      zone: zoneOf(step, run.status, run.agent ?? null),
+      // The whole window, not one step: a finished worker keeps the room it last worked in.
+      zone: zoneOfSteps(steps, run.status, run.agent ?? null),
       // A session interact did not start gets named, never narrated: we do not read its stream,
       // and "waiting" would claim it is doing nothing when it is somebody working.
       activity: run.status === "foreign" ? "your own session" : activityOf(step),

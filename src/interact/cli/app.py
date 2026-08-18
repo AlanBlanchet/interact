@@ -653,6 +653,20 @@ async def _run_agent_for_cli(provider, task, **kwargs):
     return await run_agent(provider, task, **kwargs)
 
 
+@agents_app.command(name="definitions")
+def agents_definitions(provider: str = "claude") -> None:
+    """Print the agent definitions this CLI can resolve, one per line.
+
+    Machine-readable on purpose: the panel's picker was scraping the human `agents providers`
+    output, so a wording change would have silently emptied it. Nothing is printed when there are
+    none — prose here would be parsed as an agent called "no agents found".
+    """
+    from interact.agents.providers import provider_for
+
+    for name in provider_for(provider).agent_definitions():
+        print(name)
+
+
 @agents_app.command(name="spawn")
 def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
                  name: str | None = None, model: str | None = None,

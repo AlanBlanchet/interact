@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { activityOf, latestMeaningful, zoneOf } from "./teamState.ts";
+import { activityOf, latestMeaningful, zoneOf, zoneOfSteps } from "./teamState.ts";
 
 // A worker stands where the WORK is. The zone has to come from what the agent is actually doing
 // right now, or the workplace is just a list with sprites on it.
@@ -96,7 +96,7 @@ const STEPS: Record<string, any> = {
 };
 
 test("each worker is placed by what they are doing", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 2000);
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000);
   const byId = Object.fromEntries(team.workers.map((w) => [w.run_id, w]));
   assert.equal(byId.lead.zone, "code");
   assert.equal(byId.sub.zone, "web", "a researcher fetching is out of the building");
@@ -104,22 +104,22 @@ test("each worker is placed by what they are doing", () => {
 });
 
 test("a sub-agent keeps its parent, so it can be drawn beside them", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 2000);
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000);
   assert.equal(team.workers.find((w) => w.run_id === "sub")!.parent_run_id, "lead");
 });
 
 test("the activity line survives into the state", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 2000);
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000);
   assert.match(team.workers.find((w) => w.run_id === "lead")!.activity, /registry\.py/);
 });
 
 test("idle time is measured, so the view can fade whoever stopped", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 5000);
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 5000);
   assert.ok(team.workers.every((w) => w.idle_seconds >= 0));
 });
 
 test("an empty registry is an empty room, not a crash", () => {
-  assert.deepEqual(buildTeam([], () => undefined, 1).workers, []);
+  assert.deepEqual(buildTeam([], () => [], 1).workers, []);
 });
 
 // "researchers accessing the web... the librarian... etc" — a worker has a HOME room from who
@@ -158,7 +158,7 @@ test("your own session says what it is, not that it is waiting", () => {
   const team = buildTeam(
     [{ run_id: "mine", name: "interact-32", status: "foreign", parent_run_id: null,
        started_at: 1, project: "interact" } as any],
-    () => undefined,
+    () => [],
     100,
   );
   assert.equal(team.workers[0].zone, "entry");
@@ -169,19 +169,19 @@ test("your own session says what it is, not that it is waiting", () => {
 // people who never speak to each other is a set of processes, not a team.
 
 test("an exchange between two present workers becomes a link", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000,
     [{ from_run: "lead", to_run: "sub", text: "check the docs too" }]);
   assert.deepEqual(team.links, [{ from_run_id: "lead", to_run_id: "sub", text: "check the docs too" }]);
 });
 
 test("a link to someone who has been forgotten is dropped, not drawn at nobody", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000,
     [{ from_run: "lead", to_run: "vanished", text: "hello" }]);
   assert.deepEqual(team.links, []);
 });
 
 test("a message from the operator is not an agent-to-agent link", () => {
-  const team = buildTeam(RUNS, (id) => STEPS[id], 2000,
+  const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000,
     [{ from_run: "operator", to_run: "lead", text: "do it" }]);
   assert.deepEqual(team.links, []);
 });
@@ -261,4 +261,35 @@ test("a tool call still beats the result that follows it", () => {
     latestMeaningful([{ kind: "tool", tool: "WebSearch" }, { kind: "tool_result", text: "..." }])?.tool,
     "WebSearch",
   );
+});
+
+// visual-critic, live: every finished agent lost its room and collapsed into ENTRY as a flat
+// grid — "exactly the undifferentiated-grid look the redesign was meant to replace", and finished
+// is the DOMINANT real state. A worker stays where it last worked; only someone who never worked
+// anywhere stands at the door.
+
+test("a finished worker keeps the room it was last working in", () => {
+  const steps = [
+    { kind: "tool", tool: "WebSearch", tool_input: "query='x'" },
+    { kind: "text", text: "found it" },
+    { kind: "done" },
+  ];
+  assert.equal(zoneOfSteps(steps, "done", "researcher"), "web");
+});
+
+test("a finished worker that only ever thought falls back to its role's room", () => {
+  assert.equal(zoneOfSteps([{ kind: "thinking" }, { kind: "done" }], "done", "librarian"), "library");
+});
+
+test("a worker that never did anything at all stands at the entrance", () => {
+  assert.equal(zoneOfSteps([], "done", null), "entry");
+});
+
+test("a running worker is still placed by what it is doing right now", () => {
+  const steps = [{ kind: "tool", tool: "Read" }, { kind: "tool", tool: "WebFetch" }];
+  assert.equal(zoneOfSteps(steps, "running", "code-reviewer"), "web");
+});
+
+test("your own session still stands at the entrance", () => {
+  assert.equal(zoneOfSteps([{ kind: "tool", tool: "Read" }], "foreign", null), "entry");
 });

@@ -243,3 +243,62 @@ def test_spawn_returns_the_run_id_without_waiting(monkeypatch, tmp_path, capsys)
     monkeypatch.setattr(cli, "_run_agent_for_cli", _fake_run, raising=False)
     cli.agents_spawn("review the diff", agent="code-reviewer")
     assert "abcd1234" in capsys.readouterr().out
+
+
+# ── Keeping every live run's stream current, not only the ones we spawned ───────────────────
+# `agents spawn` detaches, so the pump started beside it dies with the parent. The child keeps
+# writing its RAW stream, but the normalised copy the VS Code panel reads is only produced on
+# demand — so a detached agent's activity froze in the panel until something happened to call
+# Python. The server is the process alive whenever the user is working, so it keeps them all fresh.
+
+
+@pytest.mark.asyncio
+async def test_every_running_run_is_kept_current(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from interact.agents import registry as reg
+    from interact.agents.run import _mirror_running_runs
+
+    seen: list[str] = []
+    monkeypatch.setattr(reg, "read_events", lambda run_id: seen.append(run_id) or [])
+    monkeypatch.setattr(reg, "list_runs", lambda **kw: [
+        _Run("live-1", "running"), _Run("live-2", "running"),
+        _Run("finished", "done"), _Run("theirs", "running", foreign=True),
+    ])
+    alive = {"value": True}
+    task = asyncio.create_task(_mirror_running_runs(lambda: alive["value"], interval=0.02))
+    await asyncio.sleep(0.08)
+    alive["value"] = False
+    await asyncio.wait_for(task, timeout=2)
+
+    assert "live-1" in seen and "live-2" in seen
+    assert "finished" not in seen, "a settled run costs nothing to leave alone"
+    assert "theirs" not in seen, "we do not read a session interact did not start"
+
+
+@pytest.mark.asyncio
+async def test_one_unreadable_run_never_stops_the_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from interact.agents import registry as reg
+    from interact.agents.run import _mirror_running_runs
+
+    seen: list[str] = []
+
+    def _read(run_id):
+        if run_id == "bad":
+            raise OSError("half-written")
+        seen.append(run_id)
+        return []
+
+    monkeypatch.setattr(reg, "read_events", _read)
+    monkeypatch.setattr(reg, "list_runs", lambda **kw: [_Run("bad", "running"), _Run("good", "running")])
+    alive = {"value": True}
+    task = asyncio.create_task(_mirror_running_runs(lambda: alive["value"], interval=0.02))
+    await asyncio.sleep(0.06)
+    alive["value"] = False
+    await asyncio.wait_for(task, timeout=2)
+    assert "good" in seen
+
+
+class _Run:
+    def __init__(self, run_id, status, foreign=False):
+        self.run_id, self.status, self.foreign = run_id, status, foreign
