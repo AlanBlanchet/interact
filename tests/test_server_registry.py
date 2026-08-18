@@ -5,6 +5,8 @@ dead pids. (This is exactly why the user's aino sandbox bug persisted: a v0.2.5 
 
 import json
 import os
+import signal
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +75,10 @@ def test_kill_stale_servers_only_signals_confirmed_interact_pids(monkeypatch):
     that one's registry file."""
     monkeypatch.setattr(sr, "stale_servers", lambda: [{"pid": 111}, {"pid": 222}])
     monkeypatch.setattr(sr, "_is_interact_mcp", lambda pid: pid == 111)  # 222 = a recycled pid
+    # This test is about WHICH pids are signalled, not about the SIGTERM→SIGKILL escalation. Left
+    # unpatched it stops here: pid 111 is a live kernel thread on this box, so the escalation
+    # correctly fires a second signal and the assertion below would be measuring that instead.
+    monkeypatch.setattr(sr, "_still_running", lambda pid: False)
     signalled: list[int] = []
     monkeypatch.setattr(sr.os, "kill", lambda pid, sig: signalled.append(pid))
     d = sr._runtime_dir()
@@ -85,3 +91,33 @@ def test_kill_stale_servers_only_signals_confirmed_interact_pids(monkeypatch):
     assert killed == [111] and signalled == [111]   # the recycled pid is left untouched
     assert not (d / "111.json").exists()             # restarted server's registry file pruned
     assert (d / "222.json").exists()                 # recycled pid's file left alone
+
+
+# ── A restart that does not restart ─────────────────────────────────────────────────────────
+# `interact doctor --fix` sent SIGTERM and reported "restarted N stale server(s)". Measured on a
+# real box: five of six servers ignored it and kept running on the old code, because the server
+# blocks reading stdio and had no handler. The tool's claim was simply false.
+
+
+def test_a_server_that_ignores_SIGTERM_is_killed(monkeypatch):
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(sr, "stale_servers", lambda: [{"pid": 4242, "version": "0.1.0"}])
+    monkeypatch.setattr(sr, "_is_interact_mcp", lambda pid: True)
+    monkeypatch.setattr(sr.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(sr, "_still_running", lambda pid: len(sent) < 2)
+    monkeypatch.setattr(sr, "_runtime_dir", lambda: Path("/nonexistent"))
+
+    assert sr.kill_stale_servers() == [4242]
+    assert [sig for _, sig in sent] == [signal.SIGTERM, signal.SIGKILL]
+
+
+def test_a_server_that_stops_politely_is_not_killed(monkeypatch):
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(sr, "stale_servers", lambda: [{"pid": 4242, "version": "0.1.0"}])
+    monkeypatch.setattr(sr, "_is_interact_mcp", lambda pid: True)
+    monkeypatch.setattr(sr.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(sr, "_still_running", lambda pid: False)
+    monkeypatch.setattr(sr, "_runtime_dir", lambda: Path("/nonexistent"))
+
+    sr.kill_stale_servers()
+    assert [sig for _, sig in sent] == [signal.SIGTERM]

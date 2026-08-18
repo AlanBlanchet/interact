@@ -47,3 +47,30 @@ export function orderGroups(groups: [string, AgentRun[]][]): [string, AgentRun[]
   return [...groups].sort((a, b) => live(b[1]) - live(a[1]) || a[0].localeCompare(b[0]));
 }
 
+
+/** Max characters a row's description may occupy.
+ *
+ *  The side bar is narrow, so anything past roughly this is clipped by VS Code with no say in
+ *  WHERE — which is how every row ended up reading "→ 2b7642ee: Reply wit…". Clipping here
+ *  instead means the cut lands on a word boundary and the ellipsis is ours.
+ */
+const ROW_WIDTH = 72;
+
+/** What a run's row says beside its name.
+ *
+ *  The last thing that happened gets the whole width when there IS one: elapsed time and cost are
+ *  already on the hover and on the dashboard, and competing with them for a narrow row meant the
+ *  interesting half — what the agent actually did — was the half that got cut.
+ */
+export function rowDescription(run: {
+  last?: string | null;
+  status: string;
+  cost_usd?: number | null;
+}): string {
+  const said = (run.last ?? "").trim();
+  if (!said) return `${run.status} · ${formatCost(run.cost_usd)}`;
+  if (said.length <= ROW_WIDTH) return said;
+  const cut = said.slice(0, ROW_WIDTH);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > ROW_WIDTH / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}

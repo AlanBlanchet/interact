@@ -19,7 +19,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { GroupBy, formatCost, formatElapsed, groupKeyFor, orderGroups } from "./agentsFormat";
+import { GroupBy, formatCost, groupKeyFor, orderGroups, rowDescription } from "./agentsFormat";
 import { agentsDir } from "./paths";
 
 export type { GroupBy };
@@ -170,7 +170,9 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
     );
     // What it is doing RIGHT NOW is the most valuable string here, so it takes the description
     // slot; time and cost follow it.
-    node.description = `${run.last || run.status} · ${formatElapsed(run)} · ${formatCost(run.cost_usd)}`;
+    // The last thing that happened gets the row's whole width; elapsed and cost live on the hover
+    // and on the dashboard, and competing for a narrow side bar clipped the interesting half.
+    node.description = rowDescription(run);
     node.tooltip = new vscode.MarkdownString(
       [
         `**${run.name}** — ${run.status}`,

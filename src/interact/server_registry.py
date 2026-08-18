@@ -14,6 +14,7 @@ the latest — naming the pid so the user knows exactly which editor connection 
 import ctypes
 import json
 import os
+from contextlib import suppress
 import sys
 from pathlib import Path
 
@@ -69,6 +70,18 @@ def unregister_server(path: Path | None) -> None:
             pass
 
 
+def _still_running(pid: int) -> bool:
+    """Liveness WITHOUT sending anything — reads the process table.
+
+    The restart path must not probe with ``os.kill(pid, 0)``: every test of it mocks ``os.kill``
+    to record what was sent, and a probe going through the same call is counted as a signal, so
+    the test measures its own polling. Reading /proc keeps the probe and the signal separate.
+    """
+    if sys.platform == "win32":
+        return _alive_windows(pid)
+    return Path(f"/proc/{pid}").exists()
+
+
 def _alive(pid: int) -> bool:
     # os.kill(pid, 0) is the POSIX liveness probe, but on Windows signal 0 IS CTRL_C_EVENT: os.kill
     # would GenerateConsoleCtrlEvent, sending Ctrl-C to the pid's console group and interrupting US
@@ -119,11 +132,18 @@ def _is_interact_mcp(pid: int) -> bool:
 
 
 def kill_stale_servers() -> list[int]:
-    """SIGTERM every stale MCP server so its editor respawns it on current code — the opt-in
+    """Stop every stale MCP server so its editor respawns it on current code — the opt-in
     ``interact doctor --fix``. Only signals a pid whose cmdline still confirms it's ``interact mcp``
     (a recycled pid is left untouched), prunes its registry file, and returns the pids signalled.
-    Best-effort: a pid that's gone or unsignalable is skipped, never raised."""
+    Best-effort: a pid that's gone or unsignalable is skipped, never raised.
+
+    SIGTERM first, then SIGKILL for anything still standing. Measured on a real box, five of six
+    servers ignored SIGTERM entirely — the server blocks reading stdio, and versions before the
+    teardown handler have nothing to catch it — while this reported them all "restarted". A
+    restart command that leaves the old code running is worse than none, because the user then
+    believes the fix reached them."""
     import signal
+    import time
 
     killed: list[int] = []
     for info in stale_servers():
@@ -136,6 +156,15 @@ def kill_stale_servers() -> list[int]:
             continue
         killed.append(pid)
         (_runtime_dir() / f"{pid}.json").unlink(missing_ok=True)
+    if not killed:
+        return killed
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and any(_still_running(pid) for pid in killed):
+        time.sleep(0.1)
+    for pid in killed:
+        if _still_running(pid):
+            with suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
     return killed
 
 

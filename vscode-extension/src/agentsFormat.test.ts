@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { AgentRun } from "./agents.ts";
-import { formatCost, formatElapsed, groupKeyFor, orderGroups } from "./agentsFormat.ts";
+import { formatCost, formatElapsed, groupKeyFor, orderGroups, rowDescription } from "./agentsFormat.ts";
 
 function run(over: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -68,4 +68,39 @@ test("a run groups by its repo, not the subfolder it happened to run in", () => 
 test("a record written before projects existed still groups sensibly", () => {
   const old = run({ cwd: "/home/alan/dev/interact", project: undefined }) as never;
   assert.equal(groupKeyFor(old, "project"), "interact");
+});
+
+// The panel is narrow, and every row read "→ 2b7642ee: Reply wit…", "thanks, ship it :…" — the
+// interesting part clipped by metadata that is already in the tooltip AND on the dashboard.
+// The row's job is to say what the agent is DOING; the numbers can wait for the hover.
+
+
+const base = { run_id: "r1", name: "reviewer", provider: "claude", status: "done" } as any;
+
+test("a row leads with what happened, not with the numbers", () => {
+  const d = rowDescription({ ...base, last: "← operator: check the error paths", cost_usd: 1.2 });
+  assert.ok(d.startsWith("← operator:"), d);
+});
+
+test("the numbers are dropped when there is something to say", () => {
+  const d = rowDescription({ ...base, last: "← operator: check the error paths", cost_usd: 1.2 });
+  assert.ok(!d.includes("$"), `cost competes for width with the message: ${d}`);
+});
+
+test("with nothing to say the row falls back to status and cost", () => {
+  const d = rowDescription({ ...base, last: "", cost_usd: 1.2 });
+  assert.match(d, /done/);
+  assert.match(d, /\$1\.2/);
+});
+
+test("a long message is clipped at a word, not mid-word", () => {
+  const long = "← operator: " + "verylongword ".repeat(20);
+  const d = rowDescription({ ...base, last: long, cost_usd: null });
+  assert.ok(d.length <= 80, `too long: ${d.length}`);
+  assert.ok(!/verylongwo…$/.test(d), `clipped mid-word: ${d}`);
+  assert.match(d, /…$/);
+});
+
+test("a short message is left exactly as it is", () => {
+  assert.equal(rowDescription({ ...base, last: "done", cost_usd: null }), "done");
 });
