@@ -61,14 +61,19 @@ export function jsx(
   tag: string | typeof Fragment | ((props: Props) => Node),
   props: Props,
 ): Node {
-  if (typeof tag === "function") {
-    return tag(props);
-  }
-
+  // Fragment FIRST. It is a function, so the generic branch below would have caught it and
+  // returned `Fragment(props)` — an EMPTY DocumentFragment, because Fragment ignores its props.
+  // Every child of a `<>…</>` was therefore silently dropped, and the branch that applies them
+  // was unreachable. Nothing uses a fragment yet, which is the only reason it never showed up;
+  // the strict webview typecheck flagged it as an impossible comparison, and nobody ran it.
   if (tag === Fragment) {
     const frag = document.createDocumentFragment();
     if (props?.children) applyChildren(frag, props.children);
     return frag;
+  }
+
+  if (typeof tag === "function") {
+    return tag(props);
   }
 
   const el = SVG_TAGS.has(tag as string)

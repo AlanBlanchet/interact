@@ -1222,7 +1222,11 @@ function renderAll(): void {
   content.className = "tab-content";
 
   for (const cellId of tab.cells) {
-    const container = <div id={`cell-${cellId}`} className="cell" />;
+    // Plain DOM rather than JSX: this is a mutable container handed to a builder that needs an
+    // Element, and the JSX factory is typed to return Node (a component may return a fragment).
+    const container = document.createElement("div");
+    container.id = `cell-${cellId}`;
+    container.className = "cell";
     buildCellContent(cellId, container);
     content.appendChild(container);
   }
