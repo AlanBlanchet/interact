@@ -20,6 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Files whose bodies are largely CSS inside a template literal. */
 const SHEETS = [
   join(here, "..", "webview", "workplace", "style.ts"),
+  join(here, "..", "webview", "sidebar-proto", "style.ts"),
   join(here, "conversationFormat.ts"),
 ];
 

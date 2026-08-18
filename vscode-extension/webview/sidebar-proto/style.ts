@@ -73,14 +73,14 @@ body {
   /* ── stock and steel ─────────────────────────────────────────────────────────────────────
      A warm manila lifted just off the background — enough that a slip is an object, not so much
      that eight of them glare. The silhouette is doing the "this is paper" work, not the value. */
-  --sp-paper: color-mix(in srgb, #d9cfae 13%, var(--wp-bg));
+  --sp-paper: color-mix(in srgb, #d9cfae 9%, var(--wp-bg));
   --sp-paper-shade: color-mix(in srgb, #d9cfae 8%, var(--wp-bg));
   --sp-paper-back: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
   --sp-edge: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
   --sp-shadow: color-mix(in srgb, var(--wp-ink) 62%, transparent);
   --sp-rule: color-mix(in srgb, var(--wp-fg) 22%, var(--wp-bg));
   --sp-ink: var(--wp-fg);
-  --sp-dim: color-mix(in srgb, var(--wp-dim) 62%, var(--wp-fg));
+  --sp-dim: color-mix(in srgb, var(--wp-dim) 20%, var(--wp-fg));
   --sp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
 
   --sp-rod: color-mix(in srgb, var(--wp-fg) 52%, var(--wp-bg));
@@ -114,8 +114,8 @@ body {
   --sp-edge: color-mix(in srgb, var(--wp-fg) 42%, var(--wp-bg));
   --sp-shadow: color-mix(in srgb, var(--wp-ink) 30%, transparent);
   --sp-rule: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
-  --sp-ink: color-mix(in srgb, var(--wp-ink) 90%, var(--wp-bg));
-  --sp-dim: color-mix(in srgb, var(--wp-ink) 72%, var(--wp-bg));
+  --sp-ink: var(--wp-ink);
+  --sp-dim: color-mix(in srgb, var(--wp-ink) 90%, var(--wp-bg));
   --sp-rod: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
   --sp-rod-hi: color-mix(in srgb, var(--wp-fg) 24%, var(--wp-bg));
   --sp-rod-lo: color-mix(in srgb, var(--wp-fg) 72%, var(--wp-bg));
@@ -269,7 +269,11 @@ body {
 .sp-head > :not(.sp-name) { flex: 0 0 auto; }
 
 .sp-role {
-  font-size: 10px;
+  /* 11px at 500, not 10px at 400: contrast on text this small is decided by how much of each
+     glyph is actually the ink colour rather than an anti-aliased blend, so weight and size move
+     the measured number as much as the colour does. */
+  font-size: 11px;
+  font-weight: 600;
   color: var(--sp-dim);
   letter-spacing: .02em;
   overflow: hidden;
@@ -300,7 +304,7 @@ body {
   color: var(--sp-dim);
   font-variant-numeric: tabular-nums;
 }
-.sp-from { margin-left: auto; opacity: .9; }
+.sp-from { margin-left: auto; color: var(--sp-dim); }
 
 /* ── the pile ──────────────────────────────────────────────────────────────────────────────
    Paper sinks. Live work sits on top at full height; anything finished, held or somebody else's
@@ -343,18 +347,19 @@ body {
   border: 2px solid currentColor;
   color: var(--stamp, var(--sp-dim));
   --mark: currentColor;
-  font-size: 9px;
+  /* 10px, not 9: a rotated 2px outline is mostly anti-aliased edge, so the stamp measured weaker
+     than the text it sits beside even at the same colour. */
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: .11em;
   text-transform: uppercase;
   transform: rotate(-7deg);
-  opacity: .92;
 }
 .sp-stamp svg { display: block; }
 .sp-stamp[data-kind="done"] { --stamp: var(--wp-ok); }
-.sp-stamp[data-kind="error"] { --stamp: var(--wp-bad); opacity: 1; }
-.sp-stamp[data-kind="foreign"], .sp-stamp[data-kind="held"] { --stamp: var(--sp-dim); }
+.sp-stamp[data-kind="error"] { --stamp: var(--wp-bad); }
+.sp-stamp[data-kind="foreign"], .sp-stamp[data-kind="held"] { --stamp: var(--sp-ink); }
 
 .sp-lamp { --mark: var(--wp-ok); line-height: 0; }
 .sp-lamp svg { display: block; animation: sp-pulse calc(var(--beat) / 3) ease-in-out infinite; }
@@ -392,7 +397,14 @@ body {
 .sp-slip[data-torn="1"] { background: color-mix(in srgb, var(--wp-bad) 5%, transparent); }
 
 /* Somebody else's session is flat and unowned: no face, no colour, dashed. */
-.sp-slip[data-status="foreign"] { opacity: .8; }
+/* "Somebody else's session" used to be said with an opacity of .8 on the whole slip, which dims the
+   TEXT along with the paper — the same mistake as the stamp above and as the workplace nameplate
+   before it. Opacity is never how a surface says "quieter" when it has words on it. Said with the
+   paper and the edge instead, so the ink stays at full strength. */
+.sp-slip[data-status="foreign"] {
+  --sp-paper: var(--sp-paper-shade);
+  border-style: dashed;
+}
 
 /* ── the form's total ──────────────────────────────────────────────────────────────────────── */
 
