@@ -102,3 +102,56 @@ export const STAPLE: Piece = {
   ],
   pal: { m: "var(--sp-rod-lo)" },
 };
+
+/** What is standing on the desk when there is nothing on the spike.
+ *
+ *  The workplace answers "this room is empty" with a room that still has a floor, its props and its
+ *  plaque — a furnished room with nobody in it, never a hole in the picture. A desk with a clear
+ *  spike is the same problem, so it gets the same answer: the stamp and its pad sit there whether
+ *  or not there is anything to stamp, and they are what makes the empty stretch a PLACE rather than
+ *  unlit canvas. It also rhymes: DONE and ERROR are stamped on the slips above, and this is the
+ *  thing that stamps them.
+ */
+export const DESK_STAMP: Piece = {
+  grid: [
+    "...mmmm...........",
+    "..mmmmmm..........",
+    "...mmmm...........",
+    "....nn............",
+    "....nn............",
+    "..bbbbbb..........",
+    "..bbbbbb...ppppppp",
+    "..bbbbbb...pIIIIIp",
+    "..rrrrrr...ppppppp",
+  ],
+  pal: {
+    m: "var(--sp-prop-hi)",
+    n: "var(--sp-prop-lo)",
+    b: "var(--sp-prop)",
+    r: "var(--sp-prop-lo)",
+    p: "var(--sp-prop)",
+    I: "var(--sp-prop-lo)",
+    // The derived rim, named explicitly: the engine defaults it to the workplace's literal ink,
+    // which disappears against a dark desk. A prop that sits ON the desk rims in the desk's own
+    // shadow line instead, so it reads in both themes.
+    "#": "var(--sp-desk-rim)",
+  },
+};
+
+/** The corner of the pad, the way a desk blotter is actually held down: four leather mounts the
+ *  sheet slides into. One grid, placed four times and turned — which is what the real object is.
+ *  It is the piece that gives the empty stretch an EDGE, and an edge is the difference between an
+ *  empty room and a hole in the picture. */
+export const PAD_CORNER: Piece = {
+  grid: [
+    "mmmmmmmm",
+    "mmmmmmm.",
+    "mmmmmm..",
+    "mmmmm...",
+    "mmmm....",
+    "mmm.....",
+    "mm......",
+    "m.......",
+  ],
+  pal: { m: "var(--sp-prop)" },
+};

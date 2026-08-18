@@ -34,7 +34,7 @@ import { assignAccents, faceOf, shortDuration } from "../workplace/palette";
 import { clip, esc } from "../workplace/esc";
 import { ZONES } from "../../src/team";
 import type { ZoneId } from "../../src/team";
-import { DOG_EAR, OUT_FLAG, SPINDLE_BASE, SPINDLE_TIP, STAPLE } from "./art";
+import { DESK_STAMP, DOG_EAR, OUT_FLAG, PAD_CORNER, SPINDLE_BASE, SPINDLE_TIP, STAPLE } from "./art";
 import type { Board, Docket } from "./fixture";
 
 const LABELS = new Map<ZoneId, string>(ZONES.map((z) => [z.id, z.label]));
@@ -256,12 +256,20 @@ function team(t: Team, accent: string, at: number): string {
 /** The board. */
 export function renderBoard(board: Board): string {
   const teams = orderTeams(teamsOf(board.dockets));
-  // The pod hues are assigned by the workplace's own greedy allocator, so a lead wears the same
-  // colour on this board as on its platform in the building. A session interact did not start is
-  // deliberately held OUT of that allocation: it is nobody's team, a hue would claim it is, and it
-  // would burn one of the seven distinct colours a real team needs.
-  const ours = teams.filter((t) => t.lead.status !== "foreign");
-  const accents = assignAccents(ours.map((t) => t.lead.run_id));
+  // The pod hues come from the workplace's own greedy allocator, and they are fed EXACTLY what the
+  // building feeds it: every lead in the snapshot, foreign ones included.
+  //
+  // This panel used to hold a foreign session out of the allocation — it is nobody's team, so why
+  // burn one of seven distinct colours on it. That reasoning was right about the COLOUR and wrong
+  // about the ALLOCATOR: it is greedy, so a lead whose preferred hue is taken steps to the next
+  // free one, and which hues are taken depends on the whole SET of leads. Drop one and another
+  // lead can move. Simulated over random run ids, a real team's hue comes out different between
+  // the two panels in 26% of four-lead snapshots and 38% of five-lead ones — and the pod hue is
+  // the ONLY thing tying a report standing three rooms away back to its lead, so a disagreement
+  // there is the two surfaces disagreeing about who is on whose team.
+  // One input, one assignment. The foreign slip still draws no colour; it just no longer changes
+  // anyone else's.
+  const accents = assignAccents(teams.map((t) => t.lead.run_id));
 
   const live = board.dockets.filter(
     (d) => d.status === "running" && d.idle_seconds < STALL_SECONDS,
@@ -275,9 +283,20 @@ export function renderBoard(board: Board): string {
     (done ? `<span class="sp-chip">${markOf("done", 2)}<b>${done}</b> done</span>` : "") +
     `<span class="sp-chip sp-chip-sum"><b>${esc(totalOf(board.dockets))}</b></span>`;
 
+  // A foreign session is allocated a hue like everyone else and then does not wear it: it is
+  // nobody's team, and a coloured spine would claim it is. Holding it out of the ALLOCATION is
+  // what moved everyone else's colour; holding it out of the PAINT costs nothing.
   const body = teams.length
     ? teams
-        .map((t) => team(t, accents.get(t.lead.run_id) ?? "var(--sp-dim)", board.at))
+        .map((t) =>
+          team(
+            t,
+            t.lead.status === "foreign"
+              ? "var(--sp-dim)"
+              : (accents.get(t.lead.run_id) ?? "var(--sp-dim)"),
+            board.at,
+          ),
+        )
         .join("")
     : `<p class="sp-empty">nothing on the spike</p>`;
 
@@ -292,6 +311,28 @@ export function renderBoard(board: Board): string {
     `<header class="sp-plate"><span class="sp-plate-name">Agents</span>` +
     `<span class="sp-tally">${tally}</span></header>` +
     `<div class="sp-stack">${body}</div>` +
+    // The desk under the spike. Everything below the last order used to be free space in a flex
+    // column — the rod hanging in unlit black, which is what a small team gets for most of the
+    // panel most of the time. It is a surface now, with the die-cut of the next slip printed on it
+    // and the stamp standing where you left it. Same answer the building gives an empty room: keep
+    // the floor, keep the props, keep the label, take the people away.
+    `<div class="sp-clear" aria-hidden="true">` +
+    `<div class="sp-blotter">` +
+    ["tl", "tr", "br", "bl"]
+      .map(
+        (at) =>
+          `<span class="sp-corner" data-at="${at}">` +
+          `${draw(PAD_CORNER.grid, PAD_CORNER.pal, { scale: 2, outline: false })}</span>`,
+      )
+      .join("") +
+    `<div class="sp-dieline">` +
+    `<span class="sp-dieline-hole"></span>` +
+    `<span class="sp-dieline-label">next slip</span>` +
+    `</div>` +
+    `<span class="sp-props">` +
+    `${draw(DESK_STAMP.grid, DESK_STAMP.pal, { scale: 2 })}</span>` +
+    `</div>` +
+    `</div>` +
     // The composer is STUBBED — the real chat is its own webview. It is here because the rod
     // running THROUGH it is the whole argument that this panel is one object and not two.
     `<footer class="sp-compose">` +

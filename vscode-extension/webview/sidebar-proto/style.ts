@@ -75,6 +75,11 @@ body {
      that eight of them glare. The silhouette is doing the "this is paper" work, not the value. */
   --sp-paper: color-mix(in srgb, #d9cfae 9%, var(--wp-bg));
   --sp-paper-shade: color-mix(in srgb, #d9cfae 8%, var(--wp-bg));
+  /* The counterfoil's own stock. It was on paper-shade, which is one percent off the paper and
+     measured two levels apart — on a light theme that is enough to see the stub as a separate part
+     of the form, on a dark one it was not, and the strip was reading as more card. Its own token,
+     stepped until the difference is visible on the dark board too. */
+  --sp-stub: color-mix(in srgb, #d9cfae 6%, var(--wp-bg));
   --sp-paper-back: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
   --sp-edge: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
   --sp-shadow: color-mix(in srgb, var(--wp-ink) 62%, transparent);
@@ -86,6 +91,64 @@ body {
   --sp-rod: color-mix(in srgb, var(--wp-fg) 52%, var(--wp-bg));
   --sp-rod-hi: color-mix(in srgb, var(--wp-fg) 78%, var(--wp-bg));
   --sp-rod-lo: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
+
+  /* ── the desk ────────────────────────────────────────────────────────────────────────────
+     The panel is not a canvas the paper floats on, it is a SURFACE the paper is lying on. A warm
+     board, a little darker than the editor so the stock sits on top of it rather than in it, with
+     the boards running across the column so they read against the one vertical thing here — the
+     rod. This is the same decision the building makes with its floor: a plane you can see, so a
+     part of it with nobody on it is an empty ROOM and not a hole in the picture. */
+  --sp-desk: color-mix(in srgb, #3d3025 26%, var(--wp-bg));
+  --sp-desk-line: color-mix(in srgb, var(--wp-ink) 44%, transparent);
+  --sp-desk-far: color-mix(in srgb, var(--wp-ink) 34%, transparent);
+  --sp-desk-rim: color-mix(in srgb, var(--wp-ink) 55%, transparent);
+  /* The lamp over the desk. Literally the workplace's lit-room recipe, pointed down at the top of
+     the column where the live work sits, so the panel has the same warm/cool fall the building
+     has instead of one flat value everywhere. */
+  --sp-lamp: color-mix(in srgb, #ffd9a0 9%, transparent);
+
+  /* Three tones for anything standing on the desk, in the rod's own proportions. */
+  /* The pad is a step AWAY from the desk in whichever direction is not toward the paper — lighter
+     on a dark theme, darker on a light one — so it never competes with the stock for the eye. */
+  --sp-pad: color-mix(in srgb, var(--wp-fg) 7%, var(--sp-desk));
+  /* Printed ON the pad, so it is mixed against the PAD and not against the editor background the
+     card rules are mixed against — a rule tuned for paper is a ghost on felt. */
+  --sp-pad-rule: color-mix(in srgb, var(--wp-fg) 30%, var(--sp-pad));
+  --sp-prop: color-mix(in srgb, var(--wp-fg) 30%, var(--sp-desk));
+  --sp-prop-hi: color-mix(in srgb, var(--wp-fg) 48%, var(--sp-desk));
+  --sp-prop-lo: color-mix(in srgb, var(--wp-fg) 14%, var(--sp-desk));
+
+  /* ── stock, up close ─────────────────────────────────────────────────────────────────────
+     The tooth of the paper — the thing that makes a card stop being a filled rectangle. The job is
+     that you register a SURFACE, never that you notice lines.
+     Three decisions, two of them learned by getting it wrong first. The fibres run DIAGONALLY,
+     because an upright grid of hairlines is graph paper and it lands parallel to the two loudest
+     lines on this board — the perforations across and the rod down — so it fights them. The two
+     pitches are COPRIME (5 and 7), so the interference never settles into a repeat anyone can name.
+     And the amplitude is MEASURED, not eyeballed: a handful of levels peak to peak on the paper,
+     which is felt and not seen. Measured on an isolated swatch, not guessed off a card with text
+     on it: 26% came out as crosshatch, 12% still read as a weave, this is about four levels. */
+  --sp-tooth: color-mix(in srgb, var(--wp-ink) 5%, transparent);
+  --sp-laid: color-mix(in srgb, var(--wp-fg) 2%, transparent);
+  /* Both fibres darken the stock, so the grain lowers its MEAN value — and every contrast figure
+     on this panel was measured against the stock without it. Left uncompensated that is a real,
+     if small, quieting of every word on a card, arrived at by a decision that was supposed to be
+     about texture only. So the grain carries its own flat lift underneath, sized to put the mean
+     back exactly where it was; on a dark theme one fibre already lights and the sum comes out
+     positive, so there is nothing to give back. */
+  --sp-grain-lift: transparent;
+  --sp-proj-mix: 70%;
+  /* Chart hues are tuned to sit on the editor background, not on paper: DONE and ERROR measured
+     3.6:1 peak against the slip. Mixed toward the ink, which flips with the theme, so the same
+     ratio brightens on dark stock and darkens on light while the hue still reads. */
+  --sp-stamp-mix: 52%;
+  --sp-grain:
+    repeating-linear-gradient(45deg, var(--sp-tooth) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(-45deg, var(--sp-laid) 0 1px, transparent 1px 7px),
+    linear-gradient(var(--sp-grain-lift), var(--sp-grain-lift));
+  --sp-pad-nap: repeating-linear-gradient(-45deg, var(--sp-laid) 0 1px, transparent 1px 7px);
+  /* A punched perforation, square because everything else on this board is. */
+  --sp-perf: color-mix(in srgb, var(--wp-ink) 62%, transparent);
   /* Three hard stops in the proportions of the tip's own pixel row (l l m m m d), so the drawn
      point and the stretched rod are the same cylinder and the join is invisible. */
   --sp-rod-fill: linear-gradient(90deg,
@@ -98,6 +161,18 @@ body {
   flex-direction: column;
   padding: 9px 9px 15px 4px;
   min-height: 100vh;
+  /* Lamp first, then the boards, then the board colour. */
+  background:
+    radial-gradient(150% 46% at 50% -6%, var(--sp-lamp) 0%, transparent 72%),
+    /* The far end of the desk. The lamp only reaches the top third, and below it the board was ONE
+       value for the rest of the panel — a texture with no fall, which reads flatter than it
+       measures. A few levels of falloff to the bottom is what turns a tiled pattern into a plane
+       going away from you. */
+    linear-gradient(180deg, transparent 34%, var(--sp-desk-far) 100%),
+    repeating-linear-gradient(180deg,
+      transparent 0 17px,
+      var(--sp-desk-line) 17px 18px),
+    var(--sp-desk);
 }
 
 /* A light theme needs the ink to soften and the paper to go the other way, or the slips end up
@@ -110,6 +185,7 @@ body {
   --wp-tint: #2f2a3a;
   --sp-paper: color-mix(in srgb, #efe6cd 88%, var(--wp-bg));
   --sp-paper-shade: color-mix(in srgb, #e3d8ba 88%, var(--wp-bg));
+  --sp-stub: color-mix(in srgb, #e3d8ba 88%, var(--wp-bg));
   --sp-paper-back: color-mix(in srgb, #b9ac8a 92%, var(--wp-bg));
   --sp-edge: color-mix(in srgb, var(--wp-fg) 42%, var(--wp-bg));
   --sp-shadow: color-mix(in srgb, var(--wp-ink) 30%, transparent);
@@ -119,6 +195,29 @@ body {
   --sp-rod: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
   --sp-rod-hi: color-mix(in srgb, var(--wp-fg) 24%, var(--wp-bg));
   --sp-rod-lo: color-mix(in srgb, var(--wp-fg) 72%, var(--wp-bg));
+
+  /* Light oak rather than the walnut, and the ordering the building had to learn: the desk goes
+     DARKER than the stock here, or the empty stretch comes out the brightest thing on the panel
+     and the eye is pulled to the part with nothing on it. Paper is the brightest surface in both
+     themes, which is the only rule that matters. */
+  --sp-desk: color-mix(in srgb, #b98d55 45%, var(--wp-bg));
+  /* The board seams are mixed against the DESK, and the desk is 170 levels brighter here than on
+     the dark theme, so the same alpha buys about four times the line. 15% measured 26 levels of
+     step and started reading as ruled paper rather than as a seam between two boards. */
+  --sp-desk-line: color-mix(in srgb, var(--wp-ink) 8%, transparent);
+  --sp-desk-far: color-mix(in srgb, var(--wp-ink) 9%, transparent);
+  --sp-desk-rim: color-mix(in srgb, var(--wp-ink) 40%, transparent);
+  --sp-lamp: color-mix(in srgb, #fff3dc 46%, transparent);
+  --sp-pad: color-mix(in srgb, var(--wp-ink) 9%, var(--sp-desk));
+  --sp-pad-rule: color-mix(in srgb, var(--wp-ink) 38%, var(--sp-pad));
+  /* Both fibres go dark on cream: a lighter-than-paper line is invisible when the paper is
+     already the brightest thing, so the tooth is all there is to see by. */
+  --sp-laid: color-mix(in srgb, var(--wp-ink) 1.5%, transparent);
+  --sp-tooth: color-mix(in srgb, var(--wp-ink) 2%, transparent);
+  --sp-perf: color-mix(in srgb, var(--wp-ink) 42%, transparent);
+  --sp-grain-lift: color-mix(in srgb, #ffffff 6%, transparent);
+  --sp-proj-mix: 52%;
+  --sp-stamp-mix: 40%;
 }
 
 /* ── the spike ───────────────────────────────────────────────────────────────────────────────
@@ -136,7 +235,15 @@ body {
   pointer-events: none;
 }
 .sp-tip svg, .sp-base svg { display: block; }
-.sp-rod { flex: 1 1 auto; width: 12px; background: var(--sp-rod-fill); }
+.sp-rod {
+  flex: 1 1 auto;
+  width: 12px;
+  background: var(--sp-rod-fill);
+  /* The rod throws a shadow onto the desk. It is drawn on the rail, which sits UNDER the paper, so
+     it only ever appears on the bare stretches — the steel is lit where you can see the wood and
+     buried where you cannot, which is what makes the pile read as sitting ON something. */
+  box-shadow: 5px 0 7px -3px var(--sp-shadow);
+}
 .sp-base { margin-left: -4px; }
 
 /* ── the plate by the door ─────────────────────────────────────────────────────────────────
@@ -184,11 +291,27 @@ body {
 
 .sp-order {
   position: relative;
-  margin: 0 0 9px 0;
+  margin: 0 0 12px 0;
   padding: 5px 7px 0 22px;
-  background: var(--sp-paper);
+  /* Stock, not fill. The tooth runs across the whole body of the card rather than being confined to
+     the accents at its edges — that difference is the whole gap between "a printed form" and "a
+     rectangle with some paper decoration bolted to it". */
+  background: var(--sp-grain), var(--sp-paper);
+  border: 1px solid var(--sp-edge);
+}
+
+/* A work order is a MULTI-PART form: what you are reading is the top copy, and the sheet under it
+   shows along two edges. Cheaper and truer than a drop shadow — a shadow says "this floats", an
+   offset second sheet says "there is more of this document underneath". */
+.sp-order::after {
+  content: "";
+  position: absolute;
+  left: 3px; right: -3px; top: 3px; bottom: -3px;
+  z-index: -1;
+  background: var(--sp-paper-shade);
   border: 1px solid var(--sp-edge);
   box-shadow: 2px 2px 0 0 var(--sp-shadow);
+  pointer-events: none;
 }
 
 /* The margin rule. Every printed form has one down its binding edge, and it is most of why a
@@ -233,12 +356,23 @@ body {
 
 .sp-slip {
   position: relative;
-  padding: 5px 0 6px;
-  border-top: 1px dashed var(--sp-rule);
+  padding: 6px 0 6px;
   cursor: pointer;
   transition: transform 120ms var(--ease-settle), filter 120ms linear;
 }
-.sp-slip:first-of-type { border-top: 0; }
+/* The parts of the form are PERFORATED apart, not ruled apart. Square punches, because every other
+   mark on this board is square, and they run out past the text on both sides — through the binding
+   margin and out to the card's edge — because that is where a real perforation goes: across the
+   whole sheet, not just under the words. */
+.sp-slip::before {
+  content: "";
+  position: absolute;
+  left: -16px; right: -7px; top: 0;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--sp-perf) 0 2px, transparent 2px 5px);
+  pointer-events: none;
+}
+.sp-slip:first-of-type::before { display: none; }
 .sp-slip[data-depth="1"] { margin-left: 9px; }
 
 .sp-slip:hover { transform: translate(-1px, -1px); filter: brightness(1.07); }
@@ -269,7 +403,7 @@ body {
 .sp-head > :not(.sp-name) { flex: 0 0 auto; }
 
 .sp-role {
-  /* 11px at 500, not 10px at 400: contrast on text this small is decided by how much of each
+  /* 11px at 600, not 10px at 400: contrast on text this small is decided by how much of each
      glyph is actually the ink colour rather than an anti-aliased blend, so weight and size move
      the measured number as much as the colour does. */
   font-size: 11px;
@@ -357,8 +491,21 @@ body {
   transform: rotate(-7deg);
 }
 .sp-stamp svg { display: block; }
-.sp-stamp[data-kind="done"] { --stamp: var(--wp-ok); }
-.sp-stamp[data-kind="error"] { --stamp: var(--wp-bad); }
+.sp-stamp[data-kind="done"] { --stamp: color-mix(in srgb, var(--wp-ok) var(--sp-stamp-mix), var(--sp-ink)); }
+/* ERROR is the one stamp where misreading costs something, and red on this stock cannot reach the
+   floor while still being red — measured 3.3-3.6:1 in dark by two independent methods. So it stops
+   being an outline and becomes a filled plate: the ink is the paper's own near-black, which has
+   plenty of contrast against the red, and a solid red label reads as more urgent than a red
+   outline anyway. DONE stays an outline; it clears the floor as one. */
+.sp-stamp[data-kind="error"] {
+  /* The fill is mixed DOWN toward a near-black red rather than used as the theme gives it: the
+     editor's error colour is a mid red on dark and a strong red on light, so neither the ink nor
+     the paper contrasts with it in both themes at once. A deep red is deep in either, which lets
+     one pairing — white on it — hold everywhere. */
+  --stamp: #fff;
+  background: color-mix(in srgb, var(--wp-bad) 58%, #1a0508);
+  border-color: color-mix(in srgb, var(--wp-bad) 58%, #1a0508);
+}
 .sp-stamp[data-kind="foreign"], .sp-stamp[data-kind="held"] { --stamp: var(--sp-ink); }
 
 .sp-lamp { --mark: var(--wp-ok); line-height: 0; }
@@ -374,14 +521,20 @@ body {
    so it reads as the sheet lifting rather than as an icon printed on it. */
 .sp-ear { position: absolute; right: 0; bottom: 0; line-height: 0; pointer-events: none; }
 /* A buried slip has no room to curl — its sleep mark already carries the reading, and an ear here
-   lands straight on top of the cost. */
+   lands straight on top of the cost. Lift it and the room comes back, so the ear does too: as the
+   fixture stood, every stalled slip was slim, which meant the curl was drawn on every one of them
+   and visible on none. */
 .sp-slip[data-fold="slim"] .sp-ear { display: none; }
+.sp-slip[data-fold="slim"]:hover .sp-ear,
+.sp-slip[data-fold="slim"]:focus-visible .sp-ear { display: block; }
 .sp-ear svg { display: block; }
 
 /* The staple that holds a report onto its lead. Lives in the binding gutter, which is exactly
    where a real one would be. */
-.sp-staple { position: absolute; left: -13px; top: 7px; line-height: 0; }
-.sp-staple svg { display: block; }
+.sp-staple { position: absolute; left: -13px; top: 8px; line-height: 0; }
+/* A staple is bent metal lying ON the paper, so it throws a hard one-pixel shadow. Without it the
+   thing is a printed mark; with it there is something physically pressed through the sheet. */
+.sp-staple svg { display: block; filter: drop-shadow(1px 1px 0 var(--sp-shadow)); }
 
 /* A job that died is TORN. The tear is generated so the zigzag stays even at any width, and it is
    the status you read before any colour or any word. */
@@ -408,19 +561,38 @@ body {
 
 /* ── the form's total ──────────────────────────────────────────────────────────────────────── */
 
+/* The foot of the form is a COUNTERFOIL — the stub you keep, perforated off the body of the order
+   and printed on the same stock a shade down. It bleeds to the card's edges (the negative margins
+   cancel the order's padding), so the paper language covers the full width of the sheet instead of
+   stopping where the text does. */
 .sp-total {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
-  padding: 3px 0 4px;
-  border-top: 1px solid var(--sp-rule);
+  margin: 4px -7px 0 -22px;
+  padding: 4px 7px 4px 22px;
+  background: var(--sp-grain), var(--sp-stub);
   font-size: 9px;
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--sp-dim);
 }
-.sp-proj { color: var(--accent, var(--wp-h1)); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-total::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--sp-perf) 0 2px, transparent 2px 5px);
+  pointer-events: none;
+}
+/* The pod hue, pulled toward the ink until it is READABLE at nine pixels. A chart colour is chosen
+   to be distinguishable from six other chart colours, never to be legible as small bold type on a
+   card, and the darkest of the seven measured 4.03:1 in the dark theme — under the floor for text
+   this size. The mix keeps enough of the hue to tie the strip to its spine and its shirts, and the
+   RATIO is per theme: a light theme's chart palette is mid-valued against near-white stock, so the
+   same 70% that clears the floor on a dark card leaves the yellow at 4.13:1 on a cream one. */
+.sp-proj { color: color-mix(in srgb, var(--accent, var(--wp-h1)) var(--sp-proj-mix), var(--sp-ink)); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-sum { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 /* A lone worker keeps only the project stamp — the strip is still there so the sheet has a foot,
    but it stops repeating a figure that is already one line above it. */
@@ -430,9 +602,110 @@ body {
   position: relative;
   z-index: 1;
   margin-left: 22px;
-  padding: 18px 0;
+  padding: 14px 0 6px;
   color: var(--sp-dim);
   font-style: italic;
+}
+
+/* ── the clear desk ────────────────────────────────────────────────────────────────────────
+   Everything between the last order and the composer, which on a small team is most of the panel.
+   It used to be nothing — free space in a flex column, so the rod hung in unlit black and the
+   bottom quarter of the surface read as canvas the design had not reached yet.
+   It is a PLACE now, furnished the way the building furnishes a room nobody is standing in: the
+   desk's own boards and lamp are already under it, the die-line prints where the next slip lands,
+   and the stamp and its pad sit there whether or not there is anything to stamp. An empty desk,
+   not an empty picture. */
+
+.sp-clear {
+  position: relative;
+  z-index: 1;
+  /* Sized entirely by what is left over, so it is exactly the stretch that used to be dead.
+     The basis is 0 and NOT auto, and that is load-bearing rather than tidy: container-type size
+     only takes effect on the block axis when the element's height cannot depend on its contents,
+     and a 1 1 auto basis means a content-derived base size, so Chromium silently declines block
+     containment and every height query below it never matches — while WIDTH queries on the
+     same element keep working, which is what makes it look like a typo rather than a fallback. */
+  flex: 1 1 0;
+  container-type: size;
+  container-name: clear;
+  overflow: hidden;
+}
+
+/* The pad the work sits on. This is the piece that actually answers the complaint: boards and a
+   lamp stop the stretch being black, but they do not stop it being UNBOUNDED, and an empty room
+   reads as a room because it has EDGES — the building's empty rooms have walls and a floor line,
+   not just a dark wall. So the clear desk gets an object with a rim, four corner mounts and a
+   die-cut printed on it. The rod's shadow falls across it and the lamp falls down it, which is
+   what keeps a large pad from being one flat value. */
+.sp-blotter {
+  position: absolute;
+  left: 0; right: 3px; top: 3px; bottom: 5px;
+  /* A pad is an OBJECT, so it has a size of its own. Stretched to fill whatever is left it stopped
+     being a thing on the desk and became the desk, and on a quiet day that is a single beige
+     rectangle for two thirds of the panel. Capped at roughly one work order deep — the pad is
+     sized to what it is waiting for — and what shows below it is the desk's own boards, which is a
+     surface with a grain and a lamp falling down it rather than a bigger version of the pad.
+     max-height and not height: on a busy day there is less room than this and the pad then ends
+     where the space does, keeping its rim, its corners and its bottom edge. */
+  max-height: 264px;
+  /* Only the softer of the two fibres: the pad is felt, not stock, and the paper tooth is
+     calibrated against paper's own value — carried onto a darker surface unchanged it reads
+     louder there than it does on the thing it was measured for. */
+  background: var(--sp-pad-nap), var(--sp-pad);
+  border: 1px solid var(--sp-desk-rim);
+  /* The pile above throws onto it. One inset line is the whole difference between a pad lying on a
+     desk and a rectangle painted on one. */
+  box-shadow: inset 0 4px 7px -4px var(--sp-shadow);
+}
+.sp-corner { position: absolute; line-height: 0; }
+.sp-corner svg { display: block; }
+.sp-corner[data-at="tl"] { left: 1px; top: 1px; }
+.sp-corner[data-at="tr"] { right: 1px; top: 1px; transform: rotate(90deg); }
+.sp-corner[data-at="br"] { right: 1px; bottom: 1px; transform: rotate(180deg); }
+.sp-corner[data-at="bl"] { left: 1px; bottom: 1px; transform: rotate(270deg); }
+/* Below about two slips of clearance the mounts would meet in the middle and the pad would read as
+   a diamond. The pad keeps its rim; the corners are what go. */
+.sp-corner { display: none; }
+@container clear (min-height: 62px) {
+  .sp-corner { display: block; }
+}
+
+/* Where the next slip goes: the die-cut printed on the pad, hole and all. Dashed, unfilled, the
+   pad showing through it — a shadow board, not another card. */
+.sp-dieline {
+  position: absolute;
+  left: 9px; right: 12px; top: 11px;
+  height: 27px;
+  border: 1px dashed var(--sp-pad-rule);
+}
+.sp-dieline-hole {
+  position: absolute;
+  left: 5px; top: 6px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 1px dashed var(--sp-pad-rule);
+}
+.sp-dieline-label {
+  position: absolute;
+  left: 22px; top: 8px;
+  font-size: 9px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--sp-dim);
+}
+
+/* What is standing on the wood. Held out of a short desk rather than cropped in half: below about
+   a slip and a half of clearance there is no room for a prop, and half a stamp is worse than none.
+   The query is on the desk's OWN height, which is the honest thing to ask. */
+.sp-props {
+  display: none;
+  position: absolute;
+  right: 22px; bottom: 12px;
+  line-height: 0;
+}
+.sp-props svg { display: block; }
+@container clear (min-height: 92px) {
+  .sp-props { display: block; }
 }
 
 /* ── the slip you are writing ──────────────────────────────────────────────────────────────
@@ -442,11 +715,12 @@ body {
 .sp-compose {
   position: relative;
   z-index: 1;
-  /* Pushed to the floor of the panel. What opens up above it is BARE ROD, which is the argument
-     this whole direction rests on: the paperwork and the thing you type into are on one spike. */
-  margin-top: auto;
+  /* Sits on the floor of the panel — pushed there by the clear desk above it, which now owns that
+     free space instead of an auto margin swallowing it. What opens up between the pile and this is
+     DESK with a rod standing in it, which is the argument this whole direction rests on: the
+     paperwork and the thing you type into are on one spike, on one surface. */
   padding: 6px 8px 8px 22px;
-  background: var(--sp-paper);
+  background: var(--sp-grain), var(--sp-paper);
   border: 1px solid var(--sp-edge);
   box-shadow: 2px 2px 0 0 var(--sp-shadow);
 }
@@ -537,7 +811,15 @@ body {
   .sp-foot { gap: 6px; }
   .sp-slip[data-depth="1"] { margin-left: 6px; }
   .sp-staple { left: -11px; }
-  .sp-total { gap: 6px; }
+  /* The counterfoil and the perforations bleed to the card's edges, so both have to be re-cut when
+     the card's own padding changes — otherwise the stub stops short of the paper and the punches
+     run off it. */
+  .sp-total { gap: 6px; margin-left: -20px; margin-right: -5px; padding-left: 20px; padding-right: 5px; }
+  .sp-slip::before { left: -14px; right: -5px; }
+  .sp-dieline { left: 7px; right: 9px; }
+  .sp-dieline-hole { left: 4px; }
+  .sp-dieline-label { left: 20px; }
+  .sp-props { right: 16px; }
   .sp-slip[data-fold="slim"] .sp-stamp b { display: none; }
   .sp-slip[data-fold="slim"] .sp-stamp { padding: 2px 3px; }
   .sp-slip[data-fold="slim"]:hover .sp-stamp b,

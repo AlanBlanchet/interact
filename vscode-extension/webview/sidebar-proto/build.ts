@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { renderBoard } from "./spindle";
 import { STYLE } from "./style";
-import { emptyBoard, fixture } from "./fixture";
+import { emptyBoard, fixture, quietBoard } from "./fixture";
 
 /** Dark+ and Light+, read off the real editor. */
 const DARK = `
@@ -104,7 +104,12 @@ function main(): void {
   const pages: [string, string][] = [
     ["dark.html", page("vscode-dark", DARK, renderBoard(fixture()))],
     ["light.html", page("vscode-light", LIGHT, renderBoard(fixture()))],
+    // The two boards that judge the BOTTOM of the panel rather than the top: a small team, which
+    // is what most sessions actually look like, and none at all.
+    ["quiet-dark.html", page("vscode-dark", DARK, renderBoard(quietBoard()))],
+    ["quiet-light.html", page("vscode-light", LIGHT, renderBoard(quietBoard()))],
     ["empty.html", page("vscode-dark", DARK, renderBoard(emptyBoard()))],
+    ["empty-light.html", page("vscode-light", LIGHT, renderBoard(emptyBoard()))],
     ["sheet.html", sheet([300, 220])],
   ];
   for (const [name, html] of pages) {
