@@ -14,6 +14,7 @@ the latest — naming the pid so the user knows exactly which editor connection 
 import ctypes
 import json
 import os
+import time
 from contextlib import suppress
 import sys
 from pathlib import Path
@@ -168,6 +169,57 @@ def kill_stale_servers() -> list[int]:
     return killed
 
 
+def _source_mtime() -> float:
+    """When the installed interact source was last written.
+
+    An editable install serves the tree directly, so this moves every time a fix lands — which is
+    exactly when a long-lived server becomes stale, and exactly when the version string does NOT
+    move, because this project bumps once per release rather than once per change.
+    """
+    root = Path(__file__).resolve().parent
+    newest = 0.0
+    for f in root.rglob("*.py"):
+        try:
+            newest = max(newest, f.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _process_start(pid: int) -> float | None:
+    """Wall-clock seconds at which ``pid`` started, or None if it is gone or unreadable."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    try:
+        # field 22 (1-based) is starttime in clock ticks since boot; everything after the comm
+        # field is fixed-width, and comm can itself contain spaces, so split from the last ')'.
+        fields = stat[stat.rindex(")") + 2:].split()
+        ticks = float(fields[19])
+    except (ValueError, IndexError):
+        return None
+    hz = os.sysconf("SC_CLK_TCK")
+    try:
+        with open("/proc/uptime") as fh:
+            uptime = float(fh.read().split()[0])
+    except OSError:
+        return None
+    return time.time() - uptime + ticks / hz
+
+
+def running_older_code(pid: int) -> bool:
+    """Whether ``pid`` started BEFORE the source it imported was last edited.
+
+    A process cannot be running code written after it started, so this catches the staleness the
+    version comparison structurally cannot: a fix committed between releases.
+    """
+    started = _process_start(pid)
+    if started is None:
+        return False  # gone, or a platform without /proc — pruning handles the first
+    return started < _source_mtime()
+
+
 def stale_servers() -> list[dict]:
     """Live MCP servers whose loaded version is behind :func:`latest_version` (→ serving old code;
     reconnect them). Prunes registry files for dead pids as a side effect, so a crashed server
@@ -187,5 +239,9 @@ def stale_servers() -> list[dict]:
             f.unlink(missing_ok=True)  # dead → prune
             continue
         if info.get("version") != latest:
-            out.append(info)
+            out.append({**info, "reason": "version"})
+        elif running_older_code(pid):
+            # Same version, older code. Between releases this is the ONLY way to see it, and it
+            # is the common case: the version moves once per release, the code moves every fix.
+            out.append({**info, "reason": "code"})
     return out

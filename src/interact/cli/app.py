@@ -100,10 +100,14 @@ def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
             print(f"{indent}⚠ stale server(s) found but none could be restarted (not interact mcp, or "
                   f"no permission) — reconnect them from your editor.")
         return
-    print(f"{indent}⚠ stale MCP server(s) — running older code than v{latest}; reconnect to load fixes")
+    print(f"{indent}⚠ stale MCP server(s) — serving code older than this tree; reconnect to load fixes")
     print(f"{indent}   (or run `interact doctor --fix` to restart them):")
     for s in stale:
-        print(f"{indent}    pid {s['pid']}: v{s.get('version')}")
+        if s.get("reason") == "code":
+            # The common case between releases: the version never moved, the code did.
+            print(f"{indent}    pid {s['pid']}: v{s.get('version')} — started before the last edit")
+        else:
+            print(f"{indent}    pid {s['pid']}: v{s.get('version')} (tree is v{latest})")
 
 
 def _print_sandboxes(real_display: str | None) -> None:
