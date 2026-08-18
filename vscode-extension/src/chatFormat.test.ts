@@ -211,3 +211,13 @@ test("a top-level run does not claim a sender it never had", () => {
   const html = chatDocument({ nonce: "n", name: "r", status: "running", turns: [], run: RUN });
   assert.ok(!/sent by/i.test(html));
 });
+
+test("nothing in the chat can shrink a column to one character", () => {
+  // `overflow-wrap: anywhere` lets a grid track's min-content width fall to 1ch, so the instant
+  // the sidebar narrowed — which is exactly what clicking a file link does — paths and session
+  // ids wrapped one glyph per line. `break-word` breaks the same values without lying to the
+  // layout about how narrow the column may be.
+  const html = chatDocument({ nonce: "n", name: "g", status: "done", turns: [], run: RUN });
+  assert.equal(/overflow-wrap:\s*anywhere/.test(html), false);
+  assert.match(html, /overflow-wrap:\s*break-word/);
+});

@@ -55,3 +55,23 @@ test("an empty building still renders every storey", () => {
   assert.equal([...html.matchAll(/<div class="wp-floor"/g)].length, 3, "it stays a building");
   assert.equal(vacantFloors(html), 3);
 });
+
+// visual-critic: "LIBRARY+STUDIO (empty) sit full-height beside occupied LAB on the same floor —
+// only whole-floor vacancy shrinks, not per-room; ~28% of the visible canvas was blank."
+
+function floorColumns(html: string): string[] {
+  return [...html.matchAll(/<div class="wp-floor"[^>]*style="--cols:([^"]+)"/g)].map((m) => m[1]);
+}
+
+test("an empty room beside a busy one is a sliver, not a quarter of the floor", () => {
+  // LAB is occupied; LIBRARY and STUDIO share its floor.
+  const cols = floorColumns(render(state([worker("lab", "a")]), "n"))[0];
+  assert.match(cols, /\.35fr/, `empty rooms did not shrink: ${cols}`);
+  assert.match(cols, /3fr/, "the occupied room should take the freed width");
+});
+
+test("a floor nobody is on keeps its rooms evenly divided", () => {
+  // Nowhere for the space to go, so squeezing would just pick an arbitrary winner.
+  const cols = floorColumns(render(state([worker("entry", "a")]), "n"))[0];
+  assert.ok(!cols.includes(".35fr"), `an all-empty floor was squeezed anyway: ${cols}`);
+});

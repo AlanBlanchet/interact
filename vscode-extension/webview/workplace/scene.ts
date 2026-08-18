@@ -237,9 +237,24 @@ function legend(): string {
 /** A storey's column template, worked out here rather than left to flexbox, because the rooms use
  *  `subgrid` to share their floor line and subgrid needs the columns to exist on the parent. A busy
  *  room simply gets more of the width — the building visibly bulges where the work is. */
+/** How wide each room on a floor gets.
+ *
+ *  An empty room still has to be THERE — the building has to stay a building, and a room that
+ *  vanishes when its last worker leaves makes the place unreadable. But it does not need a quarter
+ *  of the floor to say so. At 1fr an empty LIBRARY and STUDIO took as much width between them as
+ *  the LAB with people in it, and about a quarter of the canvas was blank.
+ *
+ *  A vacant room is a sliver that keeps its sign and its furniture; the work gets the rest. */
 function columns(cells: { zone: ZoneId | "lobby"; heads: number }[]): string {
+  const occupied = cells.some((c) => c.heads > 0);
   return cells
-    .map((c) => (c.zone === "lobby" ? "54px" : `minmax(${c.heads ? 136 : 76}px, ${1 + c.heads * 2}fr)`))
+    .map((c) => {
+      if (c.zone === "lobby") return "54px";
+      if (c.heads) return `minmax(136px, ${1 + c.heads * 2}fr)`;
+      // Only squeezed when there is somewhere for the space to GO. A floor nobody is on keeps
+      // its rooms evenly divided rather than collapsing into an arbitrary one.
+      return occupied ? "minmax(58px, .35fr)" : "minmax(76px, 1fr)";
+    })
     .join(" ");
 }
 
