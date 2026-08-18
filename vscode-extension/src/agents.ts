@@ -97,6 +97,9 @@ export function readAgentRuns(): AgentRun[] {
         run.pid,
         typeof run.pid === "number" ? alive(run.pid) : false,
         run.status === "running" ? streamEnded(run.run_id) : false,
+        // Did it ever say anything? A vanished run that wrote a transcript finished; one that
+        // wrote nothing is what a crash looks like. Only consulted when the stream cannot tell.
+        Boolean(run.last) || Boolean(run.output_tokens),
       );
       runs.push(run);
     } catch {

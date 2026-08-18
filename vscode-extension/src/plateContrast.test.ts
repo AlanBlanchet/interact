@@ -62,58 +62,59 @@ const THEMES: Array<{ name: string; bg: Rgb; fg: Rgb }> = [
 // A plate can sit over any room surface; these are the lightest and darkest the rooms paint.
 const BACKDROPS = [19, 34];
 
-test("the done state does not fade the plate — that is what broke the contrast", () => {
-  // Stated positively, so it fails if the rule ever comes back rather than only measuring its
-  // absence indirectly. `opacity` composites the TEXT along with its translucent background, so
-  // the name's real colour came from whatever room art sat behind it.
-  assert.equal(hasRule('.wp-worker[data-status="done"] .wp-plate'), false);
-});
+// Every text element the plate carries, with the nominal floor its size demands. The floor rises
+// as the text shrinks: measured pixel contrast ran ~0.6x nominal at 10px on this surface, and
+// worse at 9px, because a smaller glyph is a larger fraction anti-aliased.
+//
+// Enumerated rather than spot-checked, because spot-checking is what went wrong: the done-state
+// fix landed on `.wp-name` and its sibling `.wp-since` in the same plate kept its old colour,
+// measuring 1.5-2.6:1 — worse than the original complaint that started all this.
+const PLATE_TEXT = [
+  { selector: ".wp-name {", px: 10, floor: 8 },
+  { selector: ".wp-since {", px: 10, floor: 8.5 },
+];
 
-test("a finished worker's name stays readable on every room surface, in every theme", () => {
+function plateSurface(theme: { bg: Rgb; fg: Rgb }, roomPct: number, plateBg: string): Rgb {
+  return over(theme.bg, mix(theme.fg, theme.bg, roomPct), alphaOf(plateBg));
+}
+
+/** Resolve a CSS colour expressed against the theme tokens this stylesheet mixes in. */
+function inkOf(css: string, theme: { bg: Rgb; fg: Rgb }): Rgb {
+  // --wp-dim is the theme's descriptionForeground; its shipping value in each.
+  const dim: Rgb = theme.bg[0] < 128 ? parseHex("#9d9d9d") : parseHex("#717171");
+  const pct = /(\d+)%/.exec(css);
+  if (!pct) return css.includes("--wp-dim") ? dim : theme.fg;
+  const [first] = css.split(",").slice(1);       // color-mix(in srgb, <first> N%, <second>)
+  const second = css.split(",")[2] ?? "";
+  const token = (t: string): Rgb => (t.includes("--wp-dim") ? dim : t.includes("--wp-bg") ? theme.bg : theme.fg);
+  return mix(token(first ?? ""), token(second), Number(pct[1]));
+}
+
+test("every text element on the plate clears the floor its size demands", () => {
   const plateBg = decl(".wp-plate {", "background")!;
-  const doneSel = '.wp-worker[data-status="done"] .wp-plate {';
-  const doneOpacity = Number((hasRule(doneSel) ? decl(doneSel, "opacity") : undefined) ?? 1);
-  const nameSel = '.wp-worker[data-status="done"] .wp-name {';
-  const doneName = (hasRule(nameSel) ? decl(nameSel, "color") : undefined) ?? "";
-
   const failures: string[] = [];
-  for (const theme of THEMES) {
-    for (const pct of BACKDROPS) {
-      const room = mix(theme.fg, theme.bg, pct);
-      const plate = over(theme.bg, room, alphaOf(plateBg));
-      // The name is --wp-fg unless the done rule dims it; a `color-mix(... N%, var(--wp-bg))`
-      // reads as N% of the foreground.
-      const dim = /([\d.]+)%/.exec(doneName);
-      const ink = dim ? mix(theme.fg, theme.bg, Number(dim[1])) : theme.fg;
-      // An `opacity` on the plate composites BOTH the text and the plate onto the room.
-      const text = over(ink, room, doneOpacity);
-      const surface = over(plate, room, doneOpacity);
-      const ratio = contrastRatio(text, surface);
-      if (ratio < SMALL_TEXT_FLOOR) {
-        failures.push(`${theme.name} over ${pct}% room: ${ratio.toFixed(2)}:1`);
+
+  for (const { selector, px, floor } of PLATE_TEXT) {
+    const colour = decl(selector, "color");
+    assert.ok(colour, `${selector} declares no colour — did it get renamed?`);
+    for (const theme of THEMES) {
+      for (const pct of BACKDROPS) {
+        const ratio = contrastRatio(inkOf(colour!, theme), plateSurface(theme, pct, plateBg));
+        if (ratio < floor) {
+          failures.push(`${selector} ${px}px, ${theme.name} over ${pct}% room: ${ratio.toFixed(2)}:1 < ${floor}`);
+        }
       }
     }
   }
-  assert.deepEqual(failures, [], `done-state name plate under ${SMALL_TEXT_FLOOR}:1`);
+  assert.deepEqual(failures, []);
 });
 
-test("a running worker's name clears the same floor", () => {
-  const plateBg = decl(".wp-plate {", "background")!;
-  const failures: string[] = [];
-  for (const theme of THEMES) {
-    for (const pct of BACKDROPS) {
-      const room = mix(theme.fg, theme.bg, pct);
-      const plate = over(theme.bg, room, alphaOf(plateBg));
-      const ratio = contrastRatio(theme.fg, plate);
-      if (ratio < SMALL_TEXT_FLOOR) failures.push(`${theme.name} over ${pct}%: ${ratio.toFixed(2)}:1`);
-    }
-  }
-  assert.deepEqual(failures, [], `running name plate under ${SMALL_TEXT_FLOOR}:1`);
+test("the done state does not fade any of it", () => {
+  // opacity on the plate composites every glyph in it, not just the one that was measured.
+  assert.equal(hasRule('.wp-worker[data-status="done"] .wp-plate'), false);
 });
 
 test("hex parsing keeps its channels straight when an alpha is present", () => {
-  // "#fff8" used to be read as three channels of "ff","f8",NaN — an alpha silently becoming part
-  // of the colour, in a module whose whole job is producing trustworthy numbers.
   assert.deepEqual(parseHex("#fff"), parseHex("#ffffff"));
   assert.deepEqual(parseHex("#fff8"), parseHex("#ffffff"));
   assert.deepEqual(parseHex("#1e1e1eff"), parseHex("#1e1e1e"));

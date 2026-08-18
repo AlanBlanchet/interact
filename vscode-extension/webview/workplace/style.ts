@@ -425,7 +425,11 @@ body.vscode-high-contrast-light .wp {
   max-width: 100%;
   margin-top: 3px;
   padding: 1px 4px;
-  background: color-mix(in srgb, var(--wp-bg) 78%, transparent);
+  /* Opaque, so what the plate is made of is not decided by the room behind it. At 78% it took a
+     tint from whatever prop it stood over — which meant the same nameplate read dark-on-light in
+     one room and light-on-dark in the next, and made its contrast uncomputable rather than merely
+     low. A label's job is to be read; the room shows through everywhere else. */
+  background: var(--wp-bg);
   border: 1px solid color-mix(in srgb, var(--wp-ink) 55%, transparent);
 }
 .wp-name {
@@ -439,7 +443,16 @@ body.vscode-high-contrast-light .wp {
 }
 .wp-worker[data-depth="0"] .wp-name { font-size: 11px; }
 .wp-plate svg { flex: none; }
-.wp-since { font-size: 9px; color: var(--wp-dim); font-variant-numeric: tabular-nums; flex: none; }
+/* Was 9px at plain --wp-dim: measured 1.5-2.6:1 on real pixels — worse than the name-plate
+   complaint that started this, and missed by the first fix because it only looked at the name.
+   Mixed toward --wp-dim rather than toward the background, so it stays dark in the light theme
+   instead of washing out. */
+.wp-since {
+  font-size: 10px;
+  color: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-dim));
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
 .wp-lead-of {
   max-width: 100%;
   font-size: 9px;

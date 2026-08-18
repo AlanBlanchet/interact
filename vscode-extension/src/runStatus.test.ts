@@ -30,3 +30,20 @@ test("a run with no pid is not called crashed on that basis", () => {
   // Nothing to probe: claiming a crash from an absent pid invents a failure.
   assert.equal(livenessOf("running", null, false, false), "running");
 });
+
+// visual-critic spawned a real agent from the panel; it answered "STREAM-TEST-OK" and exited
+// cleanly, and the panel showed a red warning icon and the word "crashed". The record was stale
+// (nothing had healed it yet), so the fallback below is what decided — and it defaulted to the
+// alarming answer on no evidence at all.
+
+test("a run that produced a transcript and then vanished is finished, not crashed", () => {
+  assert.equal(livenessOf("running", 4242, false, false, true), "done");
+});
+
+test("a run that vanished having said nothing is the shape a crash leaves", () => {
+  assert.equal(livenessOf("running", 4242, false, false, false), "crashed");
+});
+
+test("a settled stream still wins over both", () => {
+  assert.equal(livenessOf("running", 4242, false, true, false), "done");
+});
