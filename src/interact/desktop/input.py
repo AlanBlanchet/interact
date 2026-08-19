@@ -25,7 +25,7 @@ ABS_MAX = 32767
 _BUTTONS = {"left": 1, "middle": 2, "right": 3}
 
 # How long to wait for the X server to attach a freshly-created uinput node. Generous: the cost of
-# waiting is paid once per session, the cost of NOT waiting is a silently dropped chord (#115).
+# waiting is paid once per session, the cost of NOT waiting is an event dropped in silence.
 _ATTACH_TIMEOUT = 2.0
 
 
@@ -46,12 +46,20 @@ def wait_for_device(
     """Block until the X server LISTS an input device called ``name``. Returns True once it does,
     False if the wait ran out or X could not be asked.
 
-    This closes #115. A uinput node exists the moment ``UI_DEV_CREATE`` returns, but X and libinput
-    only learn about it later, through udev — and every event written in that window is discarded
-    by the kernel with no error whatsoever. Because ``key()`` writes the MODIFIERS first, they are
-    what falls in the gap; the target key follows a moment later, once the device is attached, and
-    lands alone. That is precisely the reported symptom: a declared chord arriving as a plain,
-    unmodified keystroke, in two apps with completely different input stacks.
+    A uinput node exists the moment ``UI_DEV_CREATE`` returns, but X and libinput only learn about
+    it later, through udev — and every event written in that window is discarded by the kernel with
+    no error whatsoever. Because ``key()`` writes the MODIFIERS first, they are what falls in the
+    gap; the target key follows a moment later, once the device is attached, and lands alone.
+
+    That mechanism is real and worth closing here. It is NOT, however, established as the cause of
+    #115, and an earlier version of this docstring claimed it was. Independent verification found
+    the gap: this runs only from ``UinputPointer.__init__``, which only ``LocalBackend`` ever
+    constructs — while #115 was reported driving the NESTED sandbox, whose backend routes every
+    key through ``xdotool`` and never builds a pointer at all. So this code cannot execute on the
+    path the bug was reported from. Eight fresh nested trials also failed to reproduce the symptom
+    (the modifier landed every time), which leaves #115 either intermittent or mis-attributed to
+    the nested path. Treat it as OPEN; if a dropped chord reappears there, ``nested.py``'s xdotool
+    path is the place to look, not this one.
 
     Waiting on the CONDITION rather than a guessed sleep is what makes this both correct and free:
     it returns the instant the device is really there, and it cannot silently under-wait on a slow
@@ -198,10 +206,11 @@ class UinputPointer:
             self._kbd = UInput({ecodes.EV_KEY: sorted(self._declared)},
                                name="interact-virtual-keyboard")
             # Both nodes must be ATTACHED before anyone writes to them. The kernel accepts events
-            # into a device X has not picked up yet and drops them silently, which is #115: the
-            # modifiers of the first chord are written first, land in that window, and vanish.
-            # Waiting here (once, on the condition) is what makes the first chord as reliable as
-            # the hundredth. Pointer too — same race, same silent loss, just harder to notice.
+            # into a device X has not picked up yet and drops them silently: the modifiers of a
+            # first chord are written first, so they are what lands in that window and vanishes.
+            # Waiting here (once, on the condition) makes the first chord as reliable as the
+            # hundredth. Pointer too — same race, same silent loss, just harder to notice.
+            # NB: this path is LocalBackend-only; the nested sandbox drives xdotool instead.
             wait_for_device("interact-virtual-keyboard")
             wait_for_device("interact-virtual-pointer")
         except (PermissionError, FileNotFoundError) as exc:
