@@ -60,7 +60,7 @@ test("the ones that only make sense with an agent selected are marked", () => {
 
 test("the commands cover what he cannot do from the panel today", () => {
   const slashes = CHAT_COMMANDS.map((c) => c.slash);
-  for (const expected of ["/stop", "/new", "/team", "/workspace", "/sequence", "/prompt"]) {
+  for (const expected of ["/stop", "/new", "/agent", "/team", "/workspace", "/sequence", "/prompt"]) {
     assert.ok(slashes.includes(expected), `missing ${expected}`);
   }
 });

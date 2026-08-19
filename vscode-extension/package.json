@@ -242,6 +242,11 @@
         "command": "interact.agents.workspace",
         "title": "Interact: Show Agents From Workspace\u2026",
         "icon": "$(folder-library)"
+      },
+      {
+        "command": "interact.agents.pick",
+        "title": "Interact: Read an Agent\u2026",
+        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {

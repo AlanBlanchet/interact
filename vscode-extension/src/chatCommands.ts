@@ -24,6 +24,8 @@ export const CHAT_COMMANDS: ChatCommand[] = [
     command: "interact.agents.stop", needsAgent: true },
   { slash: "/new", title: "Start an agent", detail: "spawn a new run",
     command: "interact.agents.spawn", needsAgent: false },
+  { slash: "/agent", title: "Read another agent", detail: "switch this panel to someone else",
+    command: "interact.agents.pick", needsAgent: false },
   { slash: "/team", title: "Open the team", detail: "the workplace, as a building",
     command: "interact.agents.team", needsAgent: false },
   { slash: "/sequence", title: "Open the sequence", detail: "who talked to whom, in order",

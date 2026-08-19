@@ -384,6 +384,26 @@ export async function activate(
     agentsProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider),
     // Picking an agent aims the chat at it — the reason the two views sit together.
+    // Switching which agent you are reading meant leaving the chat for the tree, which is half of
+    // "i can't control everything from there". Scoped to the current workspace, so the list is the
+    // team you are actually looking at.
+    vscode.commands.registerCommand("interact.agents.pick", async () => {
+      const runs = scope.runs();
+      if (runs.length === 0) {
+        void vscode.window.showInformationMessage(`No agents in ${scope.describe()}.`);
+        return;
+      }
+      const chosen = await vscode.window.showQuickPick(
+        runs.map((r) => ({
+          label: r.name,
+          description: r.status,
+          detail: [r.project, r.agent, r.model].filter(Boolean).join(" · "),
+          runId: r.run_id,
+        })),
+        { title: `Read an agent — ${scope.describe()}`, matchOnDetail: true },
+      );
+      if (chosen) chatProvider.show(chosen.runId);
+    }),
     vscode.commands.registerCommand("interact.agents.chat", (arg?: string | { run?: { run_id: string } }) => {
       const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
       if (runId) chatProvider.show(runId);
