@@ -17,6 +17,7 @@ import { selectedRunId } from "./workplaceMessage";
 import { renderScene, renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
 import { scopeStore } from "./scopeStore";
+import { facultiesOf, parseCapabilities } from "./capabilities";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 
 export class WorkplacePanel {
@@ -60,6 +61,10 @@ export class WorkplacePanel {
     WorkplacePanel.current = new WorkplacePanel(panel, log);
   }
 
+  /** What an agent can do, from its own definition file — cached, because the file changes only
+   *  when the definition is edited and the building re-renders constantly. */
+  private static readonly FACULTIES = new Map<string, string[]>();
+
   /** Everyone in the building right now, placed by what they are doing. */
   private state(): TeamState {
     return buildTeam(
@@ -69,7 +74,25 @@ export class WorkplacePanel {
       (runId) => readAgentActivity(runId, STEP_WINDOW),
       Date.now() / 1000,
       readAgentMessages() as never,
+      // What each one can DO, read from its own definition file. The parsing lives in
+      // capabilities.ts and the filesystem read lives HERE, at the edge, so teamState stays pure.
+      (run) => WorkplacePanel.facultiesOfDefinition(run.definition_path),
     );
+  }
+
+  /** Everything else is pure; the one filesystem read for capabilities lives here. */
+  private static facultiesOfDefinition(path: string | null | undefined): string[] {
+    if (!path) return [];
+    const cached = WorkplacePanel.FACULTIES.get(path);
+    if (cached) return cached;
+    let found: string[] = [];
+    try {
+      found = facultiesOf(parseCapabilities(fs.readFileSync(path, "utf8")));
+    } catch {
+      found = []; // a moved or unreadable definition must not take the building down
+    }
+    WorkplacePanel.FACULTIES.set(path, found);
+    return found;
   }
 
   /** Re-draw if the building is on screen — the workspace switcher has to reach it too, or the

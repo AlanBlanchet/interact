@@ -172,6 +172,9 @@ export interface RunLike {
   parent_run_id?: string | null;
   finished_at?: number | null;
   started_at?: number;
+  /** Where this run's definition lives, so a caller can read what it is allowed to do. Resolved
+   *  by the registry at spawn; absent for a plain run with no definition. */
+  definition_path?: string | null;
 }
 
 /**
@@ -207,6 +210,20 @@ function lastObservedAt(steps: Step[]): number | null {
  *  `stopped` reads as done rather than as an error: somebody halted it deliberately, and stamping
  *  that as a failure would be the same kind of wrong in the other direction.
  */
+/** What a run can do, or nothing.
+ *
+ *  A resolver that throws — a missing or moved definition file — degrades to no faculties rather
+ *  than taking the whole workplace down. Claiming powers we could not verify would be worse than
+ *  claiming none.
+ */
+function safeFaculties(run: RunLike, resolve: (run: RunLike) => string[]): string[] {
+  try {
+    return resolve(run) ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export function floorStatus(status: string | undefined): Worker["status"] {
   switch (status) {
     case "failed":
@@ -228,6 +245,11 @@ export function buildTeam(
   recentSteps: (runId: string) => Step[],
   now: number = Date.now() / 1000,
   messages: { from_run: string; to_run: string; text?: string; at?: number | null }[] = [],
+  /** What a run can DO, resolved by the caller from its definition file. Injected rather than
+   *  imported so this module stays free of the filesystem — and loadable by the test runner,
+   *  which demands ".ts" specifiers that tsc refuses to emit. The parsing lives at the edge in
+   *  `capabilities.ts`; this only carries the answer. */
+  facultiesFor: (run: RunLike) => string[] = () => [],
 ): TeamState {
   const workers: Worker[] = runs.map((run) => {
     const steps = recentSteps(run.run_id);
@@ -248,6 +270,7 @@ export function buildTeam(
       name: run.name || run.run_id.slice(0, 8),
       agent: run.agent ?? null,
       status: floorStatus(run.status),
+      faculties: safeFaculties(run, facultiesFor),
       // The whole window, not one step: a finished worker keeps the room it last worked in.
       zone: zoneOfSteps(steps, run.status, run.agent ?? null),
       // A session interact did not start gets named, never narrated: we do not read its stream,

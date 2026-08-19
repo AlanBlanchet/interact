@@ -60,6 +60,11 @@ export interface Worker {
    *  or an older record may not have it — a view must not assume a clock exists. */
   started_at?: number | null;
   finished_at?: number | null;
+  /** What this one can actually DO, inherited from its own definition file — reads / writes /
+   *  runs / sees / searches / delegates. Empty for a plain run with no definition: inventing a
+   *  power for it would misreport what is loose in your workspace, which is the point of showing
+   *  this at all. See `capabilities.ts`. */
+  faculties?: string[];
 }
 
 /** One agent addressing another — the thing that makes a set of workers a TEAM rather than a

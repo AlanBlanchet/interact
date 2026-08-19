@@ -402,3 +402,39 @@ test("a run that failed or crashed is shown as an error, not as nothing", () => 
     assert.equal(worker.status, "error", `${status} does not read as an error on the floor`);
   }
 });
+
+// "Agent inherit all the capabilities they have through files, and they should have actions for
+// these." The definitions declare `tools:` in their frontmatter and nothing read it, so the world
+// drew a character that can only read files exactly like one that can drive a browser and spawn
+// others. buildTeam now carries what each one can DO, read from its own definition.
+test("a worker carries the faculties its definition declares", () => {
+  const [worker] = buildTeam(
+    [{ run_id: "r", name: "artist", agent: "artist", status: "running",
+       definition_path: "/defs/artist.md" } as never],
+    () => [], 2000, [],
+    // The caller resolves this from the definition file; here it stands in for that read.
+    (run) => (run.definition_path === "/defs/artist.md"
+      ? ["reads", "writes", "runs", "sees"] : []),
+  ).workers;
+  assert.deepEqual(worker.faculties, ["reads", "writes", "runs", "sees"]);
+});
+
+test("a run with no definition claims no faculties rather than guessing", () => {
+  // A plain `claude` run has no definition file. Inventing powers for it would misreport what is
+  // loose in your workspace, which is the one thing this is for.
+  const [worker] = buildTeam(
+    [{ run_id: "r", name: "main", agent: null, status: "running" } as never],
+    () => [], 2000, [], () => [],
+  ).workers;
+  assert.deepEqual(worker.faculties, []);
+});
+
+test("an unreadable definition degrades to no faculties, never to a crash", () => {
+  const [worker] = buildTeam(
+    [{ run_id: "r", name: "x", agent: "x", status: "running",
+       definition_path: "/gone.md" } as never],
+    () => [], 2000, [],
+    () => { throw new Error("ENOENT"); },
+  ).workers;
+  assert.deepEqual(worker.faculties, []);
+});
