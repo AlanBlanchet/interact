@@ -147,3 +147,56 @@ def extension_status() -> dict | None:
         return {"installed": version, "tree": tree or version, "reason": "code",
                 "behind": len(behind), "running": len(starts)}
     return None
+
+
+def _extension_dir() -> Path:
+    """The extension SOURCE in this checkout — where the package is built from."""
+    return Path(__file__).resolve().parent.parent.parent / "vscode-extension"
+
+
+def _run(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
+    """Run a build/install step, returning (code, output). Kept tiny and injectable so the
+    delivery logic can be tested without packaging a real extension."""
+    import subprocess
+
+    try:
+        done = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=600)
+        return done.returncode, (done.stdout or "") + (done.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+
+
+def deliver_extension() -> bool:
+    """Rebuild and install the extension when the installed one is older than this tree.
+
+    `interact doctor` has always been able to SAY the installed extension was stale and do nothing
+    about it — and a detector for a condition you can remedy is half a feature. A whole day's work
+    once sat undelivered behind exactly that warning: the artifact on disk predated every change,
+    so even a brand-new window showed the old product while every test passed.
+
+    NOT automatic, deliberately. Installing an extension makes VS Code reload its extension hosts,
+    which kills whatever session asked for it — so this runs only when somebody explicitly asks.
+
+    Returns True only when a new package was actually installed; a failure at any step returns
+    False and says why, because the failure this exists to prevent IS an unverified delivery.
+    """
+    status = extension_status()
+    if not status:
+        return False  # already current: a needless reinstall costs every window its host
+
+    where = _extension_dir()
+    code, out = _run(["npm", "run", "package"], cwd=where)
+    if code != 0:
+        print(f"could not package the extension: {out.strip()[-400:]}")
+        return False
+
+    vsix = sorted(where.glob("interact-*.vsix"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not vsix:
+        print("packaging reported success but produced no .vsix")
+        return False
+
+    code, out = _run(["code", "--install-extension", str(vsix[0]), "--force"])
+    if code != 0:
+        print(f"could not install {vsix[0].name}: {out.strip()[-400:]}")
+        return False
+    return True

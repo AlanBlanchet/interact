@@ -116,7 +116,7 @@ def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
             print(f"{indent}    pid {s['pid']}: v{s.get('version')} (tree is v{latest})")
 
 
-def _print_extension_status(indent: str = "  ") -> None:
+def _print_extension_status(indent: str = "  ", fix: bool = False) -> None:
     """Flag a VS Code extension the user is running that is not the one in this tree.
 
     The other half of the delivery gate. A version behind is the easy case; the one that catches
@@ -132,6 +132,18 @@ def _print_extension_status(indent: str = "  ") -> None:
     if st["reason"] == "version":
         print(f"{indent}⚠ VS Code extension v{st['installed']} installed, tree is v{st['tree']} — "
               "repackage and reinstall to load fixes")
+        if fix:
+            # Pair the detection with the remedy. Only on an explicit --fix: installing an
+            # extension makes VS Code reload its extension hosts, which kills whatever session
+            # asked for it — including, often, the one running this command.
+            from interact.extension_status import deliver_extension
+
+            print(f"{indent}   packaging and installing v{st['tree']}…")
+            if deliver_extension():
+                print(f"{indent}   ✓ installed v{st['tree']}. FULLY CLOSE AND REOPEN a window — a "
+                      "reload is served by the same extension host and will not pick it up.")
+            else:
+                print(f"{indent}   could not deliver it; the messages above say why.")
     else:
         n, total = st.get("behind", 1), st.get("running", 1)
         print(f"{indent}⚠ VS Code extension v{st['installed']} was rebuilt after {n} of {total} "
@@ -412,8 +424,14 @@ def doctor(*, fix: bool = False) -> None:
     Parameters
     ----------
     fix
-        Restart any stale `interact mcp` server (it respawns on current code from your editor) —
-        the one-step cure for "I shipped the fix but the bug persists".
+        Deliver this tree to what you are actually running: restart any stale `interact mcp`
+        server (it respawns on current code from your editor), and repackage + reinstall the VS
+        Code extension when the installed one is older than this tree. The one-step cure for "I
+        shipped the fix but the bug persists" — which is a real failure mode here, not a slogan:
+        a day's work once sat undelivered behind a warning this command could only print.
+
+        Installing an extension makes VS Code reload its extension hosts, so expect this to
+        interrupt sessions in your editor windows — which is why it never happens without --fix.
     """
     import os
     import shutil
@@ -422,7 +440,7 @@ def doctor(*, fix: bool = False) -> None:
 
     print("interact doctor\n")
     _print_stale_servers(fix=fix)
-    _print_extension_status()
+    _print_extension_status(fix=fix)
     print(f"  command       : {shutil.which('interact') or 'NOT on PATH'}")
     print(f"  config file   : {UserConfig.PATH} ({'present' if UserConfig.PATH.exists() else 'absent'})")
 
