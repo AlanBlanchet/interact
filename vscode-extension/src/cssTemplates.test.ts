@@ -1,88 +1,123 @@
-/** A backtick inside a CSS comment silently ends the template literal that holds the stylesheet,
- *  and everything after it is then parsed as TypeScript. I have done this three times in one
- *  session, and the build fails with a message about an unexpected token hundreds of lines
- *  further down, pointing at code that is fine.
+/** A backtick inside a comment silently ends the template literal that holds an embedded
+ *  stylesheet or script, and everything after it is then parsed as TypeScript. I have done this
+ *  six times in one session, and the build fails with a message about an unexpected token hundreds
+ *  of lines further down, pointing at code that is fine.
  *
- *  The first version of this guard matched a line that STARTS a comment, or continues one with a
- *  leading asterisk. CSS comments here do neither on their middle lines, so it sailed straight
- *  past a backtick on the second line of a three-line comment and the build broke anyway. It now
- *  tracks the comment BLOCK, and the synthetic cases below are what prove it — checking the real
- *  stylesheets alone only ever proves they are currently clean.
+ *  This tests the SAME implementation the build runs (`scripts/check-css-templates.js`) rather
+ *  than a second copy of the algorithm. The copy was the earlier design, and the two drifted:
+ *  every synthetic case here passed while the real check missed `motion.ts` completely.
+ *
+ *  Three generations of this guard each shipped a defect the tests below now pin:
+ *   - matching only lines that START a comment sailed past a backtick on a middle line;
+ *   - stopping at the first closing backtick missed a file whose source is CONCATENATED;
+ *   - starting the scan at the first backtick began inside the module docstring and inverted
+ *     every state after it, condemning six lines of a file that compiles perfectly.
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const { sheets, backticksInCommentedTemplates } = require(
+  join(here, "..", "scripts", "check-css-templates.js"),
+) as {
+  sheets: () => string[];
+  backticksInCommentedTemplates: (text: string) => number[];
+};
 
-/** Files whose bodies are largely CSS inside a template literal. */
-const SHEETS = [
-  join(here, "..", "webview", "workplace", "style.ts"),
-  join(here, "..", "webview", "sidebar-proto", "style.ts"),
-  join(here, "conversationFormat.ts"),
-];
+const find = (source: string) => backticksInCommentedTemplates(source);
 
-/** Every backtick that sits inside a CSS comment within the file's template literal, as
- *  1-based line numbers. Exported shape kept simple so the synthetic cases can drive it. */
-export function backticksInCssComments(lines: string[]): number[] {
-  const opens = lines.findIndex((l) => /=\s*(String\.raw)?`/.test(l));
-  if (opens === -1) return [];
-  const hits: number[] = [];
-  let inComment = false;
-  for (let i = opens + 1; i < lines.length; i++) {
-    let rest = lines[i];
-    if (!inComment && /^\s*`/.test(rest)) break; // the literal closed
-    while (rest) {
-      if (!inComment) {
-        const open = rest.indexOf("/*");
-        if (open === -1) break;
-        rest = rest.slice(open + 2);
-        inComment = true;
-      }
-      const close = rest.indexOf("*/");
-      const chunk = close === -1 ? rest : rest.slice(0, close);
-      if (chunk.includes("`")) hits.push(i + 1);
-      if (close === -1) break;
-      rest = rest.slice(close + 2);
-      inComment = false;
-    }
-  }
-  return hits;
-}
-
-test("it catches a backtick on the MIDDLE line of a comment — the case that got through", () => {
-  const lines = [
+test("it catches a backtick on the MIDDLE line of a comment — the first version's blind spot", () => {
+  assert.deepEqual(find([
     "export const STYLE = String.raw`",
     "  /* a comment that opens here",
     "     and mentions `anywhere` on a line with no asterisk",
     "     and closes here */",
     "  .x { color: red; }",
     "`;",
-  ];
-  assert.deepEqual(backticksInCssComments(lines), [3]);
+  ].join("\n")), [3, 3]);
 });
 
 test("it catches one on the opening line too", () => {
-  const lines = ["const S = `", "  /* uses `break-word` here */", "`;"];
-  assert.deepEqual(backticksInCssComments(lines), [2]);
+  assert.deepEqual(find(["const S = `", "  /* uses `break-word` here */", "`;"].join("\n")),
+    [2, 2]);
 });
 
 test("a backtick in the JSDoc header above the literal is fine", () => {
   // Ordinary prose there — flagging it would make this guard something to switch off.
-  const lines = ["/** mixes `--vscode-*` tokens */", "const S = `", "  .x { color: red; }", "`;"];
-  assert.deepEqual(backticksInCssComments(lines), []);
+  assert.deepEqual(find(
+    ["/** mixes `--vscode-*` tokens */", "const S = `", "  .x { color: red; }", "`;"].join("\n"),
+  ), []);
 });
 
-test("clean CSS with comments produces nothing", () => {
-  const lines = ["const S = `", "  /* plain words only */", "  .x { color: red; }", "`;"];
-  assert.deepEqual(backticksInCssComments(lines), []);
+test("it keeps checking after a template closes and another opens", () => {
+  // motion.ts's shape: a template, a concatenation, another template. The version that stopped at
+  // the first closing backtick checked the first segment and declared the file clean.
+  assert.deepEqual(find([
+    "export const A = String.raw`",
+    "  /* clean */",
+    "` + OTHER + String.raw`",
+    "  /* mentions `this` */",
+    "`;",
+  ].join("\n")), [4, 4]);
 });
 
-test("the shipping stylesheets are clean", () => {
-  for (const file of SHEETS) {
-    const hits = backticksInCssComments(readFileSync(file, "utf8").split("\n"));
-    assert.deepEqual(hits, [], `${file}: backtick in a CSS comment at line(s) ${hits.join(", ")}`);
+test("a markdown fence in a regex is content, not two template edges", () => {
+  // conversationFormat.ts's FENCE. Read as delimiters it inverts every state that follows, which
+  // is how a clean file came back with six findings.
+  assert.deepEqual(find([
+    "const FENCE = /```([\\\\s\\\\S]*?)```/g;",
+    "/** prose quoting `something` well after it */",
+    "const S = `",
+    "  .x { color: red; }",
+    "`;",
+  ].join("\n")), []);
+});
+
+test("a backtick inside a quoted string delimits nothing", () => {
+  assert.deepEqual(find([
+    'const TICK = "`";',
+    "/** prose quoting `something` */",
+    "const S = `",
+    "  .x { color: red; }",
+    "`;",
+  ].join("\n")), []);
+});
+
+test("a // inside CSS is a selector or a URL, never a comment", () => {
+  // Treating it as one would swallow the rest of the line, including a real closing backtick.
+  assert.deepEqual(find([
+    "const S = `",
+    "  .x { background: url(https://example.com/a.png); }",
+    "  /* and `this` is a genuine hit after it */",
+    "`;",
+  ].join("\n")), [3, 3]);
+});
+
+test("clean source with comments produces nothing", () => {
+  assert.deepEqual(find(["const S = `", "  /* plain words only */", "  .x { red } */", "`;"]
+    .join("\n")), []);
+});
+
+test("the guard covers every file that carries an embedded source", () => {
+  // The list version missed sim.ts — the file that then broke the build. Discovery is what keeps
+  // a new embedded source from being unguarded simply because nobody remembered it.
+  const covered = sheets();
+  for (const expected of ["webview/workplace/sim.ts", "webview/workplace/motion.ts",
+    "webview/workplace/style.ts", "src/conversationFormat.ts"]) {
+    assert.ok(covered.some((f) => f.replace(/\\/g, "/").endsWith(expected)),
+      `${expected} is not guarded (covered: ${covered.join(", ")})`);
+  }
+});
+
+test("the shipping sources are clean", () => {
+  for (const file of sheets()) {
+    const full = join(here, "..", file);
+    const hits = find(readFileSync(full, "utf8"));
+    assert.deepEqual(hits, [], `${file}: backtick in a comment at line(s) ${hits.join(", ")}`);
   }
 });

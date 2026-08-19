@@ -10,6 +10,11 @@
     ],
     "sourceMap": true,
     "strict": true,
+    // The defect this catches, verbatim: `teamSpend` shipped a whole commit imported into
+    // chatView.ts and never called, so the feature was dark in the panel while its unit tests and
+    // the preview fixture both looked perfect. A hand-kept list of "things that must be used" was
+    // the first fix; the compiler already knows, which is strictly better than remembering.
+    "noUnusedLocals": true,
     "esModuleInterop": true,
     "skipLibCheck": true
   },

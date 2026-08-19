@@ -62,3 +62,22 @@ test("every slash command in the chat invokes a command that exists", () => {
     .map((c: { slash: string; command: string }) => `${c.slash} -> ${c.command}`);
   assert.deepEqual(missing, [], "advertised in the chat menu, invokes nothing");
 });
+
+/** A module imported and never CALLED was the recurring defect here — `teamSpend` shipped a whole
+ *  commit imported into the chat view and never invoked, so the row rendered in the preview
+ *  fixture (which supplies its own spend) and never once in the panel.
+ *
+ *  The first fix was a hand-kept CONSUMERS list, which is the same shape as the file list the CSS
+ *  checker abandoned for discovery in this very diff — and whose failure message read "update this
+ *  list". The compiler already knows: `noUnusedLocals` in tsconfig.json fails the build on an
+ *  import nothing references, and it found NINE dead ones the hand-list never mentioned, including
+ *  an `execFile` left behind exactly as this defect leaves them. This test pins the SETTING, so a
+ *  later tsconfig edit cannot quietly remove the guard.
+ */
+test("the build refuses an import nothing uses", () => {
+  const tsconfig = readFileSync(join(here, "..", "tsconfig.json"), "utf8");
+  // Read as text rather than JSON.parse: the file carries comments explaining WHY this is on, and
+  // stripping them to parse would be more machinery than the check is worth.
+  assert.match(tsconfig, /"noUnusedLocals"\s*:\s*true/,
+    "noUnusedLocals is what catches a feature imported into a view and never wired up");
+});
