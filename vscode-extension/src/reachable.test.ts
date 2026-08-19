@@ -9,12 +9,14 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const manifest = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
 const source = readFileSync(join(here, "extension.ts"), "utf8");
+const require = createRequire(import.meta.url);
 
 const declared: string[] = (manifest.contributes.commands ?? []).map((c: { command: string }) => c.command);
 const registered = [...source.matchAll(/registerCommand\(\s*"([^"]+)"/g)].map((m) => m[1]);
@@ -49,4 +51,14 @@ test("the workspace switcher is reachable from the panel's title bar", () => {
   const entry = menus.find((m: { command: string }) => m.command === "interact.agents.workspace");
   assert.ok(entry, "no title-bar button, so the only way in is the command palette");
   assert.match(entry.when, /interactAgents\.board/);
+});
+
+test("every slash command in the chat invokes a command that exists", () => {
+  // The chat menu is a second place a capability can be advertised and wired to nothing.
+  const { CHAT_COMMANDS } = require("../out/chatCommands.js");
+  const missing = CHAT_COMMANDS
+    .map((c: { slash: string; command: string }) => c)
+    .filter((c: { command: string }) => !registered.includes(c.command))
+    .map((c: { slash: string; command: string }) => `${c.slash} -> ${c.command}`);
+  assert.deepEqual(missing, [], "advertised in the chat menu, invokes nothing");
 });

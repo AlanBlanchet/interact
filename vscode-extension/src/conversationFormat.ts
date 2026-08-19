@@ -13,6 +13,9 @@ export interface Turn {
   text?: string;
   tool?: string | null;
   tool_input?: string;
+  /** A command the panel can run, passed IN rather than imported: this module is loaded directly
+   *  by its test under --experimental-strip-types, which needs `.ts` specifiers that tsc refuses
+   *  when emitting, so it stays import-free. The list lives in `chatCommands.ts`. */
   /** For a message: who sent it. "operator" is a person, anything else is another agent. */
   from_run?: string | null;
   to_run?: string | null;
@@ -234,6 +237,16 @@ export interface ChatRun {
 }
 
 export interface ChatDocument {
+  /** What the panel can DO, not just say. Passed in rather than imported so this module stays
+   *  import-free — its test loads it directly under --experimental-strip-types, which needs `.ts`
+   *  specifiers that tsc refuses when emitting. The list itself lives in `chatCommands.ts`. */
+  commands?: {
+    slash: string;
+    title: string;
+    detail: string;
+    command: string;
+    needsAgent: boolean;
+  }[];
   /** Per-render nonce: the CSP admits only scripts carrying it, so injected markup cannot run. */
   nonce: string;
   turns: Turn[];
@@ -268,7 +281,7 @@ export function transcriptFragment(
 }
 
 export function chatDocument(
-  { nonce, turns, name, status, awaitingReply, run, files, sentBy }: ChatDocument,
+  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands }: ChatDocument,
 ): string {
   const header = name
     ? `<header><span class="who">${escapeHtml(name)}</span>` +
@@ -280,11 +293,24 @@ export function chatDocument(
   const body = name
     ? renderDetails(run, files, sentBy) + renderTranscript(turns) + pending
     : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
+  // The panel could only SEND. Everything else you might want to do with the agent you are
+  // reading — stop it, start another, open the team, change workspace — lived in a tree context
+  // menu or the command palette. All three reference tools put this behind a slash menu in the
+  // panel itself, so this does too, and the same list drives the button.
+  const menu = (commands ?? []).map((c) =>
+    `<li role="option" data-command="${escapeHtml(c.command)}" data-slash="${escapeHtml(c.slash)}"` +
+    `${c.needsAgent && !name ? ' data-needs-agent="1"' : ""}>` +
+    `<b>${escapeHtml(c.slash)}</b><span>${escapeHtml(c.title)}</span>` +
+    `<i>${escapeHtml(c.detail)}</i></li>`).join("");
   const composer = name
     ? `<form id="composer">
-         <textarea id="message" rows="3" placeholder="Reply to ${escapeHtml(name)}…"
+         <ul id="palette" role="listbox" aria-label="Commands" hidden>${menu}</ul>
+         <textarea id="message" rows="3" placeholder="Reply to ${escapeHtml(name)}…  (/ for commands)"
                    aria-label="Message this agent"></textarea>
-         <button type="submit">Send</button>
+         <div class="controls">
+           <button type="button" id="cmds" title="Commands">/</button>
+           <button type="submit">Send</button>
+         </div>
        </form>`
     : "";
   return `<!DOCTYPE html>
@@ -325,9 +351,57 @@ if (form) {
     vscode.postMessage({ type: "send", text });
     box.value = "";
   };
+  // A slash menu, driven by the same list the markup was built from. Typing "/" opens it, arrows
+  // and Enter pick, Escape closes — the shape every one of the reference panels uses.
+  const palette = document.getElementById("palette");
+  const items = () => Array.from(palette.querySelectorAll("li")).filter((li) => !li.hidden);
+  let cursor = 0;
+  const paint = () => {
+    items().forEach((li, i) => li.setAttribute("aria-selected", String(i === cursor)));
+  };
+  const openPalette = (typed) => {
+    // Double-escaped on purpose: this script lives inside a template literal, so a single
+    // backslash is consumed as a string escape and the regex silently becomes /s/ — which split
+    // every prefix down to "/" and made the menu appear to ignore what was typed.
+    const prefix = (typed || "/").trimStart().split(/\\s/)[0].toLowerCase();
+    let any = false;
+    palette.querySelectorAll("li").forEach((li) => {
+      const match = li.dataset.slash.startsWith(prefix);
+      li.hidden = !match;
+      any = any || match;
+    });
+    palette.hidden = !any;
+    cursor = 0;
+    paint();
+  };
+  const closePalette = () => { palette.hidden = true; };
+  const run = (li) => {
+    if (!li || li.dataset.needsAgent) return;
+    vscode.postMessage({ type: "command", command: li.dataset.command });
+    box.value = "";
+    closePalette();
+  };
+  document.getElementById("cmds").addEventListener("click", () => {
+    if (palette.hidden) { openPalette("/"); box.focus(); } else closePalette();
+  });
+  palette.addEventListener("click", (e) => {
+    const li = e.target.closest ? e.target.closest("li") : null;
+    if (li) run(li);
+  });
+  box.addEventListener("input", () => {
+    const text = box.value.trimStart();
+    if (text.startsWith("/")) openPalette(text); else closePalette();
+  });
   form.addEventListener("submit", (e) => { e.preventDefault(); send(); });
   // Enter sends, Shift+Enter makes a new line — the shape every chat box has.
   box.addEventListener("keydown", (e) => {
+    if (!palette.hidden) {
+      const list = items();
+      if (e.key === "ArrowDown") { e.preventDefault(); cursor = (cursor + 1) % list.length; paint(); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); cursor = (cursor - 1 + list.length) % list.length; paint(); return; }
+      if (e.key === "Escape") { e.preventDefault(); closePalette(); return; }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(list[cursor]); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
 }
@@ -493,6 +567,27 @@ const STYLE = `
   /* The fold on a long block: a quiet control, not another plate. */
   .more > summary { cursor: pointer; color: var(--wp-dim); font-size: .92em; padding: .1em 0; }
   .more[open] > summary { margin-bottom: .2em; }
+
+  /* The command menu. Above the box rather than below it: the composer sits at the bottom of the
+     panel, so a list that opened downward would be off-screen. */
+  #composer { position: relative; }
+  .controls { display: flex; gap: .4em; align-self: flex-end; align-items: stretch; }
+  #cmds { min-width: 34px; padding: .6em .7em; font-weight: 700;
+          background: var(--wp-wall); color: var(--wp-fg); }
+  #palette { position: absolute; bottom: 100%; left: 0; right: 0; margin: 0 0 .4em; padding: .2em;
+             list-style: none; z-index: 5; max-height: 46vh; overflow-y: auto;
+             background: var(--wp-bg); border: 1px solid var(--wp-ink);
+             box-shadow: 2px 2px 0 0 var(--wp-ink); }
+  #palette li { display: grid; grid-template-columns: auto 1fr; gap: 0 .5em; padding: .3em .45em;
+                cursor: pointer; align-items: baseline; }
+  #palette li b { font-family: var(--vscode-editor-font-family); color: var(--wp-fg); }
+  #palette li span { font-weight: 600; }
+  #palette li i { grid-column: 2; font-style: normal; font-size: .88em; color: var(--wp-dim); }
+  #palette li[aria-selected="true"], #palette li:hover {
+             background: var(--vscode-list-activeSelectionBackground, var(--wp-wall)); }
+  /* An action that needs an agent, with none open, is shown and disabled rather than hidden — a
+     menu whose contents change shape is harder to learn than one with a greyed row. */
+  #palette li[data-needs-agent] { opacity: .45; cursor: not-allowed; }
 
   .details { margin: 0 0 .8em; font-size: .95em; }
   .details summary { cursor: pointer; color: var(--wp-dim); letter-spacing: .04em; }

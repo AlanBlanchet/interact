@@ -16,6 +16,7 @@ import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
+import { CHAT_COMMANDS } from "./chatCommands";
 import { ChatFile, chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
@@ -45,6 +46,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
       if (msg?.type === "open" && typeof msg.path === "string") void this.open(msg.path);
+      // A command from the slash menu. Checked against the declared list rather than executed as
+      // given: the webview renders agent output, so anything arriving from it is untrusted, and
+      // running an arbitrary command id because a message said so would be a real hole.
+      if (msg?.type === "command" && typeof msg.command === "string") {
+        const known = CHAT_COMMANDS.find((c) => c.command === msg.command);
+        if (!known) return;
+        const run = this.run();
+        if (known.needsAgent && !run) {
+          void vscode.window.showInformationMessage(`${known.slash} needs an agent open.`);
+          return;
+        }
+        void vscode.commands.executeCommand(known.command, run ? { run } : undefined);
+      }
     });
     view.onDidDispose(() => this.stopWatching());
     this.watch();
