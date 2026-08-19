@@ -307,9 +307,12 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
     still does when two long activity strings land in the same room: "reviewing the diff a…"
     over "benchmark harness di…" is not a legible workplace, it is a collision.
 
-    Measured over EVERY text-bearing leaf. A previous version of this scoped by class and
-    compared three header elements while the character labels went unchecked — a measurement that
-    reports zero because it looked in the wrong place is worse than none.
+    Measured over every VISIBLE text-bearing leaf, and both halves of that were learned the hard
+    way. Scoping by class compared three header elements while every character label went
+    unchecked — a measurement that reports zero because it looked in the wrong place. Then
+    counting laid-out-but-invisible elements reported four collisions that are not on screen at
+    all, because the activity bubbles sit at opacity 0 until hovered. A measurement is only worth
+    what its scope is.
     """
     page_file = scene / f"{theme}.html"
     if not page_file.exists():
@@ -325,6 +328,16 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
             if (!t || el.children.length) continue;
             const r = el.getBoundingClientRect();
             if (!r.width || !r.height) continue;
+            // EFFECTIVE opacity, walking ancestors. The activity bubbles sit at opacity 0 until
+            // you hover or until what they say changes — they occupy layout but nobody can see
+            // them, and counting those reported four collisions that do not exist on screen.
+            let op = 1, n = el;
+            while (n && n !== document.body) {
+              op *= parseFloat(getComputedStyle(n).opacity) || 0;
+              if (getComputedStyle(n).visibility === 'hidden') op = 0;
+              n = n.parentElement;
+            }
+            if (op <= 0.05) continue;
             boxes.push({t: t.slice(0, 24), x: r.left, y: r.top, w: r.width, h: r.height});
           }
           const hits = [];
