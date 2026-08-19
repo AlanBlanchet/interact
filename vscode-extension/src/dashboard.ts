@@ -28,6 +28,7 @@ import { describeAge as describeBoardAge, readLeaderboard } from "./leaderboard"
 import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Catalog } from "./catalog";
 import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import { DIM_FOREGROUND } from "./themeTokens";
+import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 import {
   readUsageLog,
   filterByRange,
@@ -133,9 +134,13 @@ export class DashboardPanel {
       localResourceRoots: [vscode.Uri.joinPath(extensionUri, "out")],
     };
     panel.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
+    // One column for interact's surfaces: a new one joins the group its siblings already hold
+    // rather than opening yet another beside your code.
+    claimColumn("dashboard", panel.viewColumn);
     panel.onDidDispose(() => {
       this.disposed = true;
       this.stopWatching();
+      releaseColumn("dashboard");
       DashboardPanel.instance = undefined;
     });
     panel.webview.html = this.getHtml();
@@ -200,13 +205,13 @@ export class DashboardPanel {
     emitter: vscode.EventEmitter<void>,
   ): DashboardPanel {
     if (DashboardPanel.instance) {
-      DashboardPanel.instance.panel.reveal(vscode.ViewColumn.Beside);
+      DashboardPanel.instance.panel.reveal(DashboardPanel.instance.panel.viewColumn);
       return DashboardPanel.instance;
     }
     const panel = vscode.window.createWebviewPanel(
       VIEW_TYPE,
       "Interact",
-      vscode.ViewColumn.Beside,
+      nextColumn() as vscode.ViewColumn,
       {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(extensionUri, "out")],

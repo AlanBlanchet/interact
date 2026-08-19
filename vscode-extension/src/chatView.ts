@@ -117,6 +117,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // A fresh nonce per render: the CSP admits only scripts carrying it, so nothing that
       // arrives in an agent's output can execute even if the escaping were ever wrong.
       nonce: Math.random().toString(36).slice(2) + Date.now().toString(36),
+      // The slash menu's entries. Omitted here for a whole release: the "/" button rendered, was
+      // enabled, and opened an empty list in every state, because this one argument was optional
+      // and never passed. It is required now, so the compiler refuses the omission.
+      commands: CHAT_COMMANDS,
       turns,
       name: run?.name,
       status: run?.status,

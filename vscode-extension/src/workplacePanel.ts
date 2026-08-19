@@ -17,6 +17,7 @@ import { selectedRunId } from "./workplaceMessage";
 import { renderScene, renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
 import { scopeStore } from "./scopeStore";
+import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 
 export class WorkplacePanel {
   private static current: WorkplacePanel | undefined;
@@ -28,6 +29,9 @@ export class WorkplacePanel {
     private readonly log: vscode.OutputChannel,
   ) {
     this.panel.onDidDispose(() => this.dispose());
+    // One column for interact's surfaces: a new one joins the group its siblings already
+    // hold rather than opening yet another beside your code.
+    claimColumn("workplace", this.panel.viewColumn);
     // A click in the room aims the side-bar Chat at that agent: the workplace is where you SEE
     // the team, the chat is where you talk to one of them, and this is the seam between.
     this.panel.webview.onDidReceiveMessage((msg) => {
@@ -50,9 +54,7 @@ export class WorkplacePanel {
     const panel = vscode.window.createWebviewPanel(
       "interact.workplace",
       "Interact — Team",
-      // Beside, never Active: Active takes over the editor group holding your code.
-      // Every sibling surface (sequence, conversation, dashboard) opens Beside now.
-      vscode.ViewColumn.Beside,
+      nextColumn() as vscode.ViewColumn,
       { enableScripts: true, retainContextWhenHidden: true },
     );
     WorkplacePanel.current = new WorkplacePanel(panel, log);
@@ -122,6 +124,7 @@ export class WorkplacePanel {
   }
 
   private dispose(): void {
+    releaseColumn("workplace");
     clearTimeout(this.timer);
     this.watcher?.close();
     this.watcher = undefined;

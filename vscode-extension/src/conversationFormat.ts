@@ -245,8 +245,14 @@ export interface ChatDocument {
   spend?: { total: number; agents: number; running: number; sharePercent: number | null };
   /** What the panel can DO, not just say. Passed in rather than imported so this module stays
    *  import-free — its test loads it directly under --experimental-strip-types, which needs `.ts`
-   *  specifiers that tsc refuses when emitting. The list itself lives in `chatCommands.ts`. */
-  commands?: {
+   *  specifiers that tsc refuses when emitting. The list itself lives in `chatCommands.ts`.
+   *
+   *  REQUIRED, deliberately. It was optional, and the one production caller never passed it — so
+   *  the "/" button opened an empty list in every state while both sides passed their own unit
+   *  tests. `noUnusedLocals` cannot catch that shape: `CHAT_COMMANDS` IS imported and IS used, to
+   *  validate inbound messages, just never handed to the renderer. Making it required moves the
+   *  check to the compiler, where forgetting it is impossible rather than merely untested. */
+  commands: {
     slash: string;
     title: string;
     detail: string;

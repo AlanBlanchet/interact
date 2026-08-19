@@ -230,3 +230,29 @@ test("the details panel remembers whether it was open", () => {
   assert.match(html, /detailsOpen/);
   assert.match(html, /addEventListener\("toggle"/);
 });
+
+test("the slash menu actually has entries when commands are supplied", () => {
+  // The defect: the one production caller never passed `commands`, so <ul id="palette"> rendered
+  // with zero <li> in every state — the "/" button was enabled and opened nothing. Both sides
+  // passed their own unit tests; only the connection was missing, and `noUnusedLocals` cannot see
+  // that shape because CHAT_COMMANDS *is* imported and *is* used, just for validation instead.
+  const doc = chatDocument({
+    nonce: "n", turns: [], name: "visual-critic",
+    commands: [
+      { slash: "/team", title: "Open the team", detail: "the workplace", command: "interact.agents.team", needsAgent: false },
+      { slash: "/stop", title: "Stop", detail: "interrupt it", command: "interact.agents.stop", needsAgent: true },
+    ],
+  } as never);
+  const items = doc.match(/<li[^>]*data-command=/g) ?? [];
+  assert.equal(items.length, 2, "the palette rendered no entries");
+  assert.ok(doc.includes("/team"));
+});
+
+test("a command needing an agent is marked when none is selected", () => {
+  const withNoAgent = chatDocument({
+    nonce: "n", turns: [],
+    commands: [{ slash: "/stop", title: "Stop", detail: "x", command: "interact.agents.stop", needsAgent: true }],
+  } as never);
+  assert.match(withNoAgent, /data-needs-agent="1"/,
+    "greying it out is the honest answer; hiding the whole menu was not");
+});

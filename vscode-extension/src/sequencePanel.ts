@@ -12,6 +12,7 @@ import { scopeStore } from "./scopeStore";
 import { agentsDir } from "./paths";
 import { buildSequence, renderSequence } from "./sequenceFormat";
 import { DIM_FOREGROUND } from "./themeTokens";
+import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 
 export class SequencePanel {
   private static current: SequencePanel | undefined;
@@ -20,6 +21,9 @@ export class SequencePanel {
 
   private constructor(private readonly panel: vscode.WebviewPanel) {
     this.panel.onDidDispose(() => this.dispose());
+    // One column for interact's surfaces: a new one joins the group its siblings already
+    // hold rather than opening yet another beside your code.
+    claimColumn("sequence", this.panel.viewColumn);
     try {
       this.watcher = fs.watch(agentsDir(), () => {
         if (this.timer) clearTimeout(this.timer);
@@ -34,7 +38,7 @@ export class SequencePanel {
 
   static show(): void {
     if (SequencePanel.current) {
-      SequencePanel.current.panel.reveal(vscode.ViewColumn.Beside);
+      SequencePanel.current.panel.reveal(SequencePanel.current.panel.viewColumn);
       SequencePanel.current.render();
       return;
     }
@@ -42,13 +46,14 @@ export class SequencePanel {
       vscode.window.createWebviewPanel(
         "interact.sequence",
         "Agent sequence",
-        vscode.ViewColumn.Beside,
+      nextColumn() as vscode.ViewColumn,
         { enableScripts: false, retainContextWhenHidden: true },
       ),
     );
   }
 
   private dispose(): void {
+    releaseColumn("sequence");
     this.watcher?.close();
     if (this.timer) clearTimeout(this.timer);
     SequencePanel.current = undefined;
