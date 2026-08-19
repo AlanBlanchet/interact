@@ -17,6 +17,7 @@ import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
 import { teamSpend } from "./teamSpend";
 import { scopeStore } from "./scopeStore";
+import { interactCli } from "./interactCli";
 import { describeMode, knownModes, type PermissionMode } from "./permissionModes";
 import { chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
 import { agentsDir } from "./paths";
@@ -176,15 +177,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async send(text: string): Promise<void> {
     const run = this.run();
     if (!run) return;
-    const { execFile } = await import("child_process");
-    execFile("interact", ["agents", "send", run.run_id, text], (err, stdout, stderr) => {
-      const said = (stdout || stderr || "").trim();
-      if (err || said.startsWith("ERROR")) {
-        vscode.window.showErrorMessage(said || `Could not reach ${run.name}.`);
-        return;
-      }
-      this.render(); // the message is recorded on both sides, so it is already in the transcript
-    });
+    const { error, stdout } = await interactCli(["agents", "send", run.run_id, text]);
+    const failed = Boolean(error) || stdout.trim().startsWith("ERROR");
+    // Told either way. The webview empties the box optimistically and keeps the text until this
+    // arrives — without the answer it would hold a message forever, and a failed send used to
+    // destroy what you wrote.
+    void this.view?.webview.postMessage({ type: "sent", ok: !failed });
+    if (failed) {
+      void vscode.window.showErrorMessage(
+        `Could not reach ${run.name} — ${error || stdout.trim()}`);
+      return;
+    }
+    this.render(); // recorded on both sides, so it is already in the transcript
   }
 
   /** Follow the registry so an agent opened mid-flight keeps updating as it works. */

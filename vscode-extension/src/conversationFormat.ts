@@ -365,12 +365,30 @@ if (details) {
 const form = document.getElementById("composer");
 if (form) {
   const box = document.getElementById("message");
+  // The box empties optimistically — a chat that lags behind your typing feels broken — but the
+  // text is KEPT until the host confirms it went. It used to be discarded on submit, so a send
+  // that failed (the agent had ended, the CLI was not on PATH) left you with a toast and no
+  // message: you lost what you wrote, which is the one thing a chat box must never do.
+  let inFlight = "";
   const send = () => {
     const text = box.value.trim();
     if (!text) return;
+    inFlight = text;
     vscode.postMessage({ type: "send", text });
     box.value = "";
+    box.setAttribute("data-sending", "1");
   };
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (!msg || msg.type !== "sent") return;
+    box.removeAttribute("data-sending");
+    if (msg.ok) { inFlight = ""; return; }
+    // Put it back exactly as written, and put the cursor where they left it, so the fix is to
+    // press Enter again rather than to retype from memory.
+    if (inFlight && !box.value) box.value = inFlight;
+    inFlight = "";
+    box.focus();
+  });
   // A slash menu, driven by the same list the markup was built from. Typing "/" opens it, arrows
   // and Enter pick, Escape closes — the shape every one of the reference panels uses.
   const palette = document.getElementById("palette");

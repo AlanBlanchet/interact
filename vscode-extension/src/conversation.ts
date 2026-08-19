@@ -82,9 +82,14 @@ export class ConversationPanel {
   private async send(text: string): Promise<void> {
     const run = readAgentRuns().find((r) => r.run_id === this.runId);
     if (!run) return;
-    const { error } = await interactCli(["agents", "send", run.run_id, text]);
-    if (error) {
-      void vscode.window.showErrorMessage(`Could not reach ${run.name} — ${error}`);
+    const { error, stdout } = await interactCli(["agents", "send", run.run_id, text]);
+    const failed = Boolean(error) || stdout.trim().startsWith("ERROR");
+    // Same contract as the sidebar: the webview keeps your text until it hears back, so a failed
+    // send never destroys what you wrote.
+    void this.panel.webview.postMessage({ type: "sent", ok: !failed });
+    if (failed) {
+      void vscode.window.showErrorMessage(
+        `Could not reach ${run.name} — ${error || stdout.trim()}`);
       return;
     }
     this.render(); // recorded on both sides, so it is already in the transcript

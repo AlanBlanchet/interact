@@ -60,6 +60,13 @@ function sheets() {
  *  in a comment outside any template is prose and ignored; one inside an OPEN template is the
  *  defect, because that is where it silently ends the string.
  */
+/** The text from the start of the line containing `i` — so a "//" can be judged on whether it
+ *  begins its line (a comment) or sits mid-line (a URL). */
+function lineStart(text, i) {
+  const from = text.lastIndexOf("\n", i) + 1;
+  return text.slice(from, i + 2);
+}
+
 function backticksInCommentedTemplates(text) {
   const hits = [];
   let inTemplate = false;
@@ -82,6 +89,13 @@ function backticksInCommentedTemplates(text) {
       comment = "block"; i++; continue;
     } else if (pair === "//" && !inTemplate) {
       // Only outside a template: "//" inside CSS or a URL is not a comment.
+      comment = "line"; i++; continue;
+    } else if (pair === "//" && inTemplate && /^\s*\/\//.test(lineStart(text, i))) {
+      // KNOWN GAP, now closed for the common case. A template can hold CSS *and* script, and
+      // "//" means opposite things in them: a comment in JS, part of a URL in CSS. Treating a
+      // "//" that STARTS its line as a comment catches the embedded-script case — which slipped
+      // through once, in a script comment quoting a command name in backticks — without
+      // mistaking "https://" mid-line for one.
       comment = "line"; i++; continue;
     }
     // A quoted string can hold a backtick that delimits nothing.
