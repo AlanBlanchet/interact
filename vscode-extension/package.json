@@ -247,6 +247,11 @@
         "command": "interact.agents.pick",
         "title": "Interact: Read an Agent\u2026",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "interact.agents.broadcast",
+        "title": "Interact: Message Every Running Agent\u2026",
+        "icon": "$(megaphone)"
       }
     ],
     "viewsContainers": {

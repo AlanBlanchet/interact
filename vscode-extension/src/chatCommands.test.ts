@@ -64,3 +64,10 @@ test("the commands cover what he cannot do from the panel today", () => {
     assert.ok(slashes.includes(expected), `missing ${expected}`);
   }
 });
+
+test("broadcasting is offered, and is not something you can do by accident", () => {
+  const all = CHAT_COMMANDS.find((c) => c.slash === "/all");
+  assert.ok(all, "no way to address the whole team from the panel");
+  assert.equal(all!.needsAgent, false, "the team exists whether or not one agent is open");
+  assert.match(all!.detail, /running/i, "it must say WHO it reaches before you use it");
+});

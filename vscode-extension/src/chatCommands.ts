@@ -26,6 +26,12 @@ export const CHAT_COMMANDS: ChatCommand[] = [
     command: "interact.agents.spawn", needsAgent: false },
   { slash: "/agent", title: "Read another agent", detail: "switch this panel to someone else",
     command: "interact.agents.pick", needsAgent: false },
+  // Something none of the reference panels can offer, because they drive one agent: this one
+  // supervises several, so addressing all of them at once is a real capability rather than
+  // parity. Confirmed before it fires — it reaches everyone who is working.
+  { slash: "/all", title: "Message every running agent",
+    detail: "one brief to the whole team, running agents only",
+    command: "interact.agents.broadcast", needsAgent: false },
   { slash: "/team", title: "Open the team", detail: "the workplace, as a building",
     command: "interact.agents.team", needsAgent: false },
   { slash: "/sequence", title: "Open the sequence", detail: "who talked to whom, in order",

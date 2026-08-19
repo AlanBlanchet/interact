@@ -418,6 +418,41 @@ export async function activate(
     }),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
     // "i have agents in the 'sheets' folder elsewhere, and i can't change and see how they work"
+    // One brief to everyone working. interact supervises a team, so this is a capability the
+    // single-agent panels cannot have — and the reason it asks first is that it reaches every
+    // running agent at once, which is not something to discover by mistyping.
+    vscode.commands.registerCommand("interact.agents.broadcast", async () => {
+      const running = scope.runs().filter((r) => r.status === "running" && !r.foreign);
+      if (running.length === 0) {
+        void vscode.window.showInformationMessage(`Nobody is running in ${scope.describe()}.`);
+        return;
+      }
+      const text = await vscode.window.showInputBox({
+        title: `Message ${running.length} running agent${running.length > 1 ? "s" : ""}`,
+        prompt: running.map((r) => r.name).join(", "),
+        placeHolder: "e.g. the API changed — re-read src/api.ts before continuing",
+        ignoreFocusOut: true,
+      });
+      if (!text) return;
+      const confirm = await vscode.window.showWarningMessage(
+        `Send to all ${running.length}?`, { modal: true, detail: running.map((r) => r.name).join(", ") },
+        "Send",
+      );
+      if (confirm !== "Send") return;
+      const { execFile } = await import("child_process");
+      let failed = 0;
+      await Promise.all(running.map((r) => new Promise<void>((done) => {
+        execFile("interact", ["agents", "send", r.run_id, text], (err) => {
+          if (err) failed++;
+          done();
+        });
+      })));
+      void vscode.window.showInformationMessage(
+        failed
+          ? `Sent to ${running.length - failed} of ${running.length} — ${failed} could not be reached.`
+          : `Sent to all ${running.length}.`,
+      );
+    }),
     vscode.commands.registerCommand("interact.agents.workspace", async () => {
       if (await scope.pick()) {
         agentsProvider.refresh();
