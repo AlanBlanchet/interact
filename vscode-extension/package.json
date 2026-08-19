@@ -1,7 +1,7 @@
 {
   "name": "interact",
   "displayName": "Interact",
-  "description": "Interact \u2014 browser + desktop automation via an MCP server",
+  "description": "Interact — browser + desktop automation via an MCP server",
   "version": "0.29.0",
   "preview": true,
   "publisher": "AlanBlanchet",
@@ -49,7 +49,7 @@
         "interact.projectPath": {
           "type": "string",
           "default": "",
-          "description": "DEV ONLY \u2014 path to a local interact checkout to run via 'uv run' instead of the released build. Leave EMPTY (the default) to run the published interact from GitHub via uvx (zero-config). Never auto-detected, so opening a clone of the repo does not silently run your working tree. Can also be set with the INTERACT_PROJECT_PATH env var."
+          "description": "DEV ONLY — path to a local interact checkout to run via 'uv run' instead of the released build. Leave EMPTY (the default) to run the published interact from GitHub via uvx (zero-config). Never auto-detected, so opening a clone of the repo does not silently run your working tree. Can also be set with the INTERACT_PROJECT_PATH env var."
         },
         "interact.display.currency": {
           "type": "string",
@@ -134,7 +134,7 @@
         "interact.debug.dir": {
           "type": "string",
           "default": "~/.interact/out",
-          "description": "Where interact writes the usage log + debug artifacts (blank = ~/.interact/out; point at a project's out/ when working locally). Must match INTERACT_DEBUG_DIR \u2014 the dashboard reads the usage log from here."
+          "description": "Where interact writes the usage log + debug artifacts (blank = ~/.interact/out; point at a project's out/ when working locally). Must match INTERACT_DEBUG_DIR — the dashboard reads the usage log from here."
         },
         "interact.desktop.target": {
           "type": "string",
@@ -145,14 +145,14 @@
           ],
           "enumDescriptions": [
             "Drive the real desktop session (system-wide input + capture)",
-            "Drive an isolated nested display (Xephyr) \u2014 a sandbox that never touches your real windows or cursor"
+            "Drive an isolated nested display (Xephyr) — a sandbox that never touches your real windows or cursor"
           ],
           "description": "Where desktop automation acts: the real session, or an isolated nested display"
         },
         "interact.desktop.nestedDisplay": {
           "type": "number",
           "default": 99,
-          "description": "X display number for the nested desktop target (e.g. 99 \u2192 :99)"
+          "description": "X display number for the nested desktop target (e.g. 99 → :99)"
         },
         "interact.desktop.nestedSize": {
           "type": "string",
@@ -192,7 +192,7 @@
       },
       {
         "command": "interact.agents.groupBy",
-        "title": "Group agents by\u2026",
+        "title": "Group agents by…",
         "category": "Interact",
         "icon": "$(list-tree)"
       },
@@ -241,22 +241,22 @@
       },
       {
         "command": "interact.agents.workspace",
-        "title": "Interact: Show Agents From Workspace\u2026",
+        "title": "Interact: Show Agents From Workspace…",
         "icon": "$(folder-library)"
       },
       {
         "command": "interact.agents.pick",
-        "title": "Interact: Read an Agent\u2026",
+        "title": "Interact: Read an Agent…",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "interact.agents.broadcast",
-        "title": "Interact: Message Every Running Agent\u2026",
+        "title": "Interact: Message Every Running Agent…",
         "icon": "$(megaphone)"
       },
       {
         "command": "interact.agents.permissions",
-        "title": "Interact: Default Agent Autonomy\u2026",
+        "title": "Interact: Default Agent Autonomy…",
         "icon": "$(shield)"
       },
       {
@@ -282,15 +282,15 @@
           "type": "webview",
           "contextualTitle": "Interact team",
           "visibility": "visible",
-          "initialSize": 4
+          "initialSize": 2
         },
         {
           "id": "interactAgents.board",
           "name": "Agents",
           "contextualTitle": "Interact agents",
           "icon": "media/agents.svg",
-          "visibility": "visible",
-          "initialSize": 3
+          "visibility": "collapsed",
+          "initialSize": 1
         },
         {
           "id": "interactAgents.chat",
