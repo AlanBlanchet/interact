@@ -15,7 +15,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readOrg, orgTree, spawnChoices, type Org } from "./org.ts";
+import { readOrg, orgTree, spawnChoices, modelFor, type Org } from "./org.ts";
 
 const ORG: Org = {
   coordinator: { id: "main", title: "Main thread — session coordinator" },
@@ -135,4 +135,25 @@ test("choices are grouped by department, plain agent first", () => {
 test("with no company at all it is still just a list of definitions", () => {
   const labels = spawnChoices(["a", "b"], null).map((c) => c.label);
   assert.deepEqual(labels, ["claude", "a", "b"]);
+});
+
+// --- what model an agent should run on ---
+
+test("an agent's declared model is offered as its default", () => {
+  const withModel: Org = { ...ORG, agents: ORG.agents.map((a) =>
+    a.name === "tester" ? { ...a, model: "claude-sonnet-5" } : a) };
+  assert.equal(modelFor("tester", withModel), "claude-sonnet-5");
+});
+
+test("'inherit' is not a model — it means take the session's", () => {
+  // Half the roster declares `inherit`, which is a real value in the org file and would be a
+  // nonsense --model flag. It has to read as "no override" rather than be passed through.
+  const inheriting: Org = { ...ORG, agents: ORG.agents.map((a) =>
+    a.name === "tester" ? { ...a, model: "inherit" } : a) };
+  assert.equal(modelFor("tester", inheriting), null);
+});
+
+test("an agent the company does not know has no declared model", () => {
+  assert.equal(modelFor("nobody", ORG), null);
+  assert.equal(modelFor("tester", null), null);
 });

@@ -362,3 +362,17 @@ test("an exchange carries when it happened, so it can be shown as it happens", (
 
   assert.equal(team.links[0].at, 4990);
 });
+
+test("the snapshot clock is in SECONDS, the unit Python writes", () => {
+  // A bare `number` here cost a 1970 clock in the panel: the view read it as milliseconds, and
+  // every dev fixture happened to stamp milliseconds, so the harness agreed with the bug. Pinned
+  // so the contract is checked rather than remembered.
+  const team = buildTeam([] as never, () => [] as never, 1_700_000_000);
+  assert.equal(team.at, 1_700_000_000);
+  assert.ok(team.at < 2_000_000_000, "a millisecond value would be ~1.7e12 and read as year 55000");
+});
+
+test("the default clock is seconds too, not Date.now()", () => {
+  const team = buildTeam([] as never, () => [] as never);
+  assert.ok(team.at < 2_000_000_000, `default clock looks like milliseconds: ${team.at}`);
+});

@@ -165,3 +165,15 @@ export function spawnChoices(definitions: readonly string[], org: Org | null): S
     ...unlisted.map((name) => ({ label: name, detail: "not in the company file" })),
   ];
 }
+
+/** The model an agent declares it should run on, or null for "whatever the session uses".
+ *
+ *  Half the roster declares `inherit`, which is a real value in the org file and meaningful there
+ *  — it says "do not override" — but would be nonsense passed to `--model`. Translating it to null
+ *  here keeps that decision in one place rather than in every caller that reads the field.
+ */
+export function modelFor(agent: string, org: Org | null): string | null {
+  const model = org?.agents.find((a) => a.name === agent)?.model;
+  if (!model || model === "inherit" || model === "default") return null;
+  return model;
+}

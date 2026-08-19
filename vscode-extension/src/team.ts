@@ -81,6 +81,13 @@ export interface TeamState {
    *  people standing in it rather than a team working together. */
   links?: Link[];
   /** Wall-clock of this snapshot, so the view can age what it draws. */
+  /** SECONDS since the epoch, matching Python's `time.time()` — the unit every timestamp in this
+   *  state uses (`started_at`, `finished_at`, `Link.at`, `AgentActivity.at`).
+   *
+   *  Spelled out because it was not, and a bare `number` cost a real bug: the view read it with
+   *  `new Date(state.at)`, which wants MILLISECONDS, so the panel rendered a 1970 clock on every
+   *  render. It survived a whole arc because the dev fixtures stamped `Date.UTC(...)` — already
+   *  milliseconds — so the harness showed a correct time while the product showed 1970. */
   at: number;
 }
 

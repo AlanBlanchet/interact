@@ -6,7 +6,7 @@ import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
-import { readOrg, spawnChoices } from "./org";
+import { modelFor, readOrg, spawnChoices } from "./org";
 import {
   KeyManager,
   formatLabel,
@@ -455,6 +455,11 @@ export async function activate(
       if (!task) return;
       const args = ["agents", "spawn", task];
       if (picked.label !== "claude") args.push("--agent", picked.label);
+      // The company declares what each agent should run on, so an explicit model is only passed
+      // when the roster actually names one. `inherit` — which half the roster declares — means
+      // "take the session's", so it becomes no flag at all rather than a nonsense --model value.
+      const model = modelFor(picked.label, readOrg());
+      if (model) args.push("--model", model);
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       if (cwd) args.push("--cwd", cwd);
       execFile("interact", args, (err, stdout, stderr) => {
