@@ -35,6 +35,16 @@ body {
      speeds up or slows down together. */
   --beat: 2.4s;
   --gait: calc(var(--beat) / 2);
+  /* Travel runs on the same clock as everything else: a stride is one eighth of the beat, which
+     at a walking pace of ~118px/s puts a footfall about every 15px. Slow it and people moonwalk;
+     speed it and they scurry. */
+  --stride: calc(var(--beat) / 8);
+  /* Daylight through the open door, and the flat tone a courier is drawn in. Both follow the
+     theme rather than being literals, so the light is warm on a dark wall and cool on a bright
+     one instead of a hole punched in the elevation. */
+  --wp-daylight: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
+  --wp-runner: color-mix(in srgb, var(--wp-fg) 88%, var(--wp-bg));
+  --wp-runner-ink: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
   --travel: 820ms;
   --ease-walk: cubic-bezier(.34, .02, .2, 1);
   --ease-settle: cubic-bezier(.22, 1, .32, 1);
@@ -53,6 +63,12 @@ body {
   --wp-floor: color-mix(in srgb, var(--wp-fg) 19%, var(--wp-bg));
   --wp-floor-line: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
   --wp-lamp: color-mix(in srgb, var(--wp-h3) 22%, transparent);
+  /* The moment a room is left or entered. Its own token, not the resting lamp: the lamp says
+     "someone works here" and has to sit quietly under text all day, while this fires for under a
+     second and its whole job is to be caught in peripheral vision. Tuned by measurement — at the
+     lamp's own strength the pulse moved 22 levels, which is a glow you find only by looking for
+     it, and that is the defect it exists to fix. */
+  --wp-stir: color-mix(in srgb, var(--wp-h3) 58%, transparent);
   --wp-slab: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
   /* A plate that carries BACKGROUND-coloured text, so it has to be light enough to read against
      the background — the decorative slab above is not (measured 2.38:1 dark, 1.89:1 light). */
@@ -133,6 +149,7 @@ body.vscode-high-contrast-light .wp {
   --wp-floor: color-mix(in srgb, var(--wp-fg) 22%, var(--wp-bg));
   --wp-floor-line: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
   --wp-lamp: color-mix(in srgb, var(--wp-h3) 30%, transparent);
+  --wp-stir: color-mix(in srgb, var(--wp-h3) 62%, transparent);
   --wp-bubble-bg: color-mix(in srgb, var(--wp-fg) 84%, var(--wp-bg));
 }
 
@@ -175,6 +192,12 @@ body.vscode-high-contrast-light .wp {
   background: var(--wp-bg);
   overflow: hidden;
 }
+
+/* Nobody outside: the street narrows to a strip. It keeps its sky, its sun and its skyline, so
+   the building still has an outside to be inside of — it simply stops being a quarter of the
+   picture on a day when the whole team is indoors. */
+.wp-scene[data-outside="0"] { grid-template-columns: minmax(0, 1fr) minmax(72px, .1fr); }
+.wp-scene[data-outside="0"] .wp-disc { transform: scale(.7); top: 10px; right: 8px; }
 
 .wp-building { display: flex; flex-direction: column; min-width: 0; }
 
@@ -222,9 +245,20 @@ body.vscode-high-contrast-light .wp {
 }
 .wp-floor > .wp-room:last-child { border-right: 0; }
 
-/* Not a zone: the stairwell that ties the storeys together. */
-.wp-lobby { background: color-mix(in srgb, var(--wp-fg) 12%, var(--wp-bg)); }
-.wp-lobby .wp-prop { opacity: .42; }
+/* Not a zone: the stairwell that ties the storeys together, and the only way between them.
+   It runs the full height as the first column of every storey, so the flights line up by
+   construction rather than by a fr unit happening to agree. */
+.wp-lobby { background: color-mix(in srgb, var(--wp-fg) 9%, var(--wp-bg)); }
+.wp-lobby .wp-wall { align-items: stretch; margin-bottom: 0; padding: 0; }
+.wp-lobby .wp-prop { opacity: .8; align-self: flex-end; }
+/* The landing: the strip of floor at the top of each flight, so a storey reads as somewhere you
+   arrive rather than as a wall the stairs are painted on. */
+.wp-shaft .wp-deck {
+  background:
+    linear-gradient(var(--wp-ink), var(--wp-ink)) left bottom 11px / 100% 2px no-repeat,
+    repeating-linear-gradient(90deg, var(--wp-metal) 0 5px, color-mix(in srgb, var(--wp-metal) 62%, var(--wp-ink)) 5px 6px)
+      left bottom / 100% 11px no-repeat;
+}
 
 /* Occupied rooms are LIT. An empty room going dark is the cheapest possible answer to "where is
    everyone" — you see the shape of the team before you read one name. */
@@ -631,9 +665,58 @@ ${STAMP_CSS}
   opacity: .8;
 }
 
-/* The trail a walker leaves for a moment, so the eye can follow where somebody went. */
-.wp-trail { position: absolute; inset: 0; pointer-events: none; z-index: 40; overflow: visible; }
-.wp-trail path { fill: none; stroke: var(--accent, var(--wp-h1)); stroke-width: 2; stroke-dasharray: 3 4; }
+/* ── the wake ────────────────────────────────────────────────────────────────────────────────
+   The route drawn behind a traveller, in their pod's colour. It is not decoration: a single 30px
+   figure crossing a scene full of still ones is missable, and this is the mark that is BIGGER
+   than the walker and OUTLIVES them — glance up two seconds late and the line still says somebody
+   went from the Lab, up the stairs, into the Code room. */
+.wp-wake {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.wp-wake path {
+  fill: none;
+  stroke: var(--accent, var(--wp-h1));
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 5;
+  opacity: .72;
+  /* A soft halo in the same hue, so the route survives crossing a nameplate strip or a lit room.
+     A 2px dashed line at half opacity measured fine in isolation and still had to be hunted for
+     in a 120-worker scene — thin is not the same as quiet, and this signal is meant to be found
+     by someone who glanced away. */
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent, var(--wp-h1)) 55%, transparent));
+  /* Runs on the beat like everything else, so a route reads as part of the same building rather
+     than as an overlay someone bolted on. */
+  animation: wp-wake-crawl calc(var(--beat) / 2) linear infinite;
+}
+.wp-wake path.is-spent { opacity: 0; transition: opacity 900ms ease-out; }
+
+/* The walker and the courier draw ON TOP of their own route. */
+.wp-travelling, .wp-errand { z-index: 2; }
+
+@keyframes wp-wake-crawl { to { stroke-dashoffset: -18; } }
+
+/* ── the stir ────────────────────────────────────────────────────────────────────────────────
+   A room brightens for a moment when somebody leaves it or arrives in it. A room is thousands of
+   pixels against a sprite's few hundred, so this is the half of the signal caught in peripheral
+   vision — and it reuses the lamp the building already lights occupied rooms with rather than
+   inventing a second vocabulary for "something happened here".
+
+   Deliberately an inset SHADOW and not a filter: an ancestor filter composites the plaque and the
+   nameplates with it, and every contrast figure on this surface was measured without one. */
+.wp-room.is-stirring, .wp-outside.is-stirring {
+  animation: wp-stir 900ms cubic-bezier(.22,1,.32,1) 1;
+}
+@keyframes wp-stir {
+  0%   { box-shadow: inset 0 0 0 0 transparent; }
+  30%  { box-shadow: inset 0 42px 54px -20px var(--wp-stir); }
+  100% { box-shadow: inset 0 0 0 0 transparent; }
+}
 
 /* ── legend ──────────────────────────────────────────────────────────────────────────────── */
 
@@ -685,6 +768,130 @@ ${STAMP_CSS}
 
 /* ── motion ──────────────────────────────────────────────────────────────────────────────── */
 
+/* ── traffic: the people who are not in a room right now ─────────────────────────────────────
+   The one layer that draws OVER the elevation. A person crossing the building is genuinely
+   between rooms, so they cannot live in a grid cell — they live here, in scene coordinates, above
+   the walls and below the signs. */
+.wp-traffic {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 45;
+  overflow: visible;
+}
+/* The prototypes the engine clones. Present in the document, never on screen. */
+.wp-proto { position: absolute; width: 0; height: 0; overflow: hidden; opacity: 0; }
+/* The one copy of every drawing in the building. Present, referenced, never rendered. */
+.wp-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.wp-travelling,
+.wp-errand {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* The transform the engine writes puts the FEET at the point, not the corner. */
+  transform-origin: 50% 100%;
+  will-change: transform;
+}
+.wp-travelling > svg,
+.wp-errand > svg { display: block; transform: translate(-50%, -100%); }
+/* The courier is small on purpose — it must never be mistaken for a worker changing rooms — so
+   it buys legibility with SEPARATION rather than with size: a hard pixel shadow lifts it off
+   whatever wall it is crossing, the same device every sign in this building already uses. */
+.wp-errand > svg { filter: drop-shadow(2px 2px 0 var(--wp-ink)); }
+/* Facing is a property of the BODY, not of the thing it is carrying. Flipping the host mirrored
+   the message label with it and every note crossed the building written backwards. */
+.wp-travelling.face-left > svg,
+.wp-errand.face-left > svg { transform: translate(-50%, -100%) scaleX(-1); }
+
+/* The walk cycle. Two frames, one eighth of a beat apart — the same tempo the whole building
+   keeps, so a person walking a corridor is in step with the room they are heading for. */
+.wp-travelling .wp-f0 { animation: wp-fa var(--stride) steps(1, end) infinite; }
+.wp-travelling .wp-f1 { animation: wp-fb var(--stride) steps(1, end) infinite; }
+.wp-errand .wp-f0 { animation: wp-fa calc(var(--stride) * .72) steps(1, end) infinite; }
+.wp-errand .wp-f1 { animation: wp-fb calc(var(--stride) * .72) steps(1, end) infinite; }
+/* Stairs are climbed, not strolled: a slower cycle and a slight lean into the flight. */
+.wp-travelling.on-stairs .wp-f0 { animation-duration: calc(var(--stride) * 1.7); }
+.wp-travelling.on-stairs .wp-f1 { animation-duration: calc(var(--stride) * 1.7); }
+.wp-travelling.on-stairs > svg { transform: translate(-50%, -100%) rotate(-4deg); }
+.wp-travelling.on-stairs.face-left > svg { transform: translate(-50%, -100%) scaleX(-1) rotate(-4deg); }
+
+.wp-travel-shadow {
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  width: 22px;
+  height: 3px;
+  margin-left: -11px;
+  background: var(--wp-ink);
+  opacity: .28;
+}
+
+/* What the runner is carrying, said in words. A note with no text is a shape crossing a room;
+   the first few words of the actual message are what make it an exchange you can follow. */
+.wp-errand-word {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translateX(-50%);
+  /* Clear of the nameplates. At the floor line a 20px courier puts its label exactly where the
+     plates are, so a note crossing a busy room sat on top of two people's names. */
+  margin-bottom: 16px;
+  max-width: 116px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9px;
+  line-height: 1.5;
+  padding: 0 4px;
+  /* Ink on paper. It was the panel foreground on paper stock — light grey on cream — which is why
+     every note crossing the building looked like a blank bar being dragged. */
+  color: var(--wp-ink);
+  background: var(--wp-paper);
+  border: 1px solid var(--wp-ink);
+  opacity: .92;
+}
+.wp-errand.is-handing .wp-errand-word { opacity: 0; transition: opacity .18s linear; }
+
+/* Where somebody ISN'T. Their cell keeps its width so the room does not jump when they arrive —
+   the space is theirs, they are simply not standing in it yet. */
+.wp-worker.is-away { visibility: hidden; }
+.wp-worker.just-arrived .wp-stage { animation: wp-land 520ms cubic-bezier(.22,1,.32,1) 1; }
+/* Someone strolling inside their own room walks; someone at a desk does not. */
+.wp-worker.is-pacing .wp-f0 { animation-duration: var(--stride); }
+.wp-worker.is-pacing .wp-f1 { animation-duration: var(--stride); }
+
+/* The hand-over. The recipient stops what they are doing and takes it — without this the note
+   flew PAST a person rather than TO one, which is the whole difference between a decoration and
+   an exchange. */
+.wp-worker.has-post .wp-stage { animation: wp-took 900ms cubic-bezier(.22,1,.32,1) 1; }
+.wp-worker.has-post .wp-mail { animation: wp-took-note 900ms ease-out 1; }
+
+/* The front door. Two frames on one grid, so it swings rather than the wall jumping. It opens
+   because somebody walked through it, and it is shut the rest of the time. */
+.wp-door .wp-f1 { opacity: 0; }
+.wp-door.is-open .wp-f0 { opacity: 0; }
+.wp-door.is-open .wp-f1 { opacity: 1; }
+.wp-door .wp-f0, .wp-door .wp-f1 { transition: opacity 90ms steps(1, end); }
+
+@keyframes wp-land {
+  0% { transform: translateY(-2px); }
+  55% { transform: translateY(1px); }
+  100% { transform: translateY(0); }
+}
+@keyframes wp-took {
+  0% { transform: translateY(0); }
+  22% { transform: translateY(-4px); }
+  46% { transform: translateY(0); }
+  62% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
+}
+@keyframes wp-took-note {
+  0% { transform: scale(1); opacity: .55; }
+  30% { transform: scale(1.5); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 @keyframes wp-fa { 0%, 49.99% { opacity: 1 } 50%, 100% { opacity: 0 } }
 @keyframes wp-fb { 0%, 49.99% { opacity: 0 } 50%, 100% { opacity: 1 } }
 @keyframes wp-bob { 0%, 49.99% { transform: translateY(0) } 50%, 100% { transform: translateY(-1px) } }
@@ -715,10 +922,25 @@ ${STAMP_CSS}
   .wp { --w-lead: 108px; --w-rep: 96px; --w-mini: 86px; }
 }
 
+/* A narrow panel gets a NARROWER BUILDING, never a different object.
+   This used to re-flow the storeys into a two-column grid, drop the shared subgrid, and hide the
+   stairwell — which is to say, below 620px the cutaway stopped existing and the view became the
+   stack of bordered cards this whole design was chosen instead of. It also broke the motion
+   outright: every route in the engine goes through the stairwell, and the stairwell was
+   hidden outright. Rooms get thinner and the people get smaller; the section stays a section. */
 @media (max-width: 620px) {
-  .wp-floor { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; }
-  .wp-room { grid-row: auto; grid-template-rows: minmax(40px, 1fr) auto; border-bottom: 2px solid var(--wp-ink); }
-  .wp-lobby { display: none; }
   .wp { --w-lead: 100px; --w-rep: 92px; --w-mini: 84px; }
+  .wp-floor { grid-template-rows: 46px auto; }
+  .wp-floor[data-vacant="1"] { grid-template-rows: 22px auto; }
+  .wp-deck { gap: 3px; padding: 3px 3px 13px; }
+  .wp-pod { padding: 0 2px 5px; }
+  .wp-plaque { font-size: 8px; letter-spacing: .1em; padding: 1px 3px; }
+  .wp-prop { transform: scale(.72); transform-origin: center bottom; }
+}
+
+@media (max-width: 440px) {
+  .wp-floor { grid-template-rows: 34px auto; }
+  /* The sign is what makes a 40px-wide room still a room. The plaque count goes; the name stays. */
+  .wp-plaque b { display: none; }
 }
 `;

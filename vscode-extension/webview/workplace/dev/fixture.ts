@@ -5,6 +5,7 @@
  *  report three levels down, reports scattered across four rooms away from their lead, an empty
  *  room, a stalled "running" worker, an errored one, and a session interact did not start.
  */
+import { atSeconds } from "../palette";
 import type { TeamState, Worker, ZoneId } from "../../../src/team";
 
 type Seed = [
@@ -63,11 +64,22 @@ export function fixture(at = Date.UTC(2026, 7, 18, 14, 3, 22)): TeamState {
     }),
   );
   // Real exchanges, both ends present. `run-a` is the first seed, `run-b` the second, and so on.
+  //
+  // Each carries an AGE in seconds, and the spread is the point: two of these happened moments
+  // ago and three are old news. A cold open must act out the first two and stay silent about the
+  // rest, and one link deliberately has NO stamp at all — the shape of a message recorded before
+  // `Link.at` existed, which must count as unknown rather than as new.
+  //
+  // The stamps are in SECONDS because that is the unit the data layer actually writes (Python's
+  // `time.time()`), while a snapshot's own `at` here is whatever the caller passed. They are
+  // normalised where they meet rather than assumed to agree — a fixture that quietly used one
+  // unit for both is precisely what hid a 1970 clock in the panel for an entire arc.
+  const said = (seconds: number) => atSeconds(at) - seconds;
   const links = [
-    { from_run_id: "run-c", to_run_id: "run-b", text: "css: use box-shadow steps for the sprite, not a png" },
-    { from_run_id: "run-b", to_run_id: "run-a", text: "sprites are in — need the zone list frozen" },
-    { from_run_id: "run-j", to_run_id: "run-h", text: "Tensor base re-declares device in three leaves" },
-    { from_run_id: "run-k", to_run_id: "run-h", text: "harness died at p99, re-running with a smaller batch" },
+    { from_run_id: "run-c", to_run_id: "run-b", text: "css: use box-shadow steps for the sprite, not a png", at: said(9) },
+    { from_run_id: "run-b", to_run_id: "run-a", text: "sprites are in — need the zone list frozen", at: said(26) },
+    { from_run_id: "run-j", to_run_id: "run-h", text: "Tensor base re-declares device in three leaves", at: said(640) },
+    { from_run_id: "run-k", to_run_id: "run-h", text: "harness died at p99, re-running with a smaller batch", at: said(1800) },
     { from_run_id: "run-m", to_run_id: "run-l", text: "entry is reachable from cold, the panel is not" },
   ];
   return { workers, at, links } as TeamState;
@@ -88,9 +100,10 @@ export function fixtureMoved(at = Date.UTC(2026, 7, 18, 14, 3, 31)): TeamState {
   };
   // Two exchanges that did NOT exist a moment ago: the couriers must carry exactly these, and
   // must not re-carry the five that were already on screen.
-  (state as { links: { from_run_id: string; to_run_id: string; text: string }[] }).links.push(
-    { from_run_id: "run-a", to_run_id: "run-l", text: "can you look at the workplace panel when it lands?" },
-    { from_run_id: "run-h", to_run_id: "run-a", text: "kernels.rs is green, moving to the reduce path" },
+  const now = atSeconds(at);
+  (state as { links: { from_run_id: string; to_run_id: string; text: string; at?: number }[] }).links.push(
+    { from_run_id: "run-a", to_run_id: "run-l", text: "can you look at the workplace panel when it lands?", at: now - 2 },
+    { from_run_id: "run-h", to_run_id: "run-a", text: "kernels.rs is green, moving to the reduce path", at: now - 1 },
   );
   move("researcher", "managers", "reporting back what the web had");
   move("artist", "code", "writing webview/workplace/scene.ts");

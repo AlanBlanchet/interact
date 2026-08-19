@@ -13,21 +13,27 @@
  */
 import { ZONES } from "../../src/team";
 import type { TeamState, Worker, ZoneId } from "../../src/team";
-import { draw, drawFrames } from "./pixels";
+import { closeSheet, draw, drawFrames, openSheet } from "./pixels";
 import {
   CLOUD,
   DISC,
+  DOOR,
   GHOST_PAL,
   HORIZON,
   NOTE,
   POSE_MOVE,
   POSE_REST,
+  POSE_RUN_A,
+  POSE_RUN_B,
+  POSE_WALK_A,
+  POSE_WALK_B,
   PROPS,
+  RUNNER_PAL,
   SKIN_PAL,
   SNOOZE,
   STAIRS,
 } from "./art";
-import { faceOf, idleAmount, shortDuration } from "./palette";
+import { atMillis, faceOf, idleAmount, shortDuration } from "./palette";
 import { STAMPS, WORDS, isHeld, markOf, stampFor, stampHtml } from "./status";
 import {
   FLOORS,
@@ -187,7 +193,13 @@ function roomOf(zone: ZoneId, plan: RoomPlan | undefined, ctx: Ctx, outdoor = fa
     `data-lit="${heads ? 1 : 0}" data-busy="${busy ? 1 : 0}" style="--heads:${heads}">` +
     `<span class="wp-plaque">${esc(LABELS.get(zone) ?? zone)}${heads ? `<b>${heads}</b>` : ""}</span>` +
     `<div class="wp-wall${outdoor ? " wp-yard" : ""}">${sky}` +
-    draw(PROPS[zone].grid, PROPS[zone].pal, { scale: outdoor ? 4 : 3, outline: !outdoor, className: "wp-prop" }) +
+    (zone === "entry"
+      ? drawFrames(DOOR.frames, DOOR.pal, { scale: 4, className: "wp-prop wp-door" })
+      : draw(PROPS[zone].grid, PROPS[zone].pal, {
+          scale: outdoor ? 4 : 3,
+          outline: !outdoor,
+          className: "wp-prop",
+        })) +
     `</div>` +
     `<div class="wp-deck">${deck}</div>` +
     (outdoor ? `<span class="wp-gangway"></span>` : "") +
@@ -201,7 +213,10 @@ function money(total: number): string {
 }
 
 function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): string {
-  const when = new Date(state.at).toLocaleTimeString();
+  // The data layer stamps SECONDS; a Date wants milliseconds. Handed over raw this read
+  // "as of 17:25:34" for a snapshot taken at lunchtime — a 1970 clock nobody noticed, because
+  // every dev fixture happens to use Date.UTC and so was already in milliseconds.
+  const when = new Date(atMillis(state.at)).toLocaleTimeString();
   const chip = (status: string, n: number, word: string, colour: string) =>
     n ? `<span class="wp-chip" style="--mark:${colour}">${markOf(status)}<b>${n}</b> ${word}</span>` : "";
   const projects = t.projects.length === 1 ? esc(t.projects[0]) : `${t.projects.length} projects`;
@@ -272,58 +287,98 @@ function columns(cells: { zone: ZoneId | "lobby"; heads: number }[]): string {
 /** The whole visible thing, as markup. Kept apart from the document shell so it can be dropped into
  *  a test page or a live webview without dragging the CSP with it. */
 export function renderScene(state: TeamState): string {
+  // Everything below is collected into one <defs> block: a workplace is the same few drawings
+  // repeated once per person and once per room, and writing each one out at every call site is
+  // most of what the document weighs. Opened here and closed once the whole scene is built, so
+  // nothing can be drawn outside it and left dangling.
+  openSheet();
   const pods = buildPods(state);
   const plans = planRooms(pods);
   const t = tally(state);
   const list: Post[] = posts(state);
   const ctx: Ctx = { pods, mail: traffic(list, state.workers) };
 
-  const lobby =
-    `<div class="wp-room wp-lobby" data-zone="lobby" data-lit="0" data-busy="0">` +
-    `<div class="wp-wall">${draw(STAIRS.grid, STAIRS.pal, { scale: 3, className: "wp-prop" })}</div>` +
+  // The stairwell, on EVERY storey and always the first column, so it is a genuine vertical core
+  // rather than a picture of stairs on the ground floor. Everything about the motion depends on
+  // it: a worker sent from the Lab to the Code room has to GET there, and the only honest route
+  // through a building drawn in section is out of the room, along the storey, and up the stairs.
+  // First column and a fixed width means the shaft is plumb by construction — no fr unit can
+  // knock the flights out of line with each other.
+  const shaft = (storey: number) =>
+    `<div class="wp-room wp-lobby wp-shaft" data-zone="lobby" data-storey="${storey}" ` +
+    `data-lit="0" data-busy="0">` +
+    `<div class="wp-wall">${draw(STAIRS.grid, STAIRS.pal, { scale: 4, className: "wp-prop" })}</div>` +
     `<div class="wp-deck"></div></div>`;
 
   const floors = FLOORS.map((zones, i) => {
-    const ground = i === FLOORS.length - 1;
     const heads = (z: ZoneId) => plans.get(z)?.headcount ?? 0;
     // The ground floor reads left to right as break room, stairs, then the door — so the way out is
     // where the eye ends up, which is where a finished worker ends up too.
-    const cells: { zone: ZoneId | "lobby"; heads: number }[] = ground
-      ? [
-          { zone: zones[0], heads: heads(zones[0]) },
-          { zone: "lobby", heads: 0 },
-          { zone: zones[1], heads: heads(zones[1]) },
-        ]
-      : zones.map((z) => ({ zone: z, heads: heads(z) }));
-    const body = ground
-      ? roomOf(zones[0], plans.get(zones[0]), ctx) + lobby + roomOf(zones[1], plans.get(zones[1]), ctx)
-      : zones.map((z) => roomOf(z, plans.get(z), ctx)).join("");
+    const storey = FLOORS.length - 1 - i;
+    const cells: { zone: ZoneId | "lobby"; heads: number }[] = [
+      { zone: "lobby", heads: 0 },
+      ...zones.map((z) => ({ zone: z, heads: heads(z) })),
+    ];
+    const body = shaft(storey) + zones.map((z) => roomOf(z, plans.get(z), ctx)).join("");
     // A storey nobody is on keeps its rooms — the building has to stay a building — but stops
     // paying full height for them. With a small team the empty floors were most of the canvas,
     // and the people were crammed into a corner of it.
-    const vacant = cells.every((c) => c.heads === 0) ? " data-vacant=\"1\"" : "";
+    const vacant = cells.every((c) => c.zone === "lobby" || c.heads === 0)
+      ? " data-vacant=\"1\""
+      : "";
     return (
-      `<div class="wp-floor" data-floor="${FLOORS.length - 1 - i}"${vacant} ` +
+      `<div class="wp-floor" data-floor="${storey}"${vacant} ` +
       `style="--cols:${columns(cells)}">${body}</div>`
     );
   }).join("");
 
   // The post, handed to the script as data rather than as a second copy of the state: it only ever
   // needs to know which exchanges are NEW since the last draw, so that nothing is re-announced.
-  const mailbag = list.map((p) => ({ f: p.from, t: p.to, k: p.key, x: clip(p.text, 80) }));
+  // `g` is how many seconds ago it was said, or null where the exchange predates the stamp. It
+  // is the whole difference between a cold open that can show the team talking and one that can
+  // only stay silent to avoid replaying an hour-old conversation as if it were live.
+  const mailbag = list.map((p) => ({
+    f: p.from,
+    t: p.to,
+    k: p.key,
+    x: clip(p.text, 80),
+    g: p.age === null ? null : Math.round(p.age),
+  }));
   const post =
     `<div class="wp-post" aria-hidden="true" data-links="${esc(JSON.stringify(mailbag))}">` +
     `<span class="wp-note-art">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}</span></div>`;
 
-  return (
-    `<div class="wp">` +
+  // The bodies that MOVE, drawn once and cloned by the engine.
+  //
+  // A traveller cannot be the worker's own sprite: that sprite is two frames of someone standing
+  // at a desk, and it lives inside a grid cell that is the wrong place to be while you are in the
+  // corridor. So the walk cycle is emitted ONCE, hidden, and the engine clones it onto the traffic
+  // layer, copies the worker's own `--c-*` properties onto the clone, and walks it. Same person,
+  // same twenty rectangles, now on a floor instead of in a cell — and the document pays for the
+  // walk cycle once rather than once per worker.
+  const trafficLayer =
+    `<div class="wp-traffic" aria-hidden="true">` +
+    `<div class="wp-proto" data-proto="walk">` +
+    drawFrames([POSE_WALK_A, POSE_WALK_B], SKIN_PAL, { scale: 1, className: "wp-sprite" }) +
+    `</div>` +
+    `<div class="wp-proto" data-proto="run">` +
+    drawFrames([POSE_RUN_A, POSE_RUN_B], RUNNER_PAL, { scale: 1, className: "wp-sprite" }) +
+    `</div>` +
+    `</div>`;
+
+  const inner =
     hud(state, t, list.length) +
-    `<div class="wp-scene">` +
+    // The outdoors is sized like a room, for the same reason: it has to stay THERE — the web is
+    // a place people go and the building has to have an outside — but with nobody out there it
+    // does not need a quarter of the canvas to say so.
+    `<div class="wp-scene" data-outside="${plans.get(OUTDOOR)?.headcount ? 1 : 0}">` +
     `<div class="wp-building"><div class="wp-roof"></div>${floors}<div class="wp-base"></div></div>` +
     roomOf(OUTDOOR, plans.get(OUTDOOR), ctx, true) +
     post +
+    trafficLayer +
     `</div>` +
-    legend() +
-    `</div>`
-  );
+    legend();
+
+  // Closed only now: every draw in the scene has happened, so this is the complete set.
+  return `<div class="wp">${closeSheet()}${inner}</div>`;
 }

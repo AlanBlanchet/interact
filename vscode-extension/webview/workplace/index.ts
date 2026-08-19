@@ -7,9 +7,16 @@
  *  there is no bundle to build, no asset to resolve through `asWebviewUri`, and no request that
  *  could ever leave the machine.
  *
- *  Re-render as often as the data changes. The document remembers where each run was standing the
- *  last time it was drawn, so a full reassignment of `.html` still produces a WALK rather than a
- *  jump — see `motion.ts`.
+ *  Render it ONCE, then keep it. The engine inside is a running simulation with its own clock, so
+ *  the way to update it is to post the next scene rather than to reassign the document:
+ *
+ *      panel.webview.html = renderWorkplace(state, nonce)                    // once
+ *      panel.webview.postMessage({ type: "team", html: renderScene(state) }) // every refresh
+ *
+ *  The engine swaps `#wp-mount`, re-binds every body by `data-run-id`, and carries positions and
+ *  journeys across the swap — so somebody sent to another room is watched the whole way there.
+ *  Reassigning `.html` still works and still produces a real walk (the document recovers the last
+ *  snapshot from `setState`), but the clock restarts each time; see `motion.ts`.
  */
 import type { TeamState } from "../../src/team";
 import { renderScene } from "./scene";
@@ -45,7 +52,7 @@ export function renderWorkplace(state: TeamState, nonce: string): string {
 <style>${STYLE}</style>
 </head>
 <body>
-${renderScene(state)}
+<div id="wp-mount">${renderScene(state)}</div>
 <script nonce="${n}">${SCRIPT}</script>
 </body>
 </html>`;

@@ -275,20 +275,20 @@ const MANAGERS: Piece = {
 
 const ENTRY: Piece = {
   grid: [
-    "......XXXXXXXX......",
-    "......XxxxxxxX......",
-    "......XXXXXXXX......",
-    "...DDDDDDDDDDDD.....",
-    "...DddddddddddD.....",
-    "...DddddddddddD.....",
-    "...DddddddddhdD.....",
-    "...DddddddddddD.....",
-    "...DddddddddddD.....",
-    "...DddddddddddD.....",
-    "...DDDDDDDDDDDD.....",
-    "..MMMMMMMMMMMMMM....",
-    "..MMMMMMMMMMMMMM....",
+    ".....XXXXXX.........",
+    ".....XxxxxX.........",
     "....................",
+    "....DDDDDDDD........",
+    "....DddddddD........",
+    "....DddddddD........",
+    "....DddddddD........",
+    "....DdddhddD........",
+    "....DddddddD........",
+    "....DddddddD........",
+    "....DddddddD........",
+    "....DddddddD........",
+    "....DDDDDDDD........",
+    "...MMMMMMMMMM.......",
   ],
   pal: {
     X: "var(--wp-metal)",
@@ -325,18 +325,31 @@ const BREAK: Piece = {
   },
 };
 
-/** Not a zone — the connective tissue that makes eight rooms read as one building. */
+/** Not a zone — the connective tissue that makes eight rooms read as one building, and now the
+ *  thing every journey in the place actually goes through.
+ *
+ *  It used to be a small pale wedge: a picture of stairs, at the bottom of the building only,
+ *  standing for a vertical circulation that did not exist. It is now a FLIGHT, repeated on every
+ *  storey and plumb by construction, because the engine routes real walks up and down it — a
+ *  worker sent from the Lab to the Code room climbs these. So it is drawn as steps with a rail
+ *  rather than as a triangle: at 4px a tread, a silhouette reads as stairs and a ramp does not. */
 export const STAIRS: Piece = {
   grid: [
-    "..............zz....",
-    "............zzzz....",
-    "..........zzzzzz....",
-    "........zzzzzzzz....",
-    "......zzzzzzzzzz....",
-    "....zzzzzzzzzzzz....",
-    "..zzzzzzzzzzzzzz....",
+    "..........rr",
+    "........rr.s",
+    "........rrss",
+    "......rr.sss",
+    "......rrssss",
+    "....rr.sssss",
+    "....rrssssss",
+    "..rr.sssssss",
+    "..rrssssssss",
+    "rr.sssssssss",
+    "rrssssssssss",
+    "ssssssssssss",
+    "ssssssssssss",
   ],
-  pal: { z: "var(--wp-metal)" },
+  pal: { s: "var(--wp-metal)", r: "var(--wp-brass)" },
 };
 
 export const PROPS: Record<ZoneId, Piece> = {
@@ -453,4 +466,119 @@ export const NOTE: Piece = {
 export const SNOOZE: Piece = {
   grid: ["zzzz.", "...z.", "..z..", ".z...", "zzzz."],
   pal: { z: "var(--mark)" },
+};
+
+/* ── Travel ──────────────────────────────────────────────────────────────────────────────────
+ *
+ *  `POSE_MOVE` played fast reads as "busy", which is what it was authored for — the hands move,
+ *  the feet barely do. That is right for someone AT a desk and wrong for someone crossing the
+ *  building: at 4px a foot the eye reads the STRIDE, not the arms, so a person walking a corridor
+ *  with their feet 2px apart looks like a picture being dragged.
+ *
+ *  So travel gets its own two frames, and the only thing they exaggerate is the split between the
+ *  legs and the counter-swing of the arms. Same canvas, same palette keys — a traveller is the
+ *  same person, walking.
+ */
+export const POSE_WALK_A: Grid = [
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kekkek..",
+  "..kkkkkk..",
+  "..kkmmkk..",
+  "...kkkk...",
+  "..ssssssk.",
+  ".ksssaass.",
+  "..ssssss..",
+  "..ssssss..",
+  "..tttttt..",
+  ".ttt..tt..",
+  ".tt....tt.",
+  "bb......bb",
+  "bb......bb",
+];
+
+export const POSE_WALK_B: Grid = [
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kekkek..",
+  "..kkkkkk..",
+  "..kkmmkk..",
+  "...kkkk...",
+  ".kssssss..",
+  ".sssaasss.",
+  "..ssssss..",
+  "..ssssss..",
+  "..tttttt..",
+  "..tt..ttt.",
+  ".tt....tt.",
+  "bb......bb",
+  "bb......bb",
+];
+
+/** The runner who carries the post. Deliberately NOT one of the team: a message crossing the
+ *  building must not be mistaken for a person changing rooms, so the courier is smaller, has no
+ *  face and no badge, and is drawn in one flat tone with the note in front of them. */
+export const POSE_RUN_A: Grid = [
+  "..hhhh..",
+  "..kkkk..",
+  ".ssssss.",
+  "nssssss.",
+  "nsssss..",
+  "..tttt..",
+  ".tt..tt.",
+  "bb....bb",
+];
+
+export const POSE_RUN_B: Grid = [
+  "..hhhh..",
+  "..kkkk..",
+  ".ssssss.",
+  "nssssss.",
+  "nssssss.",
+  "..tttt..",
+  "..t..t..",
+  ".bb..bb.",
+];
+
+/** A courier is a silhouette plus the thing they are carrying. The note keeps the post's own
+ *  colour so the object crossing the floor is recognisably the same object the legend names. */
+export const RUNNER_PAL: Palette = {
+  k: "var(--wp-runner)",
+  h: "var(--wp-runner)",
+  s: "var(--wp-runner)",
+  t: "var(--wp-runner)",
+  b: "var(--wp-runner)",
+  n: "var(--wp-paper)",
+  // The derived rim defaults to the building's ink, and at this size the rim is half the body —
+  // a courier drawn mostly in near-black vanished against every wall it crossed. Its own rim,
+  // one step darker than the body, keeps the silhouette without swallowing it.
+  "#": "var(--wp-runner-ink)",
+};
+
+/** The front door, open. Same canvas as `ENTRY` so the two frames sit on the same pixel grid and
+ *  the door swings instead of the whole wall jumping. It opens because somebody went through it —
+ *  never on a timer. */
+export const ENTRY_OPEN: Grid = [
+  ".....XXXXXX.........",
+  ".....XxxxxX.........",
+  "....................",
+  "....DDDDDDDD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DddooooD........",
+  "....DDDDDDDD........",
+  "...MMMMMMMMMM.......",
+];
+
+/** The door as a two-frame piece: shut, and open onto daylight. */
+export const DOOR: { frames: Grid[]; pal: Palette } = {
+  frames: [ENTRY.grid, ENTRY_OPEN],
+  pal: { ...ENTRY.pal, o: "var(--wp-daylight)" },
 };

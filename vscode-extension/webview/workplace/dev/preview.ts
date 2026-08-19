@@ -9,7 +9,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { renderWorkplace } from "../index";
+import { renderScene, renderWorkplace } from "../index";
 import { fixture, fixtureMoved } from "./fixture";
 
 const DARK = `
@@ -36,6 +36,28 @@ function themed(html: string, vars: string, klass: string): string {
     .replace("<body>", `<body class="${klass}">`);
 }
 
+/** A page that DRIVES the engine, which is the only way motion can be looked at or measured.
+ *
+ *  A still says nothing about movement and a pair of stills says nothing either — which is exactly
+ *  how a teleport passes review. So the harness ships the host's own protocol: the shell is
+ *  rendered once, and a driver posts successive scenes into it the way the panel will, cycling
+ *  between two snapshots of the same team so people are continually being sent somewhere.
+ *
+ *  `window.__wpPhase(i)` jumps straight to a snapshot, so a probe can step the whole thing rather
+ *  than wait for it.
+ */
+function live(base: string, vars: string, klass: string, every = 7000): string {
+  const scenes = [renderScene(fixture()), renderScene(fixtureMoved())];
+  const driver =
+    `<script nonce="devnonce123">` +
+    `var WP_SCENES=${JSON.stringify(scenes)};var wpAt=0;` +
+    `window.__wpPhase=function(i){wpAt=i%WP_SCENES.length;window.__wpApply(WP_SCENES[wpAt]);};` +
+    `window.__wpNext=function(){window.__wpPhase(wpAt+1);};` +
+    `setTimeout(function(){setInterval(window.__wpNext,${every});},${every});` +
+    `</script>`;
+  return themed(base, vars, klass).replace("</body>", `${driver}</body>`);
+}
+
 function main(): void {
   const out = process.argv[2] || ".";
   mkdirSync(out, { recursive: true });
@@ -45,7 +67,23 @@ function main(): void {
     ["light.html", themed(renderWorkplace(fixture(), "devnonce123"), LIGHT, "vscode-light")],
     ["move-a.html", themed(renderWorkplace(fixture(), "devnonce123"), DARK, "vscode-dark")],
     ["move-b.html", themed(renderWorkplace(fixtureMoved(), "devnonce123"), DARK, "vscode-dark")],
-    ["empty.html", themed(renderWorkplace({ workers: [], at: Date.now() }, "devnonce123"), DARK, "vscode-dark")],
+    // A FIXED stamp, not Date.now(): a harness page that bakes the wall clock cannot be diffed
+    // against itself, so it reports a change on every rebuild and hides a real one.
+    ["empty.html", themed(
+      renderWorkplace({ workers: [], at: Date.UTC(2026, 7, 18, 14, 3, 22) }, "devnonce123"),
+      DARK, "vscode-dark",
+    )],
+    // The pages that MOVE. Everything about this turn is judged on these, never on the stills.
+    ["live.html", live(renderWorkplace(fixture(), "devnonce123"), DARK, "vscode-dark")],
+    // The same team with the snapshot stamped the way the DATA LAYER stamps it — epoch SECONDS,
+    // not milliseconds. Every other page here happens to use `Date.UTC`, which is milliseconds,
+    // so the harness showed a correct clock while the panel showed 1970. A fixture that only ever
+    // exercises the convenient unit is a fixture that certifies the bug.
+    ["prod-units.html", themed(
+      renderWorkplace(fixture(Date.UTC(2026, 7, 18, 14, 3, 22) / 1000), "devnonce123"),
+      DARK, "vscode-dark",
+    )],
+    ["live-light.html", live(renderWorkplace(fixture(), "devnonce123"), LIGHT, "vscode-light")],
   ];
   for (const [name, html] of pages) {
     writeFileSync(join(out, name), html, "utf8");

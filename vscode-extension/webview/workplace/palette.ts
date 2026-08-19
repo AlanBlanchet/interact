@@ -81,6 +81,25 @@ export function idleAmount(seconds: number): number {
   return Math.round(Math.min(1, t) * 100) / 100;
 }
 
+/** Epoch milliseconds, from a stamp that may be in either unit.
+ *
+ *  The data layer works in SECONDS (`Date.now() / 1000`, and Python's `time.time()`), while every
+ *  JS date constructor wants milliseconds — so a stamp handed straight to `new Date()` renders a
+ *  time in 1970. The dev fixtures happened to use `Date.UTC(...)`, i.e. milliseconds, so the
+ *  harness showed a correct clock while the panel showed 1970: the fixture hid the bug, which is
+ *  the whole reason to normalise at the boundary rather than trust the caller.
+ *
+ *  A stamp below the threshold cannot be a plausible millisecond time (it would be 1970), and one
+ *  above it cannot be a plausible second time (it would be the year 5138). */
+export function atMillis(stamp: number): number {
+  return stamp < 1e11 ? stamp * 1000 : stamp;
+}
+
+/** The same stamp as epoch SECONDS, for comparing two of them. */
+export function atSeconds(stamp: number): number {
+  return stamp < 1e11 ? stamp : stamp / 1000;
+}
+
 /** "4m", "2h" — said the way a person waiting would say it. */
 export function shortDuration(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));

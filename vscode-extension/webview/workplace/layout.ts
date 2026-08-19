@@ -12,7 +12,7 @@
  *  workers a wire per relationship is the node graph this view exists to not be.
  */
 import { reportsOf } from "../../src/team";
-import { assignAccents } from "./palette";
+import { assignAccents, atSeconds } from "./palette";
 import { isHeld } from "./status";
 import type { TeamState, Worker, ZoneId } from "../../src/team";
 
@@ -156,12 +156,21 @@ export interface Post {
   to: string;
   text: string;
   key: string;
+  /** How long ago this was said, in seconds, or null when the exchange predates the stamp.
+   *
+   *  This is what lets a COLD OPEN say anything at all. Without it the only way to tell a new
+   *  exchange from an old one was "did we already draw it", which is empty on a first load — so
+   *  the room opened silent and stayed silent until somebody spoke again, which is half of "no
+   *  agents talk to each other". With an age, a first load can carry the conversations that have
+   *  genuinely JUST happened and stay quiet about the rest. Null is unknown, never zero. */
+  age: number | null;
 }
 
 interface LinkLike {
   from_run_id: string;
   to_run_id: string;
   text: string;
+  at?: number | null;
 }
 
 export function posts(state: TeamState): Post[] {
@@ -175,7 +184,13 @@ export function posts(state: TeamState): Post[] {
     const key = `${l.from_run_id}>${l.to_run_id}:${l.text}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ from: l.from_run_id, to: l.to_run_id, text: l.text ?? "", key });
+    // Both stamps normalised before subtracting: the snapshot and the message reach this from
+    // different writers, and one of them being in the other's unit is a 50-year-old message.
+    const age =
+      typeof l.at === "number" && Number.isFinite(l.at)
+        ? Math.max(0, atSeconds(state.at) - atSeconds(l.at))
+        : null;
+    out.push({ from: l.from_run_id, to: l.to_run_id, text: l.text ?? "", key, age });
   }
   return out;
 }

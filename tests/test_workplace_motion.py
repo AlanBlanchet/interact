@@ -1,0 +1,188 @@
+"""The workplace view's SIMULATION, exercised in a real browser.
+
+The scene is plain JS embedded in the extension's webview, so nothing in the TypeScript unit
+suite can reach it: those tests build strings, and every defect here lives in what the browser
+RESOLVES from them. A still frame hides the whole class — the walker bug below rendered perfectly
+in every screenshot of a standing team, and only appeared for the four seconds somebody walked.
+
+The harness is the extension's own preview build (the same document, CSP and theme variables the
+panel ships), so a pass here is a pass on what the panel renders.
+"""
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+EXT = Path(__file__).resolve().parent.parent / "vscode-extension"
+PREVIEW = EXT / "webview" / "workplace" / "dev" / "preview.ts"
+
+#: NOT a list. The colours that make a sprite a person are read off the standing worker itself, so
+#: this cannot drift from what the stylesheet declares. A hand-kept copy here disagreed with the
+#: sim's own list — four of the six properties the fix copies were never checked, and the two that
+#: were are carried by pre-existing code rather than by the fix. Adding a seventh colour to
+#: `.wp-worker` now extends this test for free instead of silently escaping it.
+COLOUR_PROPS_JS = """(el) => {
+  const out = {};
+  const style = getComputedStyle(el);
+  for (let i = 0; i < style.length; i++) {
+    const p = style[i];
+    if (p.startsWith('--c-')) out[p] = style.getPropertyValue(p).trim();
+  }
+  return out;
+}"""
+
+
+@pytest.fixture(scope="module")
+def scene(tmp_path_factory):
+    """The real preview pages, built from source."""
+    if not PREVIEW.exists() or shutil.which("npx") is None:
+        pytest.skip("the extension's webview toolchain is not available here")
+    out = tmp_path_factory.mktemp("workplace")
+    bundle = out / "preview.js"
+    build = subprocess.run(
+        ["npx", "esbuild", str(PREVIEW), "--bundle", f"--outfile={bundle}",
+         "--format=cjs", "--platform=node", "--target=es2022"],
+        cwd=EXT, capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        pytest.fail(f"the webview would not build:\n{build.stderr}")
+    subprocess.run(["node", str(bundle), str(out)], check=True, capture_output=True)
+    return out
+
+
+@pytest.fixture(scope="module")
+def page(scene):
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        # Explicitly NOT reduced motion: every animation in this file is the thing under test, and
+        # a harness that quietly disables them reports "identical" no matter what broke.
+        pg = browser.new_page(viewport={"width": 1100, "height": 800},
+                              reduced_motion="no-preference")
+        pg.goto((scene / "live.html").as_uri())
+        pg.wait_for_timeout(600)
+        yield pg
+        browser.close()
+
+
+def _send_someone(page, *, depth: str | None = None) -> dict:
+    """Put a real worker on a real journey and read every colour they wear, before and during.
+
+    On demand rather than waiting for the sim's own schedule: the defect exists only WHILE a
+    person walks, and racing a spontaneous trip is how it stayed invisible for so long.
+
+    ``depth`` picks who travels — "0" for a lead, anything else for a report. Without it the first
+    body in the fixture was taken, so the report test skipped whenever that happened to be a lead
+    and was green forever.
+    """
+    return page.evaluate(
+        """([readColours, wantDepth]) => {
+          const colours = eval('(' + readColours + ')');
+          const bodies = window.__wp && window.__wp.bodies;
+          if (!bodies || !window.__wp.send) return {error: 'the sim exposes no bodies to drive'};
+          for (const id in bodies) {
+            const el = bodies[id].el;
+            if (!el || !el.closest('.wp-pod')) continue;
+            const d = el.getAttribute('data-depth');
+            if (wantDepth === '0' && d !== '0') continue;
+            if (wantDepth === 'report' && (d === '0' || d === null)) continue;
+            const before = colours(el);
+            const travel = window.__wp.send(id, bodies[id].zone === 'code' ? 'lab' : 'code');
+            if (!travel || !travel.walker) continue;
+            return {id, depth: d, before, after: colours(travel.walker)};
+          }
+          return {error: 'no matching body could be sent anywhere'};
+        }""",
+        [COLOUR_PROPS_JS, depth],
+    )
+
+
+def test_a_traveller_is_the_same_person_walking(page):
+    """The defect: a walker is reparented onto the traffic layer, OUTSIDE its pod — and the shirt
+    is resolved from `--accent`, which the pod supplies by inheritance. So a traveller left the
+    room and instantly wore whatever accent was in scope on the traffic layer: not a missing
+    colour but ANOTHER TEAM'S, in a view whose whole job is showing whose journey you watch.
+    """
+    moved = _send_someone(page)
+    assert "error" not in moved, moved.get("error")
+
+    wrong = {k: (v, moved["after"].get(k))
+             for k, v in moved["before"].items() if moved["after"].get(k) != v}
+    assert not wrong, (
+        f"{moved['id']} changes colour the moment they start walking: "
+        + "; ".join(f"{k} {was!r} -> {now!r}" for k, (was, now) in wrong.items())
+    )
+
+
+def test_the_shirt_a_traveller_wears_is_actually_painted(page):
+    """Distinct from the test above, which only demands the two AGREE. Both being empty would
+    satisfy it, and an unpainted sprite is the exact way this failed."""
+    moved = _send_someone(page)
+    assert "error" not in moved, moved.get("error")
+    assert moved["after"]["--c-shirt"], "the walker's shirt resolves to nothing at all"
+
+
+def test_a_report_keeps_its_lighter_tint_on_the_road(page):
+    """A report is drawn in a LIGHTER mix of its lead's colour, so depth is visible at a glance.
+    Rebuilding a walker's shirt from the pod's raw accent would repaint every report as its lead
+    the moment it stepped into the corridor — correct-looking, and wrong.
+
+    A report is DEMANDED rather than hoped for: the earlier version took whichever body came
+    first and skipped when that was a lead, which made it green whether or not it ever ran. And
+    the comparison is against the lead's own colour rather than a "60%" literal copied out of the
+    stylesheet — the point is that the two DIFFER, not what the mix happens to be.
+    """
+    report = _send_someone(page, depth="report")
+    assert "error" not in report, (
+        f"{report.get('error')} — the fixture must contain a report for this to mean anything")
+    lead = _send_someone(page, depth="0")
+    assert "error" not in lead, lead.get("error")
+    assert report["after"]["--c-shirt"] != lead["after"]["--c-shirt"], (
+        "a report on the road wears its lead's colour exactly — depth is invisible mid-journey")
+
+
+def test_two_notes_between_the_SAME_pair_do_not_stack(page):
+    """The courier collision that IS reachable, and the two tests before this one could not see.
+
+    Different pairs never stacked — `startErrand` routes foot-to-foot between two people, who
+    never stand in the same place, so those paths differ at both endpoints whatever the lane says.
+    Both earlier attempts therefore passed with the fix reverted, which is a test proving nothing.
+
+    The real case is the SAME pair twice: a back-and-forth between two agents puts two A->B notes
+    on the road at once, and identical endpoints meant an identical route. Keyed on the pair, they
+    also got an identical lane and pace — perfectly stacked.
+    """
+    spread = page.evaluate(
+        """() => {
+          const bodies = window.__wp && window.__wp.bodies;
+          if (!bodies || !window.__wp.note) return {error: 'the sim exposes no courier seam'};
+          window.__wp.tick.on = false;
+          // The scene's own notes hold both MAX_ERRANDS slots, so without this the couriers below
+          // are queued and never dispatched — and the test measures the fixture's traffic instead
+          // of its own. That is precisely how two earlier versions passed against a reverted fix.
+          window.__wp.clearNotes();
+          const ids = Object.keys(bodies);
+          if (ids.length < 2) return {error: 'need two people to send a note between'};
+          // The same two people, twice — a conversation, not two unrelated messages.
+          window.__wp.note(ids[0], ids[1], 'first');
+          window.__wp.note(ids[0], ids[1], 'second');
+          window.__wp.step(performance.now() + 600);
+          const seen = new Set();
+          let runners = 0;
+          for (const el of document.querySelectorAll('.wp-errand')) {
+            const r = el.getBoundingClientRect();
+            if (!r.width) continue;
+            runners++;
+            seen.add(Math.round(r.left) + ',' + Math.round(r.top));
+          }
+          return {runners, distinct: seen.size};
+        }"""
+    )
+    assert "error" not in spread, spread.get("error")
+    if spread["runners"] < 2:
+        pytest.skip(f"only {spread['runners']} courier(s) on the road — nothing to collide")
+    assert spread["distinct"] == spread["runners"], (
+        f"{spread['runners']} couriers between the same two people occupy "
+        f"{spread['distinct']} position(s) — stacked, so a conversation looks like one note")

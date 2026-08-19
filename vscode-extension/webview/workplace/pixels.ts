@@ -158,6 +158,64 @@ function open(w: number, h: number, size: string, opts: DrawOptions): string {
   );
 }
 
+/* ── one drawing, referenced many times ──────────────────────────────────────────────────────
+ *
+ *  The engine already refuses to BUILD a body twice, but it still WROTE it out at every call
+ *  site, and a workplace is overwhelmingly the same few drawings repeated: one worker sprite per
+ *  person, one prop per room, the same marks and stamps everywhere. At fifteen people that was
+ *  merely wasteful; at a hundred and fifty the document reached 621 kB, and with the live loop
+ *  that is now 621 kB pushed down the message channel on every refresh rather than a rebuild.
+ *
+ *  So a render may open a SHEET: every distinct body is written once into a `<defs>` block and
+ *  each call site becomes a `<use>`. Two details make it safe rather than clever:
+ *
+ *   - the ids live in a `<g>`, never a `<symbol>`. A `<symbol>` establishes its own viewport and
+ *     would re-scale content whose frames differ in size; a `<g>` places the identical paths at
+ *     the identical coordinates, so the pixels are the ones already reviewed.
+ *   - `drawFrames` puts its `wp-fN` class on the `<use>` ELEMENT, not inside the referenced body.
+ *     Content inside a `use` is a shadow tree the document's stylesheet cannot select, so a class
+ *     buried in there would have silently killed every frame animation in the building.
+ *
+ *  With no sheet open, both functions inline exactly as before — so a caller that renders one
+ *  sprite on its own (the side bar borrows this engine) needs to know nothing about any of it.
+ */
+interface Sheet {
+  ids: Map<string, string>;
+  parts: string[];
+}
+let sheet: Sheet | null = null;
+
+/** Begin collecting bodies. Every `draw` until `closeSheet` emits a reference instead of a copy. */
+export function openSheet(): void {
+  sheet = { ids: new Map(), parts: [] };
+}
+
+/** The `<defs>` block for everything drawn since `openSheet`, and the end of collecting. Must be
+ *  placed in the document BEFORE or after the references — id resolution does not care — but it
+ *  must be present, so callers put it at the top of the scene where it cannot be dropped. */
+export function closeSheet(): string {
+  const open_ = sheet;
+  sheet = null;
+  if (!open_ || !open_.parts.length) return "";
+  return (
+    `<svg class="wp-defs" width="0" height="0" aria-hidden="true" focusable="false">` +
+    `<defs>${open_.parts.join("")}</defs></svg>`
+  );
+}
+
+/** The body's markup, or a reference to it when a sheet is collecting. */
+function useOrInline(grid: Grid, pal: Palette, rim: boolean, body: Body): string {
+  if (!sheet) return body.svg;
+  const key = `${idOf(grid)}:${idOf(pal)}:${rim ? 1 : 0}`;
+  let id = sheet.ids.get(key);
+  if (!id) {
+    id = `wp-b${sheet.ids.size}`;
+    sheet.ids.set(key, id);
+    sheet.parts.push(`<g id="${id}">${body.svg}</g>`);
+  }
+  return `<use href="#${id}"/>`;
+}
+
 /** One grid as a standalone `<svg>`, sized to an exact integer multiple so edges stay hard. */
 export function draw(grid: Grid, pal: Palette, opts: DrawOptions = {}): string {
   const { scale = 2, outline: rim = true, fluid = false } = opts;
@@ -165,7 +223,7 @@ export function draw(grid: Grid, pal: Palette, opts: DrawOptions = {}): string {
   const size = fluid
     ? `width="100%" height="${body.h * scale}" preserveAspectRatio="none"`
     : `width="${body.w * scale}" height="${body.h * scale}"`;
-  return `${open(body.w, body.h, size, opts)}${body.svg}</svg>`;
+  return `${open(body.w, body.h, size, opts)}${useOrInline(grid, pal, rim, body)}</svg>`;
 }
 
 /** Two poses in ONE `<svg>`, stacked as groups the stylesheet flips between. A frame animation
@@ -180,7 +238,16 @@ export function drawFrames(
   const built = frames.map((g) => bodyOf(g, pal, rim));
   const w = Math.max(...built.map((b) => b.w));
   const h = Math.max(...built.map((b) => b.h));
-  const groups = built.map((b, i) => `<g class="wp-f wp-f${i}">${b.svg}</g>`).join("");
+  // The class goes on the element in the LIGHT dom. Put it inside the referenced body instead and
+  // every `.wp-f0` rule in the stylesheet stops matching, which is the whole sprite animation.
+  const groups = built
+    .map((b, i) => {
+      const ref = useOrInline(frames[i], pal, rim, b);
+      return ref.startsWith("<use")
+        ? ref.replace("<use ", `<use class="wp-f wp-f${i}" `)
+        : `<g class="wp-f wp-f${i}">${ref}</g>`;
+    })
+    .join("");
   return `${open(w, h, `width="${w * scale}" height="${h * scale}"`, opts)}${groups}</svg>`;
 }
 
