@@ -2,7 +2,7 @@
   "name": "interact",
   "displayName": "Interact",
   "description": "Interact \u2014 browser + desktop automation via an MCP server",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "preview": true,
   "publisher": "AlanBlanchet",
   "icon": "icon.png",
