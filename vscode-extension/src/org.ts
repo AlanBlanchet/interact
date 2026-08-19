@@ -122,3 +122,46 @@ export function orgTree(org: Org): OrgNode[] {
   }
   return nodes;
 }
+
+export interface SpawnChoice {
+  label: string;
+  description?: string;
+  detail?: string;
+}
+
+/** Who you can put to work, presented as the company rather than a directory listing.
+ *
+ *  The picker used to show `~/.claude/agents/<name>.md` beside each name, which is a file path,
+ *  not a colleague. With the org in hand it can say what the person DOES, which department they
+ *  sit in, and where they can actually run.
+ *
+ *  The definitions list stays the ground truth for what is runnable: an agent the org does not
+ *  mention is still offered, marked as unlisted, because a runnable agent made invisible by a
+ *  missing yaml row is a worse failure than an unlabelled row.
+ */
+export function spawnChoices(definitions: readonly string[], org: Org | null): SpawnChoice[] {
+  const plain: SpawnChoice = { label: "claude", description: "a plain agent, no definition" };
+  if (!org) {
+    return [plain, ...definitions.map((d) => ({ label: d }))];
+  }
+  const seats = new Map(orgTree(org).flatMap((d) => d.agents.map((a) => [a.name, { a, d }] as const)));
+  const ordered = orgTree(org)
+    .flatMap((d) => d.agents.map((a) => a.name))
+    .filter((n) => definitions.includes(n));
+  const unlisted = definitions.filter((d) => !seats.has(d));
+
+  return [
+    plain,
+    ...ordered.map((name) => {
+      const { a, d } = seats.get(name)!;
+      const where = a.providers.filter((p) => p.env).map((p) => p.id);
+      return {
+        label: name,
+        description: a.title ?? undefined,
+        detail: [d.id, a.seniority, where.length ? where.join("+") : "not wired anywhere"]
+          .filter(Boolean).join(" · "),
+      };
+    }),
+    ...unlisted.map((name) => ({ label: name, detail: "not in the company file" })),
+  ];
+}

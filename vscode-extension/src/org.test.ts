@@ -15,7 +15,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readOrg, orgTree, type Org } from "./org.ts";
+import { readOrg, orgTree, spawnChoices, type Org } from "./org.ts";
 
 const ORG: Org = {
   coordinator: { id: "main", title: "Main thread — session coordinator" },
@@ -102,4 +102,37 @@ test("wired and merely-designed providers are distinguishable per agent", () => 
   const seats = tree.flatMap((d) => d.agents);
   const nowhere = seats.filter((s) => !s.providers.some((p) => p.env)).map((s) => s.name);
   assert.deepEqual(nowhere, ["stray"]);
+});
+
+// --- hiring from the company, rather than from a list of filenames ---
+
+test("an agent that the company knows is offered with its title and department", () => {
+  const choices = spawnChoices(["tester", "researcher"], ORG);
+  const tester = choices.find((c) => c.label === "tester")!;
+
+  assert.equal(tester.description, "Test engineer");
+  assert.match(tester.detail!, /quality/);
+  assert.match(tester.detail!, /claude/);
+});
+
+test("a definition the company does not list is still offered", () => {
+  // The org file is hand-maintained and the agents directory is the ground truth for what can
+  // actually be RUN. Dropping an unlisted definition would make a real, runnable agent invisible
+  // because a yaml row is missing.
+  const choices = spawnChoices(["tester", "undocumented"], ORG);
+  const stray = choices.find((c) => c.label === "undocumented");
+
+  assert.ok(stray, "a runnable definition vanished because the org did not mention it");
+  assert.match(stray!.detail ?? "", /not in the company/);
+});
+
+test("choices are grouped by department, plain agent first", () => {
+  const labels = spawnChoices(["researcher", "tester"], ORG).map((c) => c.label);
+  assert.equal(labels[0], "claude", "the no-definition option stays first");
+  assert.deepEqual(labels.slice(1), ["tester", "researcher"], "quality before research, as declared");
+});
+
+test("with no company at all it is still just a list of definitions", () => {
+  const labels = spawnChoices(["a", "b"], null).map((c) => c.label);
+  assert.deepEqual(labels, ["claude", "a", "b"]);
 });

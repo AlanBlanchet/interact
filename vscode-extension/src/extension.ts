@@ -6,6 +6,7 @@ import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
+import { readOrg, spawnChoices } from "./org";
 import {
   KeyManager,
   formatLabel,
@@ -436,10 +437,13 @@ export async function activate(
           resolve(err ? [] : stdout.split("\n").map((n) => n.trim()).filter(Boolean));
         });
       });
+      // Presented as the COMPANY, not a directory listing: what the person does, which
+      // department they sit in, and where they can actually run. The definitions list stays the
+      // ground truth for what is runnable, so an agent the org file omits is still offered.
       const picked = await vscode.window.showQuickPick(
-        [{ label: "claude", description: "a plain agent, no definition" },
-         ...definitions.map((d) => ({ label: d, description: "~/.claude/agents/" + d + ".md" }))],
-        { title: "Which agent?", placeHolder: "the definition it will run as" },
+        spawnChoices(definitions, readOrg()),
+        { title: "Who should take this?", placeHolder: "the definition it will run as",
+          matchOnDetail: true },
       );
       if (!picked) return;
       const task = await vscode.window.showInputBox({
