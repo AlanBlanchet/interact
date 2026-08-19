@@ -186,3 +186,63 @@ def test_two_notes_between_the_SAME_pair_do_not_stack(page):
     assert spread["distinct"] == spread["runners"], (
         f"{spread['runners']} couriers between the same two people occupy "
         f"{spread['distinct']} position(s) — stacked, so a conversation looks like one note")
+
+
+# --- The chat panel's reliability, in a real browser -----------------------------------------
+#
+# "I want to be able to chat just like in claude code in vscode. And i still have none of that
+# that is actually reliable." Two failures that destroy typed text, both invisible to any test
+# that only builds strings:
+#   - a failed send used to clear the box before the send was confirmed;
+#   - a streaming update must not rebuild the document under someone who is mid-sentence.
+
+
+@pytest.fixture(scope="module")
+def chat_page(scene):
+    """The chat document, rendered from source with the host's API stubbed."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    render = Path("/tmp/chatrender.ts")
+    if not render.exists():
+        pytest.skip("the chat render fixture is not present")
+    subprocess.run(["node", "--experimental-strip-types", str(render)],
+                   check=True, capture_output=True)
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        pg = browser.new_page(viewport={"width": 420, "height": 600})
+        pg.goto("file:///tmp/chat/dark.html")
+        pg.wait_for_timeout(300)
+        yield pg
+        browser.close()
+
+
+def test_a_failed_send_returns_your_message(chat_page):
+    """It used to clear the box on submit, so a send to an agent that had ended left you a toast
+    and nothing else. Losing typed text is the one thing a chat box must never do."""
+    got = chat_page.evaluate(
+        """() => {
+          const box = document.getElementById('message');
+          box.value = 'a message I do not want to lose';
+          document.getElementById('composer').dispatchEvent(
+            new Event('submit', {cancelable: true}));
+          const emptied = box.value;
+          window.dispatchEvent(new MessageEvent('message', {data: {type: 'sent', ok: false}}));
+          return {emptied, restored: box.value};
+        }"""
+    )
+    assert got["emptied"] == "", "the box must empty instantly — a laggy chat feels broken"
+    assert got["restored"] == "a message I do not want to lose"
+
+
+def test_a_streaming_update_does_not_wipe_what_you_are_typing(chat_page):
+    """The panel patches the transcript while an agent works. Rebuilding the document instead
+    would destroy a half-written reply every time the agent said anything."""
+    got = chat_page.evaluate(
+        """() => {
+          const box = document.getElementById('message');
+          box.value = 'half-typed thought';
+          window.dispatchEvent(new MessageEvent('message',
+            {data: {type: 'transcript', html: '<p>new turn</p>'}}));
+          return box.value;
+        }"""
+    )
+    assert got == "half-typed thought"
