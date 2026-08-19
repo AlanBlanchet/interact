@@ -392,6 +392,24 @@ if (form) {
     const text = box.value.trimStart();
     if (text.startsWith("/")) openPalette(text); else closePalette();
   });
+  // "@" mentions a file. A webview cannot read the workspace, so it asks the extension to offer
+  // one and inserts whatever comes back — the same shape all three reference panels use, and the
+  // reason briefing an agent about a file no longer means typing a path from memory.
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "@") {
+      e.preventDefault();
+      vscode.postMessage({ type: "pickFile" });
+    }
+  });
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (msg && msg.type === "insert" && typeof msg.text === "string") {
+      const at = box.selectionStart ?? box.value.length;
+      box.value = box.value.slice(0, at) + msg.text + box.value.slice(at);
+      box.focus();
+      box.selectionStart = box.selectionEnd = at + msg.text.length;
+    }
+  });
   form.addEventListener("submit", (e) => { e.preventDefault(); send(); });
   // Enter sends, Shift+Enter makes a new line — the shape every chat box has.
   box.addEventListener("keydown", (e) => {

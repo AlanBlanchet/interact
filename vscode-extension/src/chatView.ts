@@ -49,6 +49,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // A command from the slash menu. Checked against the declared list rather than executed as
       // given: the webview renders agent output, so anything arriving from it is untrusted, and
       // running an arbitrary command id because a message said so would be a real hole.
+      if (msg?.type === "pickFile") void this.mentionFile();
       if (msg?.type === "command" && typeof msg.command === "string") {
         const known = CHAT_COMMANDS.find((c) => c.command === msg.command);
         if (!known) return;
@@ -106,6 +107,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null
         : null,
     });
+  }
+
+  /** Offer a workspace file and hand its path back to the composer.
+   *
+   *  The webview cannot enumerate the workspace, so "@" comes here. Paths are relative to the
+   *  folder, because that is what an agent working in that folder can actually open — an absolute
+   *  path from this machine is noise in a brief.
+   */
+  private async mentionFile(): Promise<void> {
+    const found = await vscode.workspace.findFiles("**/*", "**/{node_modules,.git,out,dist}/**", 2000);
+    if (found.length === 0) {
+      void vscode.window.showInformationMessage("No files in this workspace to mention.");
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      found.map((uri) => ({ label: vscode.workspace.asRelativePath(uri), uri })),
+      { title: "Mention a file", matchOnDescription: true },
+    );
+    if (picked) this.view?.webview.postMessage({ type: "insert", text: `@${picked.label} ` });
   }
 
   /** Open a file in an editor — a webview cannot, so it asks us to.
