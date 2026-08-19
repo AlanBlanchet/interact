@@ -142,6 +142,65 @@ def _keyboard_codes(ecodes) -> list[int]:
     return [getattr(ecodes, n) for n in names if hasattr(ecodes, n)]
 
 
+class XdotoolKeyError(RuntimeError):
+    """xdotool was handed a name X does not know, and dropped the key."""
+
+
+# Names interact accepts (and the uinput backend maps happily) that are NOT X keysyms. xdotool
+# resolves through XStringToKeysym, which is case-sensitive: `Return` exists, `enter` does not.
+# Handed an unknown name it prints "No such key name" and EXITS 0, so the key vanishes and the
+# caller is told it worked — the silent no-op behind #115's "confusing failure mode". Modifiers
+# are absent on purpose: ctrl/shift/alt/super are xdotool's own aliases and already resolve.
+_XDOTOOL_KEYSYMS = {
+    "enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape",
+    "tab": "Tab", "backspace": "BackSpace", "bksp": "BackSpace", "delete": "Delete",
+    "del": "Delete", "insert": "Insert", "home": "Home", "end": "End",
+    "pageup": "Prior", "pgup": "Prior", "pagedown": "Next", "pgdn": "Next",
+    "up": "Up", "down": "Down", "left": "Left", "right": "Right",
+    "space": "space", "menu": "Menu", "print": "Print", "pause": "Pause",
+    # The DOM-style vocabulary the browser side speaks. `window.py` carried a SECOND, case-
+    # sensitive table for exactly these; one translation now serves both backends, so a name
+    # cannot work on one path and vanish on the other.
+    "arrowup": "Up", "arrowdown": "Down", "arrowleft": "Left", "arrowright": "Right",
+}
+
+# Modifier spellings, normalised to the aliases xdotool resolves.
+_XDOTOOL_MODS = {
+    "ctrl": "ctrl", "control": "ctrl", "shift": "shift", "alt": "alt", "option": "alt",
+    "meta": "super", "super": "super", "cmd": "super", "command": "super", "win": "super",
+}
+
+
+def to_xdotool_key(name: str) -> str:
+    """Translate a key or chord into names X actually knows.
+
+    Only the FINAL key is translated — the modifiers in a chord are xdotool's own aliases and
+    resolve already. A name that is a keysym stays untouched (never mangle a caller who speaks X),
+    and a bare letter stays as it is, since `A` means shift+a to X while `a` means the letter.
+    """
+    mods, final = _parse_chord(name)
+    mapped = _XDOTOOL_KEYSYMS.get(final.lower())
+    if mapped is None:
+        # F1-F12 and friends are already keysyms; a single character is one too.
+        mapped = final
+    return "+".join([_XDOTOOL_MODS.get(m.lower(), m) for m in mods] + [mapped])
+
+
+def check_xdotool_key_output(name: str, output: str) -> None:
+    """Raise when xdotool reported it IGNORED the key.
+
+    It exits 0 in that case, so a normal returncode check reads a dropped keystroke as a success.
+    This is the difference between "the app ignored my key" and "the key was never sent" — the
+    ambiguity that made the reported bug so expensive to chase.
+    """
+    if "No such key name" in (output or ""):
+        raise XdotoolKeyError(
+            f"xdotool does not know a key called {name!r}, so nothing was sent. "
+            "Use an X keysym name (Return, Escape, Up, BackSpace) or one of the aliases "
+            "interact maps for you."
+        )
+
+
 def _parse_chord(name: str) -> tuple[list[str], str]:
     """Split a key spec like ``"ctrl+shift+a"`` into (held modifiers, final key) — the shared
     grammar for every backend that synthesises a chord (uinput, pynput). A bare ``"a"`` → ([], "a")."""

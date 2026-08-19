@@ -20,6 +20,7 @@ from pydantic import BaseModel, PrivateAttr, computed_field
 from interact.desktop.coords import CoordTransform
 from interact.desktop.cursor import Cursor
 from interact.desktop.video import _ffmpeg_grab_args, _VideoSession
+from interact.desktop.input import to_xdotool_key
 from interact.parsing import Parse
 from interact.state import Element, InteractiveElement
 
@@ -32,22 +33,6 @@ _TYPE_DELAY_MS = 12
 _DRAG_STEPS = 24  # Flutter needs a fine, slow pointer path for a kinetic drag/scroll (#13)
 _DRAG_STEP_DELAY = 0.015
 _LINE_RE = re.compile(r"(0x[0-9a-fA-F]+)\s+\"([^\"]+)\".*?(\d+)x(\d+)\+(-?\d+)\+(-?\d+)")
-_KEY_MAP = {
-    "Enter": "Return",
-    "ArrowDown": "Down",
-    "ArrowUp": "Up",
-    "ArrowLeft": "Left",
-    "ArrowRight": "Right",
-    "Backspace": "BackSpace",
-    "Delete": "Delete",
-    "Escape": "Escape",
-    "Tab": "Tab",
-    "Control": "ctrl",
-    "Shift": "shift",
-    "Alt": "alt",
-    "Meta": "super",
-}
-
 _SCROLL_BUTTON = {"down": 5, "up": 4, "left": 6, "right": 7}
 
 _SCREEN_WID = -1  # synthetic wid base for screen targets — a cache key, never a real X window
@@ -767,7 +752,13 @@ class DesktopWindow(BaseModel):
 
     @staticmethod
     def map_key(key: str) -> str:
-        parts = key.split("+")
-        return "+".join(_KEY_MAP.get(p, p) for p in parts)
+        """Translate a key or chord into names X actually knows.
+
+        This used to be a second, case-sensitive table living here: it mapped the DOM spelling
+        (``Enter``) and let the lowercase one (``enter``) fall through to xdotool, which does not
+        know it, prints "No such key name" and exits 0 — dropping the key in silence. One shared
+        translation now serves this path and the nested backend both.
+        """
+        return to_xdotool_key(key)
 
 

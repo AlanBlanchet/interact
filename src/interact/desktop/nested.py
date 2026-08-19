@@ -20,7 +20,7 @@ from interact.desktop.backend import (
     sandbox_child_env,
     write_sandbox_url_shims,
 )
-from interact.desktop.input import _BUTTONS
+from interact.desktop.input import _BUTTONS, check_xdotool_key_output, to_xdotool_key
 from interact.desktop.video import _VideoSession, _ffmpeg_grab_args
 
 
@@ -702,7 +702,19 @@ class NestedBackend(DesktopBackend):
         )
 
     def key(self, name: str) -> None:
-        self._xdotool("key", name)  # xdotool keysym syntax, e.g. "ctrl+a", "Return"
+        """Press a key or chord on the nested display.
+
+        Two things stand between a caller and a keystroke that actually lands. The name must be one
+        X knows — ``enter`` is not a keysym, ``Return`` is — and xdotool ANSWERS AN UNKNOWN NAME BY
+        IGNORING IT AND EXITING 0, so a plain returncode check reads a dropped key as a success.
+        That silent no-op is the confusing half of #115: nothing happens and nothing says why.
+        """
+        spec = to_xdotool_key(name)
+        proc = subprocess.run(
+            ["xdotool", "key", spec], env=self.env, check=True,
+            capture_output=True, text=True,
+        )
+        check_xdotool_key_output(name, (proc.stderr or "") + (proc.stdout or ""))
 
     def _window_id(self, name: str) -> str | None:
         """The wid of the window titled ``name``. A toolkit spawns several same-/substring-titled
