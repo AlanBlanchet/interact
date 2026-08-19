@@ -35,6 +35,9 @@ class ModelSpec(BaseModel):
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
     supports_response_schema: bool = False
+    #: How strong the model is, on the catalog's own scale. Present in models.json all along and
+    #: dropped on load, which is why nothing at runtime could order a chain by quality.
+    intelligence_score: float | None = None
     # Capability tags carried from the upstream catalog (litellm) into models.json, so a
     # model's behaviour (e.g. its grounding default) is DERIVED from a live source, not a
     # hardcoded list. See generate-models.py for how these are sourced.
@@ -186,6 +189,9 @@ class Model(RegistryMixin, BaseModel):
     capabilities: set[ModelCapability]
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
+    #: Capability score from the catalog — what best-first ordering sorts on. None for a model
+    #: nobody has scored, which sorts LAST rather than first: unknown is not the same as good.
+    intelligence_score: float | None = None
     supports_structured_output: bool = False
     coord_format: CoordFormat | None = None
 
@@ -218,6 +224,20 @@ class Model(RegistryMixin, BaseModel):
 
     def litellm_id(self) -> str:
         return self.id
+
+    def key_missing(self) -> bool:
+        """True only when we can PROVE this model cannot run: its provider is one we know, that
+        provider declares API keys, and they are absent.
+
+        Distinct from ``not is_available()``, which is also true for a provider we have never
+        heard of — a self-hosted endpoint, a local runner, any id outside the catalog. Treating
+        that as "cannot run" would let auto-selection quietly override somebody's pinned local
+        model, which is the opposite of respecting a choice they made.
+        """
+        keys = Model._provider_keys.get(self.provider)
+        if not keys:
+            return False  # unknown provider, or one that needs no key: not our call to overrule
+        return not all(os.environ.get(k) for k in keys)
 
     def is_available(self) -> bool:
         """Whether this model's API key is present in the environment.
@@ -373,6 +393,7 @@ class Model(RegistryMixin, BaseModel):
                         input_cost_per_million=model_spec.input_cost_per_million,
                         output_cost_per_million=model_spec.output_cost_per_million,
                         supports_structured_output=model_spec.supports_response_schema,
+                        intelligence_score=model_spec.intelligence_score,
                         coord_format=fmt,
                     )
                 )
@@ -697,10 +718,31 @@ class ModelChain(BaseModel):
     def from_config(
         cls, role: ModelRole, configured_model: str, recommendations: list[str]
     ) -> Self:
+        """The models to try for this role, strongest first.
+
+        The recommendation list is the candidate SET, not the order. It arrives ranked by a
+        cost-weighted score computed offline, which is how the default for image work came to be a
+        `flash` model even for someone paying for something far stronger. Reordering it by
+        capability — and leaving the membership alone — gives "best first" without letting a model
+        that cannot do the job (no video, no audio) into a chain it was excluded from: modality is
+        what the curated list encodes, and that still decides who is eligible.
+
+        A person's own pin always leads, whatever it scores. Ranking exists to choose when nobody
+        chose; overriding a stated choice with a "better" model is the same defect facing the
+        other way.
+        """
         seen: set[str] = set()
         preferences: list[Model] = []
 
-        for model_id in [configured_model] + recommendations:
+        ranked = sorted(
+            (m for m in (Model.from_litellm_id(i) for i in recommendations if i) if m),
+            # Strongest first; cheapest breaks a tie. An unscored model sorts LAST rather than
+            # first — a missing number is not evidence of quality, and sorting None high would
+            # hand the top of every chain to whatever the catalog knows least about.
+            key=lambda m: (-(m.intelligence_score or -1.0), m.cost_score),
+        )
+
+        for model_id in [configured_model, *(m.id for m in ranked)]:
             if not model_id or model_id in seen:
                 continue
             seen.add(model_id)

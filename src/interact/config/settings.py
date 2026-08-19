@@ -11,7 +11,7 @@ from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from interact.data import PackageData
-from interact.models import CircuitBreaker, ModelChain, ModelRole
+from interact.models import CircuitBreaker, Model, ModelChain, ModelRole
 
 DEFAULT_LIMIT = 50
 LOG_MAXLEN = 1000
@@ -208,12 +208,20 @@ class Config(BaseSettings):
         flowed all the way into the VLM call). Precedence:
 
         1. an explicit per-call ``override`` (the agent's ``model=`` argument),
-        2. else the configured pin (``model_for`` — honoured even if its key is missing, so a
-           bad pin surfaces a clear auth error rather than being silently swapped out),
-        3. else the first *available* model in the role's preference chain (key present, cheapest
-           ranked, skipping circuit-broken ones),
-        4. else the chain's top preference (so a missing key becomes a clear downstream auth
-           error, never an empty-id silent no-op).
+        2. else the configured pin, IF it can actually run (its key is present),
+        3. else the first available model in the role's preference chain — strongest first,
+           skipping circuit-broken ones,
+        4. else the pin, or failing that the chain's top preference, so a missing key becomes a
+           clear downstream auth error naming the model the person asked for, never an empty-id
+           silent no-op.
+
+        Step 2 used to return the pin unconditionally. The reasoning was that a bad pin should
+        surface a clear auth error rather than be silently swapped — but honouring an unusable
+        pin honours nothing: the error arrived from deep inside a vendor call, and no work got
+        done. Falling through to a model that CAN run is strictly more useful, and it is not
+        silent — ``interact doctor`` prints "⚠ key missing" beside the pin. It also matters
+        because the VS Code extension used to bake catalog defaults into the environment, which
+        made every user look "pinned" and disabled the walk entirely.
 
         Raises if the catalog is empty (no models.json and no litellm) — fail loud here, at the
         one resolution site, not by leaking a sentinel for deeper code to re-validate.
@@ -221,12 +229,18 @@ class Config(BaseSettings):
         if override:
             return override
         configured = self.model_for(role)
-        if configured:
-            return configured
         chain = self.chain_for(role)
+        # Honoured unless we can PROVE it cannot run. `key_missing` is deliberately narrower
+        # than `not is_available()`: the latter is also true for any id outside the catalog — a
+        # self-hosted endpoint, a local runner — and overriding one of those would be auto-
+        # selection quietly discarding a choice somebody made.
+        if configured and not Model.from_litellm_id(configured).key_missing():
+            return configured
         active = chain.active(breaker)
         if active is not None:
             return active.id
+        if configured:
+            return configured  # nothing can run: name what they asked for, not a substitute
         if chain.preferences:
             return chain.preferences[0].id
         raise RuntimeError(f"no model available for role {role!r}: empty model catalog")
@@ -243,8 +257,6 @@ class Config(BaseSettings):
         (`zai/`) and a Novita key (`novita/`) both light up GLM with no configuration."""
         if quality not in ("low", "medium"):
             return ""
-        from interact.models import Model
-
         candidates = (self.tier_sovereign_model,) if self.tier_sovereign_model else _SOVEREIGN_MODELS
         for candidate in candidates:
             if candidate and Model.from_litellm_id(candidate).is_available():

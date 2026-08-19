@@ -69,6 +69,7 @@ export interface Model {
   capabilities: ModelCapability[];
   input_cost_per_million?: number | null;
   output_cost_per_million?: number | null;
+  intelligence_score?: number | null;
   supports_structured_output?: boolean;
   coord_format?: CoordFormat | null;
 }
@@ -91,6 +92,7 @@ export interface ModelSpec {
   input_cost_per_million?: number | null;
   output_cost_per_million?: number | null;
   supports_response_schema?: boolean;
+  intelligence_score?: number | null;
   capabilities?: string[];
 }
 /**

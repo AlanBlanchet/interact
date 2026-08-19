@@ -85,17 +85,14 @@ function buildEnv(
 
   env["INTERACT_MODELS_JSON"] = JSON.stringify(modelsData);
 
-  if (modelsData.defaults) {
-    for (const [setting, envKey] of Object.entries(SETTING_ENV_MAP)) {
-      if (
-        setting in SETTING_TO_TASK &&
-        !env[envKey] &&
-        modelsData.defaults[setting]
-      ) {
-        env[envKey] = modelsData.defaults[setting];
-      }
-    }
-  }
+  // The catalog's `defaults` are NOT written into the environment. They used to be, and that one
+  // block defeated model selection entirely: interact reads these vars as a user's explicit pin,
+  // so every extension user looked pinned, the best-available walk never ran, and somebody with
+  // only an OpenAI key got a Gemini id and an auth error. Leaving them unset lets the server rank
+  // the catalog by capability and walk down to the first model actually configured — which is
+  // also how a stronger model gets used the moment its key is added, with nothing to reconfigure.
+  //
+  // A pin the PERSON chose still arrives here through keyManager/settings and still wins.
 
   return env;
 }
