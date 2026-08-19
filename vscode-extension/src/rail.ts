@@ -31,6 +31,14 @@ const RANK: Attention[] = ["error", "asked", "held", "finished", "working", "not
 export interface RailRun {
   run: AgentRun;
   attention: Attention;
+  /** The orchestrator — the first agent you asked, which put the others to work. Marked rather
+   *  than pinned to the top: this surface sorts by who NEEDS you, and a healthy boss must never
+   *  bury a crashed agent. */
+  brain: boolean;
+  /** 0 for a lead, 1 for somebody a lead sent out. The rail cannot replace the tree until it
+   *  shows the COMPANY rather than a flat list — a sub-agent floating loose beside its lead tells
+   *  you nothing about who is driving what. */
+  depth: number;
   /** What the row says about its state, in the reader's words rather than the registry's. */
   note: string;
 }
@@ -99,6 +107,23 @@ const NOTES: Record<Attention, string> = {
  *  the filesystem and of `vscode` — the same discipline as `agentsFormat.ts`, and what lets every
  *  decision below be tested without an extension host.
  */
+/** The orchestrator: the earliest ROOT run that is ours — the first agent you asked for
+ *  something, which then put the others to work.
+ *
+ *  DUPLICATED from `teamState.ts` on purpose, and the duplication is pinned by a test that runs
+ *  both against the same input. Neither module can import the other: both are loaded directly by
+ *  the test runner, which demands ".ts" specifiers that tsc refuses to emit, so a shared import
+ *  would make one of them untestable. Six lines copied beats a module that cannot be tested.
+ */
+export function brainOf(runs: readonly AgentRun[]): string | null {
+  const ours = runs.filter((r) => r.status !== "foreign");
+  const ids = new Set(ours.map((r) => r.run_id));
+  const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
+  if (!roots.length) return null;
+  return roots.reduce((first, r) =>
+    (r.started_at ?? Infinity) < (first.started_at ?? Infinity) ? r : first).run_id;
+}
+
 export function buildRail(
   runs: readonly AgentRun[],
   scope: string,
@@ -107,15 +132,45 @@ export function buildRail(
 ): Rail {
   const rows: RailRun[] = runs.map((run) => {
     const attention = attentionOf(run, idleOf(run), awaitingReply(run));
-    return { run, attention, note: NOTES[attention] };
+    return { run, attention, depth: 0, brain: false, note: NOTES[attention] };
   });
 
-  rows.sort((a, b) => {
+  const byAttention = (a: RailRun, b: RailRun) => {
     const byRank = RANK.indexOf(a.attention) - RANK.indexOf(b.attention);
     if (byRank !== 0) return byRank;
     // Within a band, most recently started first: the newest error is the one you have not seen.
     return (b.run.started_at ?? 0) - (a.run.started_at ?? 0);
-  });
+  };
+
+  // Leads first, each followed immediately by the people it sent out. A run whose lead is not in
+  // the list — its parent finished and was cleared — is a lead again rather than dropped, because
+  // hiding a live agent is the one thing a roster must never do.
+  const present = new Set(rows.map((r) => r.run.run_id));
+  const isLead = (r: RailRun) =>
+    !r.run.parent_run_id || !present.has(r.run.parent_run_id);
+  const reportsOf = new Map<string, RailRun[]>();
+  for (const row of rows.filter((r) => !isLead(r))) {
+    const under = reportsOf.get(row.run.parent_run_id!) ?? [];
+    under.push(row);
+    reportsOf.set(row.run.parent_run_id!, under);
+  }
+
+  const brainId = brainOf(runs);
+  // Leads sort by ATTENTION, not by rank. Pinning the brain to the top was tried and reverted:
+  // it contradicts what this surface is for — an agent that crashed outranks the orchestrator
+  // quietly working, and burying the crash under a healthy boss is the sort this replaced. The
+  // brain is MARKED instead, so you can find it without it displacing what needs you.
+  const leads = rows.filter(isLead).sort(byAttention);
+
+  const ordered: RailRun[] = [];
+  for (const lead of leads) {
+    ordered.push({ ...lead, brain: lead.run.run_id === brainId });
+    for (const report of (reportsOf.get(lead.run.run_id) ?? []).sort(byAttention)) {
+      ordered.push({ ...report, depth: 1 });
+    }
+  }
+  rows.length = 0;
+  rows.push(...ordered);
 
   const count = (...kinds: Attention[]) => rows.filter((r) => kinds.includes(r.attention)).length;
 

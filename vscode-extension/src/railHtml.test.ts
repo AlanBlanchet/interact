@@ -91,3 +91,20 @@ test("dim text never uses the raw description token", () => {
   assert.ok(!/color:\s*var\(--vscode-descriptionForeground\)/.test(doc),
     "raw descriptionForeground is sub-AA in light; pull it toward the foreground");
 });
+
+test("the orchestrator is marked on the surface, not just in the data", () => {
+  const doc = html([
+    run({ run_id: "boss", name: "main", started_at: 100 }),
+    run({ run_id: "kid", name: "tester", parent_run_id: "boss", started_at: 200 }),
+  ]);
+  assert.match(doc, /data-brain="1"/, "nothing tells you which one you steer from");
+  assert.ok(doc.includes(">brain<"));
+});
+
+test("a report is marked as one, so the roster reads as a company", () => {
+  const doc = html([
+    run({ run_id: "boss", name: "main", started_at: 100 }),
+    run({ run_id: "kid", name: "tester", parent_run_id: "boss", started_at: 200 }),
+  ]);
+  assert.match(doc, /data-report="1"/, "a sub-agent floats loose beside its lead");
+});

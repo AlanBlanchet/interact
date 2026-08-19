@@ -58,9 +58,11 @@ export function railHtml(rail: Rail, nonce: string): string {
     .join("");
 
   const rows = rail.runs.map((r) => `
-      <li class="row" data-run="${esc(r.run.run_id)}" data-attention="${esc(r.attention)}">
+      <li class="row" data-run="${esc(r.run.run_id)}" data-attention="${esc(r.attention)}"${
+        r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}>
         <span class="mark">${MARK[r.attention] ?? "●"}</span>
-        <span class="who">${esc(r.run.name || r.run.run_id.slice(0, 8))}</span>
+        <span class="who">${esc(r.run.name || r.run.run_id.slice(0, 8))}${
+          r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         <span class="note">${esc(r.note)}</span>
       </li>`).join("");
 
@@ -112,6 +114,18 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .who { font-weight: 500; overflow-wrap: break-word; }
+/* A report is indented under the lead that sent it, so the roster reads as a company rather than
+   a flat list — you can see who is driving what. */
+.row[data-report] { padding-left: 26px; }
+.row[data-report] .mark { opacity: .75; }
+/* The orchestrator is MARKED, never pinned to the top: this list sorts by who needs you, and a
+   healthy boss must not bury a crashed agent. */
+.brain {
+  margin-left: 6px; padding: 0 5px;
+  font-size: .85em; border-radius: 8px;
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-panel-border, var(--vscode-descriptionForeground));
+}
 .note { color: ${DIM}; overflow-wrap: break-word; }
 /* Attention reads by SHAPE first; colour only reinforces it. */
 .row[data-attention="error"] .mark { color: var(--vscode-charts-red); }

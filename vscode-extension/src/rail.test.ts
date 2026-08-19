@@ -10,7 +10,8 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { attentionOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS } from "./rail.ts";
+import { attentionOf, brainOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS } from "./rail.ts";
+import { buildTeam } from "./teamState.ts";
 
 const run = (over: Record<string, unknown> = {}) => ({
   run_id: "r", name: "worker", provider: "claude", status: "running", started_at: 100, ...over,
@@ -135,4 +136,71 @@ test("junk does nothing at all", () => {
     railRoute(junk, { run: mark, open: mark });
   }
   assert.equal(touched, false);
+});
+
+// The rail cannot replace the tree until it shows the COMPANY, not just a flat list: who sent
+// whom, and who is at the head of it. "A lot of transparency" is that — a roster where a
+// sub-agent floats loose beside its lead tells you nothing about who is driving what.
+test("the brain is MARKED, and never displaces what needs you", () => {
+  // Pinning it to the top was tried and reverted: this surface sorts by who needs you, and a
+  // healthy orchestrator burying a crashed agent is exactly the sort the rail replaced.
+  const built = buildRail([
+    run({ run_id: "boss", status: "running", started_at: 100 }),
+    run({ run_id: "worker", status: "failed", started_at: 900 }),
+  ], "x", () => 0);
+  assert.equal(built.runs[0].run.run_id, "worker", "the crash still leads");
+  assert.equal(built.runs.find((r) => r.run.run_id === "boss")?.brain, true);
+  assert.equal(built.runs.find((r) => r.run.run_id === "worker")?.brain, false);
+});
+
+test("a report sits under its lead, not loose beside it", () => {
+  const built = buildRail([
+    run({ run_id: "boss", status: "running", started_at: 100 }),
+    run({ run_id: "kid", status: "running", parent_run_id: "boss", started_at: 200 }),
+    run({ run_id: "other", status: "running", started_at: 300 }),
+  ], "x", () => 0);
+  // Adjacency is the claim, not position: leads are still ordered by who needs you, so which
+  // lead comes first depends on their state. What must hold is that a report is never separated
+  // from the lead that sent it.
+  const order = built.runs.map((r) => `${r.run.run_id}@${r.depth}`);
+  const bossAt = order.indexOf("boss@0");
+  assert.ok(bossAt >= 0, `boss missing from ${order.join(" ")}`);
+  assert.equal(order[bossAt + 1], "kid@1", "the report must follow its lead immediately");
+});
+
+test("a report whose lead is gone is a lead again, never lost", () => {
+  // Its parent finished and was cleared. Hiding it would drop a live agent off the roster.
+  const built = buildRail([
+    run({ run_id: "orphan", status: "running", parent_run_id: "vanished" }),
+  ], "x", () => 0);
+  assert.equal(built.runs.length, 1);
+  assert.equal(built.runs[0].depth, 0);
+});
+
+test("within one lead, its reports keep the attention order", () => {
+  const built = buildRail([
+    run({ run_id: "boss", status: "running", started_at: 100 }),
+    run({ run_id: "fine", status: "running", parent_run_id: "boss", started_at: 200 }),
+    run({ run_id: "broken", status: "crashed", parent_run_id: "boss", started_at: 300 }),
+  ], "x", () => 0);
+  assert.deepEqual(built.runs.map((r) => r.run.run_id), ["boss", "broken", "fine"]);
+});
+
+test("the rail and the workplace agree on who the brain is", () => {
+  // The rule is duplicated because neither module can import the other under the test loader.
+  // That is defensible only while the two answers are identical, so this pins it — if they ever
+  // diverge, the panel and the building would crown different agents.
+  const cases: unknown[][] = [
+    [run({ run_id: "a", started_at: 100 }), run({ run_id: "b", parent_run_id: "a", started_at: 200 })],
+    [run({ run_id: "late", started_at: 900 }), run({ run_id: "early", started_at: 100 })],
+    [run({ run_id: "mine", status: "foreign", started_at: 1 }), run({ run_id: "ours", started_at: 500 })],
+    [run({ run_id: "orphan", parent_run_id: "gone", started_at: 50 })],
+    [],
+  ];
+  for (const runs of cases) {
+    const fromRail = brainOf(runs as never[]);
+    const fromWorld = buildTeam(runs as never[], () => [], 2000).workers.find((w) => w.brain);
+    assert.equal(fromRail, fromWorld?.run_id ?? null,
+      `disagreement on ${JSON.stringify(runs.map((r) => (r as { run_id: string }).run_id))}`);
+  }
 });
