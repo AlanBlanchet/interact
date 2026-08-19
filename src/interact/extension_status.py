@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import zipfile
 from pathlib import Path
 
 from interact.server_registry import _process_start
@@ -166,6 +168,47 @@ def _run(argv: list[str], cwd: Path | None = None) -> tuple[int, str]:
         return 1, str(e)
 
 
+
+def _install_vsix(vsix: Path, version: str) -> bool:
+    """Unpack a packaged extension into the extensions directory, in place of `code`.
+
+    `code --install-extension` asks VS Code to reload its extension hosts, and that reload kills
+    whatever session requested it — exiting 0 through the graceful path, so it presents as an
+    unexplained crash rather than a consequence. The effect is perverse: the single step that
+    DELIVERS the work destroys the context doing it, so it keeps being postponed and the work stays
+    invisible. That is not hypothetical; it is how a full day of changes came to sit on disk unseen.
+
+    A .vsix is a zip whose payload lives under `extension/`. Writing those bytes into
+    `<extensions>/alanblanchet.interact-<version>/` is what the editor would have done anyway,
+    minus the reload signal: a NEW window loads it, and running windows keep the frozen snapshot
+    they were always going to keep. Replace rather than merge, so nothing survives from the version
+    being overwritten — a leftover file is one the host will happily load.
+    """
+    target = _extensions_dir() / f"alanblanchet.interact-{version}"
+    staging = target.with_name(target.name + ".incoming")
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(vsix) as z:
+            members = [m for m in z.namelist() if m.startswith("extension/") and not m.endswith("/")]
+            if not members:
+                print(f"{vsix.name} carries no extension/ payload")
+                return False
+            for m in members:
+                dest = staging / Path(m).relative_to("extension")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with z.open(m) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+    except (zipfile.BadZipFile, OSError) as e:
+        shutil.rmtree(staging, ignore_errors=True)  # never leave a half-unpacked extension behind
+        print(f"could not unpack {vsix.name}: {e}")
+        return False
+
+    # Swap only once the payload is complete, so a crash mid-unpack cannot leave a broken install.
+    shutil.rmtree(target, ignore_errors=True)
+    staging.rename(target)
+    return True
+
+
 def deliver_extension() -> bool:
     """Rebuild and install the extension when the installed one is older than this tree.
 
@@ -174,8 +217,10 @@ def deliver_extension() -> bool:
     once sat undelivered behind exactly that warning: the artifact on disk predated every change,
     so even a brand-new window showed the old product while every test passed.
 
-    NOT automatic, deliberately. Installing an extension makes VS Code reload its extension hosts,
-    which kills whatever session asked for it — so this runs only when somebody explicitly asks.
+    NOT automatic, deliberately — it rebuilds and replaces what the editor loads, so it runs only
+    when somebody explicitly asks. It no longer shells out to `code --install-extension`, though:
+    that asks VS Code to reload its extension hosts and kills the session that requested it, which
+    is precisely why delivery kept being postponed. See `_install_vsix`.
 
     Returns True only when a new package was actually installed; a failure at any step returns
     False and says why, because the failure this exists to prevent IS an unverified delivery.
@@ -195,8 +240,14 @@ def deliver_extension() -> bool:
         print("packaging reported success but produced no .vsix")
         return False
 
-    code, out = _run(["code", "--install-extension", str(vsix[0]), "--force"])
-    if code != 0:
-        print(f"could not install {vsix[0].name}: {out.strip()[-400:]}")
+    version = _tree_version()
+    if not version:
+        print("could not read the version from the extension manifest")
         return False
+    if not _install_vsix(vsix[0], version):
+        return False
+    print(
+        f"installed {vsix[0].name}. Running windows keep the code they started with — "
+        "fully close and reopen one to pick this up (a reload is served by the same host)."
+    )
     return True
