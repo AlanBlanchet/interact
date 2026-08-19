@@ -16,11 +16,62 @@ Coordinates are screen pixels; map other spaces in via :class:`interact.frames.F
 
 import glob
 import os
+import subprocess
 import time
+from collections.abc import Callable
 
 
 ABS_MAX = 32767
 _BUTTONS = {"left": 1, "middle": 2, "right": 3}
+
+# How long to wait for the X server to attach a freshly-created uinput node. Generous: the cost of
+# waiting is paid once per session, the cost of NOT waiting is a silently dropped chord (#115).
+_ATTACH_TIMEOUT = 2.0
+
+
+def _xinput_names() -> str:
+    """Device names X currently knows about, one per line. Empty when there is no X server or no
+    `xinput` — both normal (Wayland, headless CI), neither an error."""
+    return subprocess.check_output(
+        ["xinput", "list", "--name-only"], text=True, timeout=2, stderr=subprocess.DEVNULL
+    )
+
+
+def wait_for_device(
+    name: str,
+    timeout: float = _ATTACH_TIMEOUT,
+    interval: float = 0.02,
+    lister: Callable[[], str] | None = None,
+) -> bool:
+    """Block until the X server LISTS an input device called ``name``. Returns True once it does,
+    False if the wait ran out or X could not be asked.
+
+    This closes #115. A uinput node exists the moment ``UI_DEV_CREATE`` returns, but X and libinput
+    only learn about it later, through udev — and every event written in that window is discarded
+    by the kernel with no error whatsoever. Because ``key()`` writes the MODIFIERS first, they are
+    what falls in the gap; the target key follows a moment later, once the device is attached, and
+    lands alone. That is precisely the reported symptom: a declared chord arriving as a plain,
+    unmodified keystroke, in two apps with completely different input stacks.
+
+    Waiting on the CONDITION rather than a guessed sleep is what makes this both correct and free:
+    it returns the instant the device is really there, and it cannot silently under-wait on a slow
+    box the way a fixed delay does.
+
+    Never raises. No X server, no `xinput`, or a wait that times out all return False and let
+    injection proceed — a missing wait degrades to today's behaviour instead of breaking input on
+    machines where the check cannot run at all.
+    """
+    deadline = time.monotonic() + timeout
+    look = lister or _xinput_names
+    while True:
+        try:
+            if name in look():
+                return True
+        except Exception:
+            return False  # no X, no xinput, no answer — not confirmable, not fatal
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
 
 
 def screen_to_abs(
@@ -146,6 +197,13 @@ class UinputPointer:
             # confuses libinput's classification — so typing/keys get their own device.
             self._kbd = UInput({ecodes.EV_KEY: sorted(self._declared)},
                                name="interact-virtual-keyboard")
+            # Both nodes must be ATTACHED before anyone writes to them. The kernel accepts events
+            # into a device X has not picked up yet and drops them silently, which is #115: the
+            # modifiers of the first chord are written first, land in that window, and vanish.
+            # Waiting here (once, on the condition) is what makes the first chord as reliable as
+            # the hundredth. Pointer too — same race, same silent loss, just harder to notice.
+            wait_for_device("interact-virtual-keyboard")
+            wait_for_device("interact-virtual-pointer")
         except (PermissionError, FileNotFoundError) as exc:
             raise RuntimeError(
                 "cannot open /dev/uinput — add a udev rule and join the `input` group "
