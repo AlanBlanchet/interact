@@ -1,48 +1,106 @@
-/** The Agent Conversation panel — click an agent, read what it actually did.
+/** The full-size chat page: an agent's conversation, in the editor area, that you can REPLY from.
  *
- *  The sidebar answers "what is running"; this answers "what happened", as a conversation: the
- *  model's turns, every tool call WITH its arguments, and what each returned. That is the thing
- *  the tree's one-line summaries can never be.
+ *  This was a read-only transcript with `enableScripts: false`. So the BIG surface could not chat,
+ *  and the only place you could actually say anything to an agent was a webview crammed into a
+ *  ~292px sidebar. "The chat page shouldn't be small" is that, exactly: the roomy one was inert
+ *  and the live one had no room.
  *
- *  One panel, reused: clicking another agent retargets it rather than stacking editor tabs. It
- *  follows a live run by watching the registry, so an agent you open mid-flight keeps updating.
+ *  It now renders the SAME document as the sidebar (`chatDocument`), so the two surfaces cannot
+ *  drift into two different chats, and it accepts the same message contract (`chatAction`) rather
+ *  than growing a second, weaker copy of the untrusted-input rules.
+ *
+ *  One panel, reused: clicking another agent retargets it instead of stacking editor tabs.
  */
 import * as fs from "fs";
 import * as vscode from "vscode";
 
-import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { renderTranscript } from "./conversationFormat";
+import { readAgentActivity, readAgentRuns } from "./agents";
+import { CHAT_COMMANDS } from "./chatCommands";
+import { chatAction } from "./chatMessage";
+import { chatFiles } from "./chatFiles";
+import { chatDocument, isAwaitingReply } from "./conversationFormat";
+import { describeMode, knownModes, type PermissionMode } from "./permissionModes";
+import { interactCli } from "./interactCli";
+import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 import { agentsDir } from "./paths";
+import { scopeStore } from "./scopeStore";
+import { teamSpend } from "./teamSpend";
 
 export class ConversationPanel {
   private static current: ConversationPanel | undefined;
   private watcher: fs.FSWatcher | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private modes: PermissionMode[] = [];
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private runId: string,
   ) {
     this.panel.onDidDispose(() => this.dispose());
+    claimColumn("conversation", this.panel.viewColumn);
+    this.panel.webview.onDidReceiveMessage((msg) => this.receive(msg));
+    void knownModes().then((modes) => { this.modes = modes; this.render(); });
     this.watch();
     this.render();
   }
 
   static show(runId: string): void {
-    const column = vscode.ViewColumn.Beside; // beside your code, like a chat panel
     if (ConversationPanel.current) {
       ConversationPanel.current.runId = runId;
-      ConversationPanel.current.panel.reveal(column);
+      ConversationPanel.current.panel.reveal(ConversationPanel.current.panel.viewColumn);
       ConversationPanel.current.render();
       return;
     }
     const panel = vscode.window.createWebviewPanel(
       "interact.conversation",
       "Agent conversation",
-      column,
-      { enableScripts: false, retainContextWhenHidden: true },
+      nextColumn() as vscode.ViewColumn,
+      // Scripts ON, unlike before: this is a chat, and a chat you cannot type into is a
+      // transcript. The CSP still admits only the per-render nonce, and everything an agent
+      // wrote is escaped before it reaches the document.
+      { enableScripts: true, retainContextWhenHidden: true },
     );
     ConversationPanel.current = new ConversationPanel(panel, runId);
+  }
+
+  /** Point the open page at another agent — what clicking a row, or a body in the team, does. */
+  static reveal(runId: string): void {
+    ConversationPanel.show(runId);
+  }
+
+  private receive(message: unknown): void {
+    const action = chatAction(message, CHAT_COMMANDS);
+    if (!action) return;
+    if (action.kind === "send") return void this.send(action.text);
+    if (action.kind === "command") return void vscode.commands.executeCommand(action.command);
+    if (action.kind === "open") {
+      return void vscode.window.showTextDocument(vscode.Uri.file(action.path), { preview: true });
+    }
+    if (action.kind === "pickFile") return void this.mentionFile();
+  }
+
+  private async send(text: string): Promise<void> {
+    const run = readAgentRuns().find((r) => r.run_id === this.runId);
+    if (!run) return;
+    const { error } = await interactCli(["agents", "send", run.run_id, text]);
+    if (error) {
+      void vscode.window.showErrorMessage(`Could not reach ${run.name} — ${error}`);
+      return;
+    }
+    this.render(); // recorded on both sides, so it is already in the transcript
+  }
+
+  /** Offer a workspace file and hand its path to the composer, as the sidebar does. */
+  private async mentionFile(): Promise<void> {
+    const found = await vscode.workspace.findFiles(
+      "**/*", "**/{node_modules,.git,out,dist}/**", 2000);
+    if (!found.length) return;
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const picked = await vscode.window.showQuickPick(
+      found.map((f) => (folder ? f.fsPath.replace(`${folder}/`, "") : f.fsPath)).sort(),
+      { title: "Mention a file", placeHolder: "its path goes into your message" },
+    );
+    if (picked) void this.panel.webview.postMessage({ type: "mention", path: picked });
   }
 
   private watch(): void {
@@ -53,65 +111,36 @@ export class ConversationPanel {
       });
       this.watcher.on("error", () => {});
     } catch {
-      /* unwatchable → the panel is simply static */
+      /* unwatchable → the page is simply static */
     }
   }
 
   private dispose(): void {
     this.watcher?.close();
     if (this.timer) clearTimeout(this.timer);
+    releaseColumn("conversation");
     ConversationPanel.current = undefined;
   }
 
   private render(): void {
     const run = readAgentRuns().find((r) => r.run_id === this.runId);
     const turns = readAgentActivity(this.runId, 500);
-    this.panel.title = run ? `${run.name} — conversation` : "Agent conversation";
-    this.panel.webview.html = this.html(run, renderTranscript(turns));
-  }
-
-  private html(run: AgentRun | undefined, body: string): string {
-    const esc = (v: string) => v.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!);
-    const head = run
-      ? `<h1>${esc(run.name)}</h1>
-         <p class="meta">${esc(run.status)} · ${esc(run.provider)}${run.model ? ` · ${esc(run.model)}` : ""}
-         · ${run.cost_usd == null ? "—" : `~$${run.cost_usd.toFixed(4)}`} <span class="dim">API-equivalent</span></p>
-         ${run.task ? `<blockquote class="task">${esc(run.task)}</blockquote>` : ""}`
-      : "<h1>Agent conversation</h1>";
-    // Scripts are disabled outright (enableScripts:false) — a transcript is read, never driven,
-    // and agent output is untrusted text.
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<style>
- body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);
-      background:var(--vscode-editor-background);padding:16px 22px;line-height:1.5;
-      max-width:900px;margin:0 auto}
- h1{font-size:16px;margin:0 0 2px}
- .meta{color:color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4));font-size:12px;margin:0 0 12px}
- .dim{opacity:.7}
- .task{margin:0 0 18px;padding:8px 12px;border-left:2px solid var(--vscode-focusBorder);
-       background:var(--vscode-textBlockQuote-background);font-size:13px}
- .turn{margin:0 0 12px;padding-left:10px;border-left:2px solid transparent}
- .who{font-size:11px;text-transform:uppercase;letter-spacing:.04em;
-      color:color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4));margin-bottom:3px}
- .body{white-space:pre-wrap;word-break:break-word;margin:0;font-family:inherit}
- pre.body,pre.args{font-family:var(--vscode-editor-font-family);font-size:12px;
-      background:var(--vscode-textCodeBlock-background);padding:8px 10px;border-radius:4px;
-      overflow-x:auto;margin:0;
-      /* Args used to clip silently at a sidebar width, hiding the file_path — the one thing the
-         reader came for. Wrap instead of cutting. */
-      white-space:pre-wrap;word-break:break-word}
- /* Speech, machinery and reasoning must not look alike — that is what makes it a conversation. */
- .turn-text{border-left-color:var(--vscode-charts-blue)}
- .turn-tool{border-left-color:var(--vscode-charts-purple)}
- .turn-tool .who{color:var(--vscode-charts-purple)}
- /* The result carries its CALL's hue and sits indented beneath it, so the pair reads as one
-    exchange. Its old border measured 1.16:1 — invisible — and the two looked unrelated. */
- .turn-tool_result.result-of{border-left-color:var(--vscode-charts-purple);
-      margin-left:14px;opacity:.92}
- .turn-thinking{border-left-color:var(--vscode-charts-yellow);opacity:.8;font-style:italic}
- .turn-error{border-left-color:var(--vscode-charts-red)}
- .turn-done .who,.turn-started .who{color:var(--vscode-charts-green)}
-</style></head><body>${head}${body}</body></html>`;
+    this.panel.title = run ? `${run.name} — chat` : "Agent chat";
+    this.panel.webview.html = chatDocument({
+      nonce: Math.random().toString(36).slice(2) + Date.now().toString(36),
+      turns,
+      name: run?.name,
+      status: run?.status,
+      awaitingReply: isAwaitingReply(turns),
+      commands: CHAT_COMMANDS,
+      run: run
+        ? ({ ...run, permission: describeMode(run.permission_mode, this.modes) } as never)
+        : (run as never),
+      spend: teamSpend(scopeStore()?.runs() ?? readAgentRuns(), run?.run_id),
+      files: run ? chatFiles(run, agentsDir(), fs.existsSync) : [],
+      sentBy: run?.parent_run_id
+        ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null
+        : null,
+    });
   }
 }
