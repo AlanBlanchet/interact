@@ -358,3 +358,45 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
         f"{theme}: {len(result['hits'])} labels drawn over each other:\n  "
         + "\n  ".join(result["hits"][:8])
     )
+
+
+def test_nobody_stands_on_top_of_anybody(page):
+    """Passing through is fine; standing on each other is not.
+
+    Two reports of "crowding" in this scene turned out to be measurement artifacts — a screenshot
+    taken mid-walk, and a label check that counted invisible elements. The distinction that
+    actually matters is DURATION: two bodies crossing paths overlap for a moment, which is normal
+    in a tile world and cheaper than collision avoidance; two bodies sharing a spot for most of a
+    window are drawn on top of each other and one of them is invisible.
+
+    So this samples over time and fails only on a PAIR that persists, never on the instantaneous
+    count. A test that failed on any overlap at all would fail on a corridor.
+    """
+    samples, seen = 14, {}
+    for _ in range(samples):
+        for pair in page.evaluate(
+            """() => {
+              const a = [...document.querySelectorAll('.wp-actor')].map(el => {
+                const b = el.querySelector('.wp-body') || el;
+                const r = b.getBoundingClientRect();
+                return {id: el.getAttribute('data-run-id'),
+                        x: r.left, y: r.top, w: r.width, h: r.height};
+              }).filter(z => z.w && z.h);
+              const out = [];
+              for (let i = 0; i < a.length; i++)
+                for (let j = i + 1; j < a.length; j++) {
+                  const ox = Math.min(a[i].x+a[i].w, a[j].x+a[j].w) - Math.max(a[i].x, a[j].x);
+                  const oy = Math.min(a[i].y+a[i].h, a[j].y+a[j].h) - Math.max(a[i].y, a[j].y);
+                  if (ox > 3 && oy > 3) out.push([a[i].id, a[j].id].sort().join(' + '));
+                }
+              return out;
+            }"""
+        ):
+            seen[pair] = seen.get(pair, 0) + 1
+        page.wait_for_timeout(600)
+
+    stuck = {p: n for p, n in seen.items() if n >= samples * 0.8}
+    assert not stuck, (
+        "characters sharing a spot for most of the window — one of them cannot be seen:\n  "
+        + "\n  ".join(f"{p}: {n}/{samples} frames" for p, n in stuck.items())
+    )
