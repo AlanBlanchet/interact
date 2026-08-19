@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { AgentRun } from "./agents.ts";
-import { formatCost, formatElapsed, groupKeyFor, orderGroups, rowDescription } from "./agentsFormat.ts";
+import { formatCost, formatElapsed, groupKeyFor, orderGroups, rowDescription, statusIcon } from "./agentsFormat.ts";
 
 function run(over: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -103,4 +103,48 @@ test("a long message is clipped at a word, not mid-word", () => {
 
 test("a short message is left exactly as it is", () => {
   assert.equal(rowDescription({ ...base, last: "done", cost_usd: null }), "done");
+});
+
+// A session interact did not start reports a MODE, not an activity: `last` is "interactive" or
+// "background". Rendered through the normal path, its row read "interactive" where a team member's
+// reads "delegating the workplace view…" — a different KIND of word in the same column, which the
+// eye parses as an activity that never happened.
+test("a foreign session's row says whose it is, not its transport mode", () => {
+  const row = rowDescription({ last: "interactive", status: "foreign", foreign: true });
+  assert.doesNotMatch(row, /^interactive$/, "a mode label is not an activity");
+  assert.match(row, /your own|not started by interact/i);
+});
+
+test("a foreign session that IS doing something recognisable still says so", () => {
+  // Only the two known transport labels are replaced; anything else is real content.
+  const row = rowDescription({ last: "editing src/main.rs", status: "foreign", foreign: true });
+  assert.equal(row, "editing src/main.rs");
+});
+
+test("a team member's row is untouched by the foreign rule", () => {
+  assert.equal(rowDescription({ last: "interactive", status: "running" }), "interactive");
+});
+
+// The icon is what most rows are read by: the panel exists so state is obvious from the corner of
+// the eye. `foreign` and `stopped` shared one colour token and differed by glyph alone, so a LIVE
+// session of your own read as the same tier as a dead run. Untestable until now — the map lived in
+// agentsView.ts, which imports `vscode` and so cannot be loaded here at all.
+test("a foreign session does not wear the same colour as a stopped one", () => {
+  assert.notEqual(statusIcon("foreign").color, statusIcon("stopped").color,
+    "foreign is about ownership, not about being finished");
+});
+
+test("every status has an icon, and an unknown one falls back rather than blanking", () => {
+  for (const s of ["running", "done", "failed", "crashed", "stopped", "foreign"]) {
+    assert.ok(statusIcon(s).id, `${s} has no icon`);
+  }
+  assert.ok(statusIcon("something-new").id, "an unknown status must still render something");
+});
+
+test("only a running agent spins", () => {
+  // A spinner on anything else claims work is happening when it is not.
+  assert.match(statusIcon("running").id, /~spin$/);
+  for (const s of ["done", "failed", "crashed", "stopped", "foreign"]) {
+    assert.doesNotMatch(statusIcon(s).id, /~spin$/, `${s} spins`);
+  }
 });

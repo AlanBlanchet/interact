@@ -252,6 +252,16 @@
         "command": "interact.agents.broadcast",
         "title": "Interact: Message Every Running Agent\u2026",
         "icon": "$(megaphone)"
+      },
+      {
+        "command": "interact.agents.permissions",
+        "title": "Interact: Default Agent Autonomy\u2026",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "interact.showLogs",
+        "title": "Interact: Show Logs",
+        "icon": "$(output)"
       }
     ],
     "viewsContainers": {

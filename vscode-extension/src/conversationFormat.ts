@@ -234,6 +234,9 @@ export interface ChatRun {
   cost_usd?: number | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  /** How much this run was allowed to do on its own, in the words a person chose it by. Absent
+   *  when nobody chose, which is not the same as unrestricted and must not read like it. */
+  permission?: { label: string; unrestricted: boolean } | null;
 }
 
 export interface ChatDocument {
@@ -715,6 +718,14 @@ export function renderDetails(
     const share = spend.sharePercent != null ? ` · this one ${spend.sharePercent}%` : "";
     rows.push(["team", `~$${spend.total.toFixed(2)} over ${spend.agents} agent` +
       `${spend.agents > 1 ? "s" : ""}${spend.running ? `, ${spend.running} still running` : ""}${share}`]);
+  }
+  // Why this one stops to ask and that one just does it — the question a watcher asks about an
+  // agent in flight, unanswerable from the record until it was written down. Silence when nobody
+  // chose: "default" would state a policy that was never selected.
+  if (run.permission) {
+    rows.push(["autonomy", run.permission.unrestricted
+      ? `${run.permission.label} — acts without asking`
+      : run.permission.label]);
   }
   if (sentBy) rows.push(["sent by", sentBy]);
   rows.push(["provider", [run.provider, run.model].filter(Boolean).join(" · ") || "—"]);

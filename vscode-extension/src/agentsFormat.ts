@@ -10,6 +10,36 @@ import type { AgentRun } from "./agents";
 
 export type GroupBy = "project" | "provider" | "model" | "flat";
 
+export interface StatusIcon {
+  id: string;
+  color?: string;
+}
+
+/** Icon + theme colour per status.
+ *
+ *  `running` spins, so a live agent is obvious from the corner of the eye — the entire reason to
+ *  have a sidebar rather than a tab. Nothing else spins: a spinner on a finished run claims work
+ *  is happening when it is not.
+ *
+ *  `foreign` has its OWN colour rather than sharing `stopped`'s. The two differed by glyph alone,
+ *  so one of your own live sessions read at a glance as the same tier as a dead run. Foreign is
+ *  about OWNERSHIP — not ours to drive — never about being finished.
+ */
+const STATUS_ICON: Record<string, StatusIcon> = {
+  running: { id: "sync~spin", color: "charts.blue" },
+  done: { id: "pass-filled", color: "charts.green" },
+  failed: { id: "error", color: "charts.red" },
+  crashed: { id: "warning", color: "charts.orange" },
+  stopped: { id: "circle-slash", color: "descriptionForeground" },
+  foreign: { id: "circle-outline", color: "charts.purple" },
+};
+
+/** How a status should be drawn. An unknown one falls back to the foreign icon rather than
+ *  nothing: a row with no icon reads as a rendering fault, not as an unrecognised state. */
+export function statusIcon(status: string): StatusIcon {
+  return STATUS_ICON[status] ?? STATUS_ICON.foreign;
+}
+
 
 
 /** API-EQUIVALENT value: a subscription run already paid for it. `null` is UNKNOWN and renders an
@@ -56,6 +86,12 @@ export function orderGroups(groups: [string, AgentRun[]][]): [string, AgentRun[]
  */
 const ROW_WIDTH = 72;
 
+/** What a DISCOVERED session reports in `last` — how it is being driven, not what it is doing.
+ *  Rendered as-is it put a transport label in the column where every other row carries an activity
+ *  ("delegating the workplace view…"), so a foreign row read "interactive" and the eye parsed it
+ *  as work that never happened. */
+const TRANSPORT_LABELS = new Set(["interactive", "background"]);
+
 /** What a run's row says beside its name.
  *
  *  The last thing that happened gets the whole width when there IS one: elapsed time and cost are
@@ -66,8 +102,14 @@ export function rowDescription(run: {
   last?: string | null;
   status: string;
   cost_usd?: number | null;
+  foreign?: boolean;
 }): string {
   const said = (run.last ?? "").trim();
+  if (run.foreign && (!said || TRANSPORT_LABELS.has(said.toLowerCase()))) {
+    // Says whose it is instead. That IS the useful fact about a session interact did not start:
+    // you cannot drive it, and it is not part of the team's work or its cost.
+    return "your own session";
+  }
   if (!said) return `${run.status} · ${formatCost(run.cost_usd)}`;
   if (said.length <= ROW_WIDTH) return said;
   const cut = said.slice(0, ROW_WIDTH);

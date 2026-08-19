@@ -7,19 +7,23 @@ import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
 import { readOrg, spawnArgs, spawnChoices } from "./org";
+import { knownModes, modeChoices } from "./permissionModes";
 import {
   KeyManager,
   formatLabel,
   resolveCommand,
   ModelsData,
-  ModelInfo,
-  ProviderInfo,
   SETTING_ENV_MAP,
   SETTING_TO_TASK,
 } from "./shared";
 
 const SETTING_SECTION = "interact";
 const IS_SECRET_RE = /KEY|SECRET|TOKEN/i;
+
+/** The autonomy new agents get in THIS workspace. Per workspace because "what may an agent do
+ *  here" is a property of the repo you are in, not of the editor — and it APPLIES rather than
+ *  merely pre-selecting, which is what `/permissions` promises when it sets it. */
+const DEFAULT_MODE_KEY = "interact.agents.defaultPermissionMode";
 
 interface ModelSettingItem extends vscode.QuickPickItem {
   settingKey: string;
@@ -204,7 +208,7 @@ async function selectModel(
 
   const allModels: string[] = [];
   for (const [, info] of Object.entries(modelsData.providers)) {
-    for (const [name, meta] of Object.entries(info.models)) {
+    for (const name of Object.keys(info.models)) {
       if (recSet.has(name)) continue;
       allModels.push(name);
     }
@@ -374,7 +378,7 @@ export async function activate(
 
   // One workspace scope, shared by every view, so the tree and the building can never disagree
   // about which team you are looking at. Defaults to the folder you have open.
-  const scope = new ScopeStore(context.globalState);
+  const scope = new ScopeStore(context.globalState, log);
   const agentsProvider = new AgentsProvider(context.globalState);
   agentsProvider.scopeStore = scope;
   setScopeStore(scope);
@@ -488,8 +492,33 @@ export async function activate(
         ignoreFocusOut: true,
       });
       if (!task) return;
+      // How much this one may do on its own — the decision that makes a heterogeneous team
+      // possible rather than N copies of the same autonomy. Read from the CLI, never hardcoded:
+      // two copies of a vendor's flag values drift, and it is always this copy that drifts.
+      const modes = await knownModes();
+      // The workspace default — what `/permissions` set. It APPLIES; it does not merely float to
+      // the top of the picker. Those were two meanings of one setting in two files, and the
+      // command's own confirmation ("New agents here start with X") promised the first while the
+      // spawn path did the second: dismiss the picker and you silently got the CLI's default.
+      const workspaceDefault = context.workspaceState.get<string | null>(DEFAULT_MODE_KEY, null);
+      let permissionMode: string | null = workspaceDefault;
+      if (modes.length) {
+        const mode = await vscode.window.showQuickPick(modeChoices(modes, workspaceDefault), {
+          title: `How much may ${picked.label} do on its own?`,
+          placeHolder: workspaceDefault
+            ? `dismiss to keep this workspace's setting (${workspaceDefault})`
+            : "dismiss to leave your CLI's own setting alone",
+          matchOnDetail: true,
+        });
+        // Dismissing keeps the workspace default rather than choosing the first item: a picker
+        // whose top entry silently applies when you press Escape is a trap.
+        if (mode) {
+          permissionMode = mode.id;
+          await context.workspaceState.update(DEFAULT_MODE_KEY, mode.id);
+        }
+      }
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const args = spawnArgs({ task, agent: picked.label, cwd, org: readOrg() });
+      const args = spawnArgs({ task, agent: picked.label, cwd, org: readOrg(), permissionMode });
       execFile("interact", args, (err, stdout, stderr) => {
         const said = (stdout || stderr || "").trim();
         if (err) {
@@ -500,6 +529,32 @@ export async function activate(
         agentsProvider.refresh();
       });
     }),
+    // The autonomy a new agent gets here, set WITHOUT having to spawn one to be asked. A
+    // workspace-wide default is the setting people actually want: "in this repo, agents plan
+    // first" is a property of the repo, and choosing it per spawn is how you end up not choosing.
+    vscode.commands.registerCommand("interact.agents.permissions", async () => {
+      const modes = await knownModes();
+      if (!modes.length) {
+        void vscode.window.showInformationMessage(
+          "Interact: this agent CLI does not expose a permission setting we have verified.");
+        return;
+      }
+      const current = context.workspaceState.get<string | null>(DEFAULT_MODE_KEY, null);
+      const picked = await vscode.window.showQuickPick(modeChoices(modes, current), {
+        title: "How much may agents started here do on their own?",
+        placeHolder: current ? `currently: ${current}` : "currently: your CLI's own setting",
+        matchOnDetail: true,
+      });
+      if (!picked) return;
+      await context.workspaceState.update(DEFAULT_MODE_KEY, picked.id);
+      void vscode.window.showInformationMessage(
+        picked.id
+          ? `New agents here start with: ${picked.label.replace(/^\$\([^)]+\)\s*/, "")}.`
+          : "New agents here use your CLI's own setting.");
+    }),
+    // The log the extension already writes, made reachable from the panel rather than only from
+    // the Output dropdown — a place people look only after being told it exists.
+    vscode.commands.registerCommand("interact.showLogs", () => log.show(true)),
     // The team as a workplace: who is here, and what room the work has them in.
     vscode.commands.registerCommand("interact.agents.team", async () => {
       const { WorkplacePanel } = await import("./workplacePanel");

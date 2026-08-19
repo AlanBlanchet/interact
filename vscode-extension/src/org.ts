@@ -184,12 +184,20 @@ export function modelFor(agent: string, org: Org | null): string | null {
  *  question that matters and was previously only answerable by running a real agent.
  */
 export function spawnArgs(
-  opts: { task: string; agent: string; cwd?: string | null; org: Org | null },
+  opts: {
+    task: string;
+    agent: string;
+    cwd?: string | null;
+    org: Org | null;
+    /** How much autonomy to grant. Null/absent leaves the CLI's own default alone. */
+    permissionMode?: string | null;
+  },
 ): string[] {
   const args = ["agents", "spawn", opts.task];
   if (opts.agent !== "claude") args.push("--agent", opts.agent);
   const model = modelFor(opts.agent, opts.org);
   if (model) args.push("--model", model);
   if (opts.cwd) args.push("--cwd", opts.cwd);
+  if (opts.permissionMode) args.push("--permission-mode", opts.permissionMode);
   return args;
 }

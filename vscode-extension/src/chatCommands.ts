@@ -42,8 +42,13 @@ export const CHAT_COMMANDS: ChatCommand[] = [
     command: "interact.agents.showEvents", needsAgent: true },
   { slash: "/prompt", title: "System prompt", detail: "open this agent's definition",
     command: "interact.agents.openConversation", needsAgent: true },
+  { slash: "/permissions", title: "Default autonomy",
+    detail: "how much agents started here may do alone",
+    command: "interact.agents.permissions", needsAgent: false },
   { slash: "/dashboard", title: "Dashboard", detail: "usage, cost and models",
     command: "interact.openDashboard", needsAgent: false },
+  { slash: "/logs", title: "Logs", detail: "what the extension itself is doing",
+    command: "interact.showLogs", needsAgent: false },
   { slash: "/refresh", title: "Refresh", detail: "re-read the registry now",
     command: "interact.agents.refresh", needsAgent: false },
 ];

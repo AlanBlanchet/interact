@@ -175,3 +175,12 @@ test("a plain agent passes no --agent, and inherit passes no --model", () => {
   assert.deepEqual(spawnArgs({ task: "t", agent: "tester", cwd: null, org: inheriting }),
     ["agents", "spawn", "t", "--agent", "tester"]);
 });
+
+test("the permission flag is spelled exactly as the CLI parses it", () => {
+  // The other half of the seam: the CLI side is pinned by a Python test. Rename either and the
+  // panel silently spawns with the CLI's own default while reporting that it chose "plan" — for a
+  // safety control, doing something other than what the UI said is the worst available failure.
+  const args = spawnArgs({ task: "t", agent: "claude", cwd: null, org: ORG, permissionMode: "plan" });
+  assert.ok(args.includes("--permission-mode"), "the literal flag the CLI declares");
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "plan");
+});

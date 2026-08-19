@@ -32,6 +32,9 @@ export interface AgentRun {
    *  provider at registration — so the link works for a CLI that does not keep its definitions
    *  where Claude Code does. Absent on runs registered before it was tracked. */
   definition_path?: string | null;
+  /** The autonomy this run was started under, when somebody chose one. Absent means nobody did,
+   *  so the CLI's own configured default applied — which is not the same as unrestricted. */
+  permission_mode?: string | null;
   /** Cumulative token use: how much CONTEXT it has consumed, which a cost figure alone hides. */
   input_tokens?: number | null;
   output_tokens?: number | null;

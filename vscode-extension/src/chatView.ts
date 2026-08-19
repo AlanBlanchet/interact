@@ -10,8 +10,6 @@
  *  provider that cannot resume), and this must not drift from them.
  */
 import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
@@ -19,7 +17,8 @@ import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
 import { teamSpend } from "./teamSpend";
 import { scopeStore } from "./scopeStore";
-import { ChatFile, chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
+import { describeMode, knownModes, type PermissionMode } from "./permissionModes";
+import { chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -42,6 +41,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    // Asked once, not per render: the answer only changes when the CLI is upgraded, and a panel
+    // that shells out on every repaint is a panel that stutters while an agent is working. The
+    // memoisation lives in knownModes(), shared with the spawn picker and the workspace default —
+    // this was three shell-outs for one answer, with three different error handlings.
+    void knownModes().then((modes) => { this.modes = modes; });
     // `enableCommandUris` is what lets a file link actually open the file: without it VS Code
     // silently drops the command: href, which looks exactly like a dead button.
     view.webview.options = { enableScripts: true, enableCommandUris: true };
@@ -75,6 +79,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Which run the live document was built for. A different agent needs a new document; the SAME
    *  agent going on working needs only its transcript swapped. */
   private rendered: string | undefined;
+  /** The autonomy levels this machine's CLI offers, read once — turning an id recorded on a run
+   *  ("acceptEdits") into the words somebody chose it by ("May edit files"). */
+  private modes: PermissionMode[] = [];
 
   private render(): void {
     if (!this.view) return;
@@ -103,7 +110,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       name: run?.name,
       status: run?.status,
       awaitingReply: isAwaitingReply(turns),
-      run: run as never,
+      run: run
+        ? ({ ...run, permission: describeMode(run.permission_mode, this.modes) } as never)
+        : (run as never),
+      // What the whole TEAM is costing, not only the agent being read. Imported and then never
+      // called for a whole commit: the row rendered in the preview fixture, which passes its own
+      // spend, so every screenshot of it was real and meant nothing about the panel.
+      spend: teamSpend(scopeStore()?.runs() ?? readAgentRuns(), run?.run_id),
       files: run ? chatFiles(run, agentsDir(), fs.existsSync) : [],
       sentBy: run?.parent_run_id
         ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null

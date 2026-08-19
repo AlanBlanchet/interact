@@ -15,27 +15,16 @@
  *  needs the `vscode` module, which only exists inside the extension host.
  */
 import * as fs from "fs";
-import * as path from "path";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { GroupBy, formatCost, groupKeyFor, orderGroups, rowDescription } from "./agentsFormat";
+import { GroupBy, formatCost, groupKeyFor, orderGroups, rowDescription, statusIcon } from "./agentsFormat";
 import { agentsDir } from "./paths";
 import { orgTree, readOrg } from "./org";
 import type { ScopeStore } from "./scopeStore";
 
 export type { GroupBy };
 
-/** Icon + theme colour per status. `running` spins, so a live agent is obvious from the corner of
- *  the eye — which is the entire reason to have a sidebar rather than a tab. */
-const STATUS_ICON: Record<string, { id: string; color?: string }> = {
-  running: { id: "sync~spin", color: "charts.blue" },
-  done: { id: "pass-filled", color: "charts.green" },
-  failed: { id: "error", color: "charts.red" },
-  crashed: { id: "warning", color: "charts.orange" },
-  stopped: { id: "circle-slash", color: "descriptionForeground" },
-  foreign: { id: "circle-outline", color: "descriptionForeground" },
-};
 const GROUP_KEY = "interact.agents.groupBy";
 
 
@@ -245,7 +234,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       title: "Open agent chat",
       arguments: [run.run_id],
     };
-    const icon = STATUS_ICON[run.status] ?? STATUS_ICON.foreign;
+    const icon = statusIcon(run.status);
     node.iconPath = new vscode.ThemeIcon(
       icon.id,
       icon.color ? new vscode.ThemeColor(icon.color) : undefined,
