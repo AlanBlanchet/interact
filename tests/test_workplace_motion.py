@@ -334,3 +334,33 @@ def test_every_word_in_the_world_is_readable(scene, theme):
         if ratio < floor:
             failures.append(f"{item['cls']} at {item['size']:.0f}px: {ratio:.1f}:1 < {floor}")
     assert not failures, f"{theme} text below the readable floor:\n  " + "\n  ".join(failures)
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_the_rail_stays_readable_too(theme):
+    """The same measurement, on the panel rather than the world.
+
+    The rail grew two new text roles after its last contrast check — the per-row action glyphs
+    and the brain badge — which is exactly how a surface drifts under a floor: not in one big
+    change, but one small addition at a time, each looking fine against a dark backdrop.
+    """
+    playwright = pytest.importorskip("playwright.sync_api")
+    fixture = Path("/tmp/rail") / f"{theme}.html"
+    if not fixture.exists():
+        pytest.skip("the rail render fixture is not present")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        pg = browser.new_page(viewport={"width": 292, "height": 460})
+        pg.goto(fixture.as_uri())
+        pg.wait_for_timeout(250)
+        measured = pg.evaluate(_CONTRAST_JS.replace('[class^="wp-"], [class*=" wp-"]',
+                                                    ".scope,.counts,.who,.note,.chip,.act,.brain"))
+        browser.close()
+
+    assert measured, "no text found in the rail — the selectors have moved"
+    failures = [
+        f"{i['cls']} at {i['size']:.0f}px: {_ratio(i['fg'], i['bg']):.1f}:1"
+        for i in measured
+        if _ratio(i["fg"], i["bg"]) < (AA_LARGE if i["size"] >= 18 else AA_SMALL)
+    ]
+    assert not failures, f"rail {theme} below the readable floor:\n  " + "\n  ".join(failures)
