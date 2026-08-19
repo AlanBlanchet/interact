@@ -60,6 +60,20 @@ export interface Worker {
    *  or an older record may not have it — a view must not assume a clock exists. */
   started_at?: number | null;
   finished_at?: number | null;
+  /** The DOMAIN of work this one belongs to — the department its definition is filed under in the
+   *  company file (quality, production, research, records, wealth). The org already declared these
+   *  with rooms of their own and placement ignored every one, so a finance agent stood in the same
+   *  room as a code reviewer. Absent when the definition is in no department: a wrong room
+   *  silently merges unrelated work, which is worse than an unplaced character. */
+  department?: string;
+  /** That department's room name, as the company file words it ("Wealth Desk"). */
+  room?: string;
+  /** The orchestrator: the first agent YOU asked for something, which then put the others to
+   *  work. Exactly one per team, and never one of your own editor sessions — interact does not
+   *  drive those, so crowning one would claim an authority the view does not have. Without it
+   *  every character stood at the same rank, which is why the building read as a bag of sprites
+   *  rather than a company. */
+  brain?: boolean;
   /** What this one can actually DO, inherited from its own definition file — reads / writes /
    *  runs / sees / searches / delegates. Empty for a plain run with no definition: inventing a
    *  power for it would misreport what is loose in your workspace, which is the point of showing

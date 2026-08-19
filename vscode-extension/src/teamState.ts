@@ -210,6 +210,42 @@ function lastObservedAt(steps: Step[]): number | null {
  *  `stopped` reads as done rather than as an error: somebody halted it deliberately, and stamping
  *  that as a failure would be the same kind of wrong in the other direction.
  */
+/** The domain a run belongs to, or nothing.
+ *
+ *  Nothing rather than a guess: filing a character into the wrong room silently merges unrelated
+ *  work — the same reason `project_for` refuses to name a project it cannot derive. A resolver
+ *  that throws (no company file at all, which is the common case) leaves it unplaced.
+ */
+function placeByDomain(
+  agent: string | null | undefined,
+  resolve: (agent: string) => { id: string; room?: string | null } | null,
+): { department?: string; room?: string } {
+  if (!agent) return {};
+  try {
+    const found = resolve(agent);
+    if (!found) return {};
+    return found.room ? { department: found.id, room: found.room } : { department: found.id };
+  } catch {
+    return {};
+  }
+}
+
+/** Which run is the orchestrator — the first one YOU asked for something.
+ *
+ *  A ROOT (nobody sent it) that others report to, earliest first. Roots are ranked by start time
+ *  rather than by array order so the answer does not depend on how the filesystem happened to
+ *  list the records. Your own editor sessions are excluded: interact does not drive them, so
+ *  putting one at the head of the company would claim an authority this view does not have.
+ */
+function brainOf(runs: readonly RunLike[]): string | null {
+  const ours = runs.filter((r) => r.status !== "foreign");
+  const ids = new Set(ours.map((r) => r.run_id));
+  const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
+  if (!roots.length) return null;
+  return roots.reduce((first, r) =>
+    (r.started_at ?? Infinity) < (first.started_at ?? Infinity) ? r : first).run_id;
+}
+
 /** What a run can do, or nothing.
  *
  *  A resolver that throws — a missing or moved definition file — degrades to no faculties rather
@@ -250,7 +286,11 @@ export function buildTeam(
    *  which demands ".ts" specifiers that tsc refuses to emit. The parsing lives at the edge in
    *  `capabilities.ts`; this only carries the answer. */
   facultiesFor: (run: RunLike) => string[] = () => [],
+  /** The department an agent definition is filed under, resolved by the caller from the company
+   *  file. Injected for the same reason as the faculties: this module reads no files. */
+  departmentFor: (agent: string) => { id: string; room?: string | null } | null = () => null,
 ): TeamState {
+  const brainId = brainOf(runs);
   const workers: Worker[] = runs.map((run) => {
     const steps = recentSteps(run.run_id);
     const step = latestMeaningful(steps);
@@ -271,6 +311,8 @@ export function buildTeam(
       agent: run.agent ?? null,
       status: floorStatus(run.status),
       faculties: safeFaculties(run, facultiesFor),
+      brain: run.run_id === brainId,
+      ...placeByDomain(run.agent, departmentFor),
       // The whole window, not one step: a finished worker keeps the room it last worked in.
       zone: zoneOfSteps(steps, run.status, run.agent ?? null),
       // A session interact did not start gets named, never narrated: we do not read its stream,

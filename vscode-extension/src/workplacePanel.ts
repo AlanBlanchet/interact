@@ -18,6 +18,7 @@ import { renderScene, renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
 import { scopeStore } from "./scopeStore";
 import { facultiesOf, parseCapabilities } from "./capabilities";
+import { readOrg } from "./org";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 
 export class WorkplacePanel {
@@ -77,7 +78,22 @@ export class WorkplacePanel {
       // What each one can DO, read from its own definition file. The parsing lives in
       // capabilities.ts and the filesystem read lives HERE, at the edge, so teamState stays pure.
       (run) => WorkplacePanel.facultiesOfDefinition(run.definition_path),
+      // Which DOMAIN each one belongs to. The company file has declared these rooms all along —
+      // Quality & Critics, Production & Makers, Research, Records, the Wealth Desk — and nothing
+      // placed anybody by them, so a finance agent stood among the code reviewers.
+      (agent) => WorkplacePanel.departmentOf(agent),
     );
+  }
+
+  /** The department a definition is filed under, from the company file. Cached with the
+   *  faculties, for the same reason: the file changes when someone edits the org, not per frame. */
+  private static departmentOf(agent: string): { id: string; room?: string | null } | null {
+    const org = readOrg();
+    if (!org) return null;
+    const seat = org.agents.find((a) => a.name === agent);
+    if (!seat?.department) return null;
+    const dept = org.departments.find((d) => d.id === seat.department);
+    return { id: seat.department, room: dept?.room ?? null };
   }
 
   /** Everything else is pure; the one filesystem read for capabilities lives here. */

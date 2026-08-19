@@ -438,3 +438,89 @@ test("an unreadable definition degrades to no faculties, never to a crash", () =
   ).workers;
   assert.deepEqual(worker.faculties, []);
 });
+
+// "You could have a main brain kind of agent for the first agent we ask to do something."
+// The team has an orchestrator — the run YOU started, which then put everyone else to work — and
+// nothing in the world said so. Every character stood at the same rank, which is why the building
+// read as a bag of sprites rather than a company.
+test("the first agent you asked, that others report to, is the brain", () => {
+  const team = buildTeam([
+    { run_id: "boss", name: "main", status: "running", started_at: 100 },
+    { run_id: "kid", name: "tester", status: "running", parent_run_id: "boss", started_at: 200 },
+    { run_id: "kid2", name: "artist", status: "running", parent_run_id: "boss", started_at: 300 },
+  ] as never[], () => [], 2000);
+  const by = Object.fromEntries(team.workers.map((w) => [w.run_id, w]));
+  assert.equal(by.boss.brain, true);
+  assert.equal(by.kid.brain, false);
+  assert.equal(by.kid2.brain, false);
+});
+
+test("with several roots, the one that started first is the brain", () => {
+  // Two unrelated sessions both have no parent. The brain is the one whose work began the arc,
+  // not whichever the filesystem happened to list first.
+  const team = buildTeam([
+    { run_id: "later", name: "b", status: "running", started_at: 900 },
+    { run_id: "earlier", name: "a", status: "running", started_at: 100 },
+  ] as never[], () => [], 2000);
+  const by = Object.fromEntries(team.workers.map((w) => [w.run_id, w]));
+  assert.equal(by.earlier.brain, true);
+  assert.equal(by.later.brain, false);
+});
+
+test("one of your own editor sessions is never the brain", () => {
+  // interact does not drive it, so crowning it would claim an authority the view does not have.
+  const team = buildTeam([
+    { run_id: "mine", name: "my window", status: "foreign", started_at: 1 },
+    { run_id: "ours", name: "main", status: "running", started_at: 500 },
+  ] as never[], () => [], 2000);
+  const by = Object.fromEntries(team.workers.map((w) => [w.run_id, w]));
+  assert.equal(by.mine.brain, false);
+  assert.equal(by.ours.brain, true);
+});
+
+test("exactly one brain, ever", () => {
+  const team = buildTeam([
+    { run_id: "a", name: "a", status: "running", started_at: 100 },
+    { run_id: "b", name: "b", status: "running", started_at: 100 },
+    { run_id: "c", name: "c", status: "running", parent_run_id: "a", started_at: 200 },
+  ] as never[], () => [], 2000);
+  assert.equal(team.workers.filter((w) => w.brain).length, 1);
+});
+
+test("an empty team has no brain rather than a phantom one", () => {
+  assert.deepEqual(buildTeam([], () => [], 2000).workers, []);
+});
+
+// "You can split in room kind of things for each domain of work (for instance finance would be
+// elsewhere)." The org file already declares departments with rooms — Quality & Critics,
+// Production & Makers, Research & Intelligence, Office of Records, Wealth Desk — and placement
+// ignored every one of them, so a finance agent stood in the same room as a code reviewer.
+test("a worker carries the domain its definition belongs to", () => {
+  const [worker] = buildTeam(
+    [{ run_id: "r", name: "fiscal-auditor", agent: "fiscal-auditor", status: "running" } as never],
+    () => [], 2000, [], () => [],
+    (agent) => (agent === "fiscal-auditor"
+      ? { id: "wealth", room: "Wealth Desk" } : null),
+  ).workers;
+  assert.equal(worker.department, "wealth");
+  assert.equal(worker.room, "Wealth Desk");
+});
+
+test("an agent in no department claims none rather than being filed somewhere wrong", () => {
+  // A wrong room silently merges unrelated work, which is worse than an unplaced character.
+  const [worker] = buildTeam(
+    [{ run_id: "r", name: "main", agent: null, status: "running" } as never],
+    () => [], 2000, [], () => [], () => null,
+  ).workers;
+  assert.equal(worker.department, undefined);
+  assert.equal(worker.room, undefined);
+});
+
+test("a resolver that throws leaves the character unplaced, never crashes the building", () => {
+  const [worker] = buildTeam(
+    [{ run_id: "r", name: "x", agent: "x", status: "running" } as never],
+    () => [], 2000, [], () => [],
+    () => { throw new Error("no org file"); },
+  ).workers;
+  assert.equal(worker.department, undefined);
+});
