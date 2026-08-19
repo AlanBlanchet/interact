@@ -8,6 +8,7 @@ import * as fs from "fs";
 import * as vscode from "vscode";
 
 import { readAgentMessages, readAgentRuns } from "./agents";
+import { scopeStore } from "./scopeStore";
 import { agentsDir } from "./paths";
 import { buildSequence, renderSequence } from "./sequenceFormat";
 import { DIM_FOREGROUND } from "./themeTokens";
@@ -54,7 +55,10 @@ export class SequencePanel {
   }
 
   private render(): void {
-    const runs = readAgentRuns().filter((r) => !r.foreign); // your own editor windows are not team members
+    // Scoped, like the tree and the workplace. This read the whole machine, so switching
+    // workspace left the sequence drawing another folder's conversation.
+    const runs = (scopeStore()?.runs() ?? readAgentRuns())
+      .filter((r) => !r.foreign); // your own editor windows are not team members
     const seq = buildSequence(runs as never[], readAgentMessages());
     const live = runs.filter((r) => r.status === "running").length;
     this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">

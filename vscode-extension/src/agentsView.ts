@@ -125,7 +125,11 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
     const wired = new Set(
       org.agents.flatMap((a) => a.providers ?? []).filter((p) => org.providers[p]?.env),
     );
-    node.description = `${org.agents.length} agents · ${orgTree(org).length} departments` +
+    // ROLES, never "agents". This line sat directly above "No agents running", so the panel read
+    // "27 agents / no agents running" — two counts of one word, four lines apart, meaning roster
+    // seats and live runs. A first-timer reads that as a bug, and they are not wrong to.
+    node.description = `${org.agents.length} role${org.agents.length === 1 ? "" : "s"}` +
+      ` · ${orgTree(org).length} departments` +
       (wired.size ? ` · ${[...wired].join(", ")}` : "");
     node.iconPath = new vscode.ThemeIcon("organization");
     node.contextValue = "interactCompany";
@@ -163,15 +167,26 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
     });
   }
 
+  /** Every run this panel is showing, under the workspace scope in force.
+   *
+   *  ONE source for the whole tree. The headers used to read the scoped, discovery-merged set
+   *  while the rows inside them read the raw registry, so a header could say "sheets · 3 agents"
+   *  and expand to one row — the foreign sessions exist only in the merged set. A count that
+   *  disagrees with its own children is worse than no count.
+   */
+  private visibleRuns(): AgentRun[] {
+    return this.scopeStore ? this.scopeStore.runs() : readAgentRuns();
+  }
+
   private roots(): Node[] {
-    const runs = this.scopeStore ? this.scopeStore.runs() : readAgentRuns();
+    const runs = this.visibleRuns();
     // The COMPANY comes first, and is there whether or not anybody is running: a roster you can
     // only see while its members happen to be working is not a roster. It is where "we have way
     // more agents than are in the env" becomes visible — each one shows where it can actually run.
     const company = this.companyNode();
     if (runs.length === 0) {
-      const empty = new Node("No agents running", vscode.TreeItemCollapsibleState.None, "event");
-      empty.description = 'interact agents run "<task>"';
+      const empty = new Node("Nobody working yet", vscode.TreeItemCollapsibleState.None, "event");
+      empty.description = "start one from the toolbar above";
       empty.iconPath = new vscode.ThemeIcon("info");
       return company ? [company, empty] : [empty];
     }
@@ -200,7 +215,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
   }
 
   private runsFor(label: string): Node[] {
-    const all = readAgentRuns();
+    const all = this.visibleRuns();
     const ids = new Set(all.map((r) => r.run_id));
     return all
       .filter((r) => groupKeyFor(r, this.groupBy) === label)
@@ -212,13 +227,13 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
 
   /** The agents this run sent out. */
   private reportsFor(run: AgentRun): Node[] {
-    return readAgentRuns()
+    return this.visibleRuns()
       .filter((r) => r.parent_run_id === run.run_id)
       .map((r) => this.runNode(r));
   }
 
   private runNode(run: AgentRun): Node {
-    const hasReports = readAgentRuns().some((r) => r.parent_run_id === run.run_id);
+    const hasReports = this.visibleRuns().some((r) => r.parent_run_id === run.run_id);
     const hasActivity = hasReports || readAgentActivity(run.run_id, 1).length > 0;
     const node = new Node(
       run.name || run.run_id.slice(0, 8),

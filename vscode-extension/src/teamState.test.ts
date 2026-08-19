@@ -376,3 +376,29 @@ test("the default clock is seconds too, not Date.now()", () => {
   const team = buildTeam([] as never, () => [] as never);
   assert.ok(team.at < 2_000_000_000, `default clock looks like milliseconds: ${team.at}`);
 });
+
+// The floor and the tree must agree about a run that went wrong. `status` was cast straight from
+// the registry with `as Worker["status"]`, which silenced TypeScript over a genuine mismatch: the
+// registry says failed / crashed / stopped, the floor's stamp table only knows running / done /
+// error / foreign. So a CRASHED agent got no stamp at all — the tree drew it red while the floor
+// showed it as if nothing had happened.
+test("every status the registry can produce reaches the floor as one it understands", () => {
+  const REGISTRY_STATES = ["running", "done", "failed", "crashed", "stopped", "foreign"];
+  const FLOOR_STATES = new Set(["running", "done", "error", "foreign"]);
+  for (const status of REGISTRY_STATES) {
+    const [worker] = buildTeam(
+      [{ run_id: "r", name: "w", status } as never], () => [], 2000,
+    ).workers;
+    assert.ok(FLOOR_STATES.has(worker.status),
+      `${status} reaches the floor as ${worker.status}, which its stamp table cannot render`);
+  }
+});
+
+test("a run that failed or crashed is shown as an error, not as nothing", () => {
+  for (const status of ["failed", "crashed"]) {
+    const [worker] = buildTeam(
+      [{ run_id: "r", name: "w", status } as never], () => [], 2000,
+    ).workers;
+    assert.equal(worker.status, "error", `${status} does not read as an error on the floor`);
+  }
+});

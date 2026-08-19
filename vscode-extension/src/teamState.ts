@@ -195,6 +195,34 @@ function lastObservedAt(steps: Step[]): number | null {
 }
 
 
+/** The registry's status as the FLOOR understands it.
+ *
+ *  The registry says running / done / failed / crashed / stopped / foreign; the floor's stamp
+ *  table knows running / done / error / foreign. This was a bare `as` cast, which silenced
+ *  TypeScript over a real mismatch — a crashed agent arrived as "crashed", matched nothing, and
+ *  got NO stamp at all. The tree drew it red while the floor showed it as though nothing had
+ *  happened, which is the worse of the two lies: a supervisor scanning the building for trouble
+ *  saw none.
+ *
+ *  `stopped` reads as done rather than as an error: somebody halted it deliberately, and stamping
+ *  that as a failure would be the same kind of wrong in the other direction.
+ */
+export function floorStatus(status: string | undefined): Worker["status"] {
+  switch (status) {
+    case "failed":
+    case "crashed":
+      return "error";
+    case "running":
+    case "done":
+    case "foreign":
+      return status;
+    case "stopped":
+      return "done";
+    default:
+      return "done";
+  }
+}
+
 export function buildTeam(
   runs: RunLike[],
   recentSteps: (runId: string) => Step[],
@@ -219,7 +247,7 @@ export function buildTeam(
       run_id: run.run_id,
       name: run.name || run.run_id.slice(0, 8),
       agent: run.agent ?? null,
-      status: (run.status as Worker["status"]) ?? "done",
+      status: floorStatus(run.status),
       // The whole window, not one step: a finished worker keeps the room it last worked in.
       zone: zoneOfSteps(steps, run.status, run.agent ?? null),
       // A session interact did not start gets named, never narrated: we do not read its stream,

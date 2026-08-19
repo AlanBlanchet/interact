@@ -22,6 +22,7 @@ import {
   currencySymbol,
   COMMON_CURRENCIES,
 } from "./currency";
+import { scopeStore } from "./scopeStore";
 import { readAgentRuns, summarise, withDepth } from "./agents";
 import { describeAge as describeBoardAge, readLeaderboard } from "./leaderboard";
 import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Catalog } from "./catalog";
@@ -199,13 +200,13 @@ export class DashboardPanel {
     emitter: vscode.EventEmitter<void>,
   ): DashboardPanel {
     if (DashboardPanel.instance) {
-      DashboardPanel.instance.panel.reveal(vscode.ViewColumn.One);
+      DashboardPanel.instance.panel.reveal(vscode.ViewColumn.Beside);
       return DashboardPanel.instance;
     }
     const panel = vscode.window.createWebviewPanel(
       VIEW_TYPE,
       "Interact",
-      vscode.ViewColumn.One,
+      vscode.ViewColumn.Beside,
       {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(extensionUri, "out")],
@@ -559,7 +560,11 @@ export class DashboardPanel {
    *  honest view of the machine rather than only of our own children.
    */
   private agentsCell(): CellUpdate {
-    const runs = readAgentRuns();
+    // Under the workspace scope, like every other surface. "Showing every run on the machine,
+    // unscoped, is not an acceptable default" is a recorded decision, and this panel was quietly
+    // exempt from it — you switched workspace in the tree and the dashboard kept describing the
+    // folder you left.
+    const runs = scopeStore()?.runs() ?? readAgentRuns();
     if (runs.length === 0) {
       return {
         id: "agents",

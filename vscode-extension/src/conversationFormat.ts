@@ -308,17 +308,25 @@ export function chatDocument(
     `${c.needsAgent && !name ? ' data-needs-agent="1"' : ""}>` +
     `<b>${escapeHtml(c.slash)}</b><span>${escapeHtml(c.title)}</span>` +
     `<i>${escapeHtml(c.detail)}</i></li>`).join("");
-  const composer = name
-    ? `<form id="composer">
+  // ALWAYS rendered, agent or no agent. It used to appear only once you had selected somebody,
+  // which meant a resting panel offered no controls whatsoever: the tree's title icons are hidden
+  // until the pointer enters the header (VS Code shows `.pane-header > .actions` only on
+  // hover/focus, and clips the rest — there is no overflow menu), and this half contributed
+  // nothing at all. So on a cold start the whole panel had no visible way to reach the team, the
+  // workspace switcher, or anything else. Thirteen labelled commands live behind this button; the
+  // ones needing an agent already grey themselves out, which is a far better answer than hiding
+  // the entire surface.
+  const composer = `<form id="composer">
          <ul id="palette" role="listbox" aria-label="Commands" hidden>${menu}</ul>
-         <textarea id="message" rows="3" placeholder="Reply to ${escapeHtml(name)}…  (/ for commands)"
+         <textarea id="message" rows="3" ${name ? "" : "disabled "}placeholder="${
+           name ? `Reply to ${escapeHtml(name)}…  (/ for commands)`
+                : "Pick an agent to reply — or press / for the panel's commands"}"
                    aria-label="Message this agent"></textarea>
          <div class="controls">
            <button type="button" id="cmds" title="Commands">/</button>
-           <button type="submit">Send</button>
+           <button type="submit"${name ? "" : " disabled"}>Send</button>
          </div>
-       </form>`
-    : "";
+       </form>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

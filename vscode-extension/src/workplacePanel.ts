@@ -50,7 +50,9 @@ export class WorkplacePanel {
     const panel = vscode.window.createWebviewPanel(
       "interact.workplace",
       "Interact — Team",
-      vscode.ViewColumn.Active,
+      // Beside, never Active: Active takes over the editor group holding your code.
+      // Every sibling surface (sequence, conversation, dashboard) opens Beside now.
+      vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true },
     );
     WorkplacePanel.current = new WorkplacePanel(panel, log);

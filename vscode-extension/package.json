@@ -177,7 +177,8 @@
       },
       {
         "command": "interact.openDashboard",
-        "title": "Interact: Open Dashboard"
+        "title": "Interact: Open Dashboard",
+        "icon": "$(graph)"
       },
       {
         "command": "interact.reloadPanel",
@@ -296,39 +297,64 @@
     "menus": {
       "view/title": [
         {
-          "command": "interact.agents.workspace",
+          "command": "interact.agents.team",
           "when": "view == interactAgents.board",
           "group": "navigation@0"
         },
         {
           "command": "interact.agents.spawn",
           "when": "view == interactAgents.board",
-          "group": "navigation@0"
-        },
-        {
-          "command": "interact.agents.team",
-          "when": "view == interactAgents.board",
-          "group": "navigation@0"
-        },
-        {
-          "command": "interact.agents.sequence",
-          "when": "view == interactAgents.board",
-          "group": "navigation@0"
-        },
-        {
-          "command": "interact.agents.groupBy",
-          "when": "view == interactAgents.board",
           "group": "navigation@1"
         },
         {
-          "command": "interact.agents.refresh",
+          "command": "interact.agents.workspace",
           "when": "view == interactAgents.board",
           "group": "navigation@2"
         },
         {
-          "command": "interact.openDashboard",
+          "command": "interact.agents.refresh",
           "when": "view == interactAgents.board",
           "group": "navigation@3"
+        },
+        {
+          "command": "interact.agents.sequence",
+          "when": "view == interactAgents.board",
+          "group": "1_interact@0"
+        },
+        {
+          "command": "interact.agents.groupBy",
+          "when": "view == interactAgents.board",
+          "group": "1_interact@1"
+        },
+        {
+          "command": "interact.openDashboard",
+          "when": "view == interactAgents.board",
+          "group": "1_interact@2"
+        },
+        {
+          "command": "interact.agents.team",
+          "when": "view == interactAgents.chat",
+          "group": "navigation@0"
+        },
+        {
+          "command": "interact.agents.spawn",
+          "when": "view == interactAgents.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "interact.agents.pick",
+          "when": "view == interactAgents.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "interact.agents.sequence",
+          "when": "view == interactAgents.chat",
+          "group": "1_interact@0"
+        },
+        {
+          "command": "interact.openDashboard",
+          "when": "view == interactAgents.chat",
+          "group": "1_interact@1"
         }
       ],
       "view/item/context": [

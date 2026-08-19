@@ -31,12 +31,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   constructor(private readonly log: vscode.OutputChannel) {}
 
-  /** Point the panel at an agent — what clicking a row in the list does. */
+  /** Point the panel at an agent — what clicking a row in the list, or a body in the workplace,
+   *  does.
+   *
+   *  Reveals the CONTAINER first when the view has never resolved. `view?.show()` is a no-op
+   *  until VS Code has instantiated the webview, so clicking somebody in the team floor with the
+   *  panel closed did nothing at all, silently — the worst kind of dead control, because it looks
+   *  like the click missed.
+   */
   public show(runId: string): void {
     this.runId = runId;
     this.render();
-    // Reveal only on an explicit pick, so following a live run never steals the side bar.
-    void this.view?.show?.(true);
+    if (this.view) {
+      // Reveal only on an explicit pick, so following a live run never steals the side bar.
+      void this.view.show?.(true);
+      return;
+    }
+    void vscode.commands.executeCommand("interactAgents.chat.focus");
   }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
