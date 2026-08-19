@@ -12,6 +12,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { attentionOf, brainOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS } from "./rail.ts";
 import { buildTeam } from "./teamState.ts";
+import { actionsFor } from "./agentActions.ts";
 
 const run = (over: Record<string, unknown> = {}) => ({
   run_id: "r", name: "worker", provider: "claude", status: "running", started_at: 100, ...over,
@@ -108,7 +109,7 @@ test("junk is refused rather than guessed at", () => {
 test("a chip the rail offers runs its command", () => {
   const done: string[] = [];
   railRoute({ type: "command", command: "interact.agents.team" }, {
-    run: (c) => done.push(c), open: () => {},
+    run: (c) => done.push(c), open: () => {}, act: () => {},
   });
   assert.deepEqual(done, ["interact.agents.team"]);
 });
@@ -118,14 +119,14 @@ test("a command the rail does NOT offer runs nothing", () => {
   // "is it a real command" is not the test — "does this surface offer it" is.
   const done: string[] = [];
   for (const command of ["interact.agents.stop", "workbench.action.terminal.new", ""]) {
-    railRoute({ type: "command", command }, { run: (c) => done.push(c), open: () => {} });
+    railRoute({ type: "command", command }, { run: (c) => done.push(c), open: () => {}, act: () => {} });
   }
   assert.deepEqual(done, []);
 });
 
 test("clicking a row opens that run", () => {
   const opened: string[] = [];
-  railRoute({ type: "open", runId: "abc" }, { run: () => {}, open: (id) => opened.push(id) });
+  railRoute({ type: "open", runId: "abc" }, { run: () => {}, open: (id) => opened.push(id), act: () => {} });
   assert.deepEqual(opened, ["abc"]);
 });
 
@@ -133,7 +134,7 @@ test("junk does nothing at all", () => {
   let touched = false;
   const mark = () => { touched = true; };
   for (const junk of [null, undefined, 0, "open", {}, { type: "eval", code: "1" }]) {
-    railRoute(junk, { run: mark, open: mark });
+    railRoute(junk, { run: mark, open: mark, act: mark });
   }
   assert.equal(touched, false);
 });
@@ -202,5 +203,34 @@ test("the rail and the workplace agree on who the brain is", () => {
     const fromWorld = buildTeam(runs as never[], () => [], 2000).workers.find((w) => w.brain);
     assert.equal(fromRail, fromWorld?.run_id ?? null,
       `disagreement on ${JSON.stringify(runs.map((r) => (r as { run_id: string }).run_id))}`);
+  }
+});
+
+test("a row action names both the command and the agent it acts on", () => {
+  const acted: string[] = [];
+  railRoute({ type: "act", command: "interact.agents.stop", runId: "r7" },
+    { run: () => {}, open: () => {}, act: (c, id) => acted.push(`${c}@${id}`) });
+  assert.deepEqual(acted, ["interact.agents.stop@r7"]);
+});
+
+test("a row action with no agent, or an unoffered command, does nothing", () => {
+  const acted: string[] = [];
+  const h = { run: () => {}, open: () => {}, act: (c: string, id: string) => acted.push(c + id) };
+  railRoute({ type: "act", command: "interact.agents.stop" }, h);
+  railRoute({ type: "act", command: "workbench.action.terminal.new", runId: "r7" }, h);
+  railRoute({ type: "act", command: "interact.agents.broadcast", runId: "r7" }, h);
+  assert.deepEqual(acted, []);
+});
+
+test("every action a row can show is one the rail will accept", () => {
+  // The allowlist and the buttons live in modules that cannot import each other. If they drift,
+  // a visible control silently does nothing — so this pins them together.
+  for (const status of ["running", "done", "error", "foreign"]) {
+    for (const a of actionsFor({ run_id: "r", status, definition_path: "/d.md" } as never)) {
+      const routed: string[] = [];
+      railRoute({ type: "act", command: a.command, runId: "r" },
+        { run: () => {}, open: () => {}, act: (c) => routed.push(c) });
+      assert.deepEqual(routed, [a.command], `${status}/${a.id} is shown but refused`);
+    }
   }
 });

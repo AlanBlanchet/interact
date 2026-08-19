@@ -12,6 +12,7 @@
  */
 
 import type { Rail, RailHeader } from "./rail";
+import type { AgentAction } from "./agentActions";
 
 /** Kept in step with `themeTokens.ts` DIM_FOREGROUND, and inlined rather than imported so this
  *  module stays runtime-import-free for the test loader. `--vscode-descriptionForeground` is
@@ -52,7 +53,13 @@ const MARK: Record<string, string> = {
   "not-ours": "○",
 };
 
-export function railHtml(rail: Rail, nonce: string): string {
+export function railHtml(
+  rail: Rail,
+  nonce: string,
+  /** What each row can be asked to do. Passed in rather than imported so this module keeps no
+   *  runtime import — the test loader demands ".ts" specifiers that tsc refuses to emit. */
+  actionsFor: (run: Rail["runs"][number]["run"]) => AgentAction[] = () => [],
+): string {
   const chips = rail.chips
     .map((c) => `<button class="chip" data-command="${esc(c.command)}">${esc(c.label)}</button>`)
     .join("");
@@ -64,6 +71,9 @@ export function railHtml(rail: Rail, nonce: string): string {
         <span class="who">${esc(r.run.name || r.run.run_id.slice(0, 8))}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         <span class="note">${esc(r.note)}</span>
+        <span class="acts">${actionsFor(r.run).map((a) =>
+          `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
+          ` title="${esc(a.label)}">${a.mark}</button>`).join("")}</span>
       </li>`).join("");
 
   const empty = rail.runs.length
@@ -113,6 +123,17 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
   padding: 3px 10px; cursor: pointer;
 }
 .row:hover { background: var(--vscode-list-hoverBackground); }
+/* Actions sit on the row itself. They are filtered to the ones that would WORK, so nothing here
+   is ever a dead control — a dead menu item teaches you the whole menu is untrustworthy. */
+.acts { grid-column: 1 / -1; display: flex; gap: 2px; padding: 2px 0 0 22px; }
+.act {
+  font: inherit; line-height: 1; padding: 1px 5px;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: ${DIM}; cursor: pointer;
+}
+.act:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-foreground); border-color: var(--vscode-panel-border, transparent); }
+.act:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .who { font-weight: 500; overflow-wrap: break-word; }
 /* A report is indented under the lead that sent it, so the roster reads as a company rather than
    a flat list — you can see who is driving what. */
@@ -152,6 +173,13 @@ ${empty}
   });
   document.querySelectorAll(".row").forEach((r) => {
     r.addEventListener("click", () => api.postMessage({ type: "open", runId: r.dataset.run }));
+  });
+  document.querySelectorAll(".act").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      // Never let an action also open the row underneath it.
+      e.stopPropagation();
+      api.postMessage({ type: "act", command: b.dataset.command, runId: b.closest(".row").dataset.run });
+    });
   });
 </script>
 </body>

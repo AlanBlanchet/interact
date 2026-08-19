@@ -8,6 +8,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { buildRail } from "./rail.ts";
 import { railHtml, headerLine } from "./railHtml.ts";
+import { actionsFor } from "./agentActions.ts";
 
 const run = (over: Record<string, unknown> = {}) => ({
   run_id: "r1", name: "visual-critic", provider: "claude", status: "running", started_at: 100,
@@ -15,7 +16,7 @@ const run = (over: Record<string, unknown> = {}) => ({
 }) as never;
 
 const html = (runs: unknown[] = [run()], scope = "interact") =>
-  railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE");
+  railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE", (r) => actionsFor(r as never));
 
 test("every destination is in the document at rest, with its word", () => {
   // The defect this replaces: VS Code renders a view's title actions only while the pointer is in
@@ -107,4 +108,34 @@ test("a report is marked as one, so the roster reads as a company", () => {
     run({ run_id: "kid", name: "tester", parent_run_id: "boss", started_at: 200 }),
   ]);
   assert.match(doc, /data-report="1"/, "a sub-agent floats loose beside its lead");
+});
+
+test("each row carries the actions that would actually work on it", () => {
+  // "They should have actions for these. And we should show they actions in a ergonomic way."
+  // Built, tested, and consumed by nothing until now — the orphan pattern that has landed eight
+  // times in this repo.
+  const doc = html([run({ run_id: "live", name: "artist", status: "running" })]);
+  assert.match(doc, /data-action="stop"/, "a running agent can be stopped");
+  assert.match(doc, /data-action="message"/);
+  assert.match(doc, /data-action="transcript"/);
+});
+
+test("a finished agent offers no stop, so no control on screen is dead", () => {
+  const doc = html([run({ run_id: "over", name: "librarian", status: "done" })]);
+  assert.ok(!doc.includes('data-action="stop"'));
+  assert.match(doc, /data-action="transcript"/, "its transcript is always readable");
+});
+
+test("one of your own sessions can be read and nothing else", () => {
+  const doc = html([run({ run_id: "mine", name: "my window", status: "foreign" })]);
+  assert.ok(!doc.includes('data-action="message"'), "interact cannot drive it");
+  assert.ok(!doc.includes('data-action="stop"'));
+  assert.match(doc, /data-action="transcript"/);
+});
+
+test("every action carries a title, since a bare glyph is a guess", () => {
+  const doc = html([run({ run_id: "live", status: "running" })]);
+  for (const m of doc.matchAll(/<button class="act"[^>]*>/g)) {
+    assert.match(m[0], /title="/, `an action button with no title: ${m[0]}`);
+  }
 });

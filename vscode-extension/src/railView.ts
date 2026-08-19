@@ -15,6 +15,7 @@ import * as vscode from "vscode";
 import { readAgentActivity, readAgentRuns } from "./agents";
 import { buildRail, railRoute } from "./rail";
 import { railHtml } from "./railHtml";
+import { actionsFor } from "./agentActions";
 import { lastObservedAt } from "./teamState";
 import { scopeStore } from "./scopeStore";
 import { describeScope, projectFor } from "./workspaceScope";
@@ -34,6 +35,12 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       railRoute(msg, {
         run: (command) => void vscode.commands.executeCommand(command),
         open: (runId) => this.onOpen(runId),
+        // A row action names the agent it acts on, so the command operates on the character you
+        // clicked rather than on whatever happened to be selected elsewhere.
+        act: (command, runId) => {
+          const run = readAgentRuns().find((r) => r.run_id === runId);
+          if (run) void vscode.commands.executeCommand(command, { run });
+        },
       }),
     );
     view.onDidChangeVisibility(() => { if (view.visible) this.render(); });
@@ -70,6 +77,9 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       // A fresh nonce per render: the CSP admits only scripts carrying it, so nothing arriving in
       // an agent's output can execute even if the escaping were ever wrong.
       Math.random().toString(36).slice(2) + Date.now().toString(36),
+      // What each row offers, filtered to what would actually work on that agent — so no control
+      // drawn here is ever dead.
+      (run) => actionsFor(run as never),
     );
   }
 }

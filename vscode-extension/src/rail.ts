@@ -196,9 +196,24 @@ export function buildRail(
  *  and the chat view already validates the same way. Anything unrecognised produces null, which
  *  the caller ignores; guessing at a malformed message is how a webview becomes an exec surface.
  */
+/** The commands a ROW may run. Mirrors `agentActions.ts` and is pinned to it by a test — the two
+ *  cannot import each other under the test loader, and an allowlist that drifts from the buttons
+ *  either breaks a control or admits one nobody offered. */
+const ROW_COMMANDS = new Set([
+  "interact.agents.send",
+  "interact.agents.show",
+  "interact.agents.openConversation",
+  "interact.agents.showEvents",
+  "interact.agents.stop",
+]);
+
 export type RailAction =
   | { kind: "command"; command: string }
-  | { kind: "open"; runId: string };
+  | { kind: "open"; runId: string }
+  /** A per-row action: run this command AGAINST this agent. Carries the run id because the
+   *  commands it names all operate on one agent, and the panel must not act on whichever
+   *  happened to be selected. */
+  | { kind: "act"; command: string; runId: string };
 
 export function railAction(message: unknown): RailAction | null {
   if (!message || typeof message !== "object") return null;
@@ -209,6 +224,13 @@ export function railAction(message: unknown): RailAction | null {
   }
   if (msg.type === "open" && typeof msg.runId === "string" && msg.runId) {
     return { kind: "open", runId: msg.runId };
+  }
+  if (msg.type === "act" && typeof msg.command === "string" && typeof msg.runId === "string"
+      && msg.runId) {
+    // Checked against what a row may offer — the same rule as the chips, for the same reason:
+    // this surface renders agent output, so "it is a real command" is not the test.
+    return ROW_COMMANDS.has(msg.command)
+      ? { kind: "act", command: msg.command, runId: msg.runId } : null;
   }
   return null;
 }
@@ -222,11 +244,13 @@ export function railAction(message: unknown): RailAction | null {
 export interface RailHandlers {
   run: (command: string) => void;
   open: (runId: string) => void;
+  act: (command: string, runId: string) => void;
 }
 
 export function railRoute(message: unknown, handlers: RailHandlers): void {
   const action = railAction(message);
   if (!action) return;
   if (action.kind === "command") handlers.run(action.command);
+  else if (action.kind === "act") handlers.act(action.command, action.runId);
   else handlers.open(action.runId);
 }
