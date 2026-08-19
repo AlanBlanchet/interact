@@ -237,6 +237,9 @@ export interface ChatRun {
 }
 
 export interface ChatDocument {
+  /** What the whole team is costing and this agent's share. Passed in for the same reason the
+   *  commands are: this module stays import-free so its test can load it directly. */
+  spend?: { total: number; agents: number; running: number; sharePercent: number | null };
   /** What the panel can DO, not just say. Passed in rather than imported so this module stays
    *  import-free — its test loads it directly under --experimental-strip-types, which needs `.ts`
    *  specifiers that tsc refuses when emitting. The list itself lives in `chatCommands.ts`. */
@@ -281,7 +284,7 @@ export function transcriptFragment(
 }
 
 export function chatDocument(
-  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands }: ChatDocument,
+  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend }: ChatDocument,
 ): string {
   const header = name
     ? `<header><span class="who">${escapeHtml(name)}</span>` +
@@ -291,7 +294,7 @@ export function chatDocument(
     ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
     : "";
   const body = name
-    ? renderDetails(run, files, sentBy) + renderTranscript(turns) + pending
+    ? renderDetails(run, files, sentBy, spend) + renderTranscript(turns) + pending
     : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
   // The panel could only SEND. Everything else you might want to do with the agent you are
   // reading — stop it, start another, open the team, change workspace — lived in a tree context
@@ -700,10 +703,19 @@ export function renderDetails(
   run: ChatRun | undefined,
   files: ChatFile[] | undefined,
   sentBy?: string | null,
+  spend?: { total: number; agents: number; running: number; sharePercent: number | null },
 ): string {
   if (!run) return "";
   const rows: [string, string][] = [];
   if (run.agent) rows.push(["definition", run.agent]);
+  // What the TEAM is costing, not only this one. The budget question is never about a single
+  // agent, and this panel is where somebody watching the team actually looks. Equivalent spend,
+  // as everywhere in interact: on a subscription run it is not billed again.
+  if (spend && spend.agents > 0) {
+    const share = spend.sharePercent != null ? ` · this one ${spend.sharePercent}%` : "";
+    rows.push(["team", `~$${spend.total.toFixed(2)} over ${spend.agents} agent` +
+      `${spend.agents > 1 ? "s" : ""}${spend.running ? `, ${spend.running} still running` : ""}${share}`]);
+  }
   if (sentBy) rows.push(["sent by", sentBy]);
   rows.push(["provider", [run.provider, run.model].filter(Boolean).join(" · ") || "—"]);
   rows.push([

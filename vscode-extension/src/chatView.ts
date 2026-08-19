@@ -17,6 +17,8 @@ import * as vscode from "vscode";
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
+import { teamSpend } from "./teamSpend";
+import { scopeStore } from "./scopeStore";
 import { ChatFile, chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
 import { agentsDir } from "./paths";
 
