@@ -113,16 +113,36 @@ export function turnClass(kind: string): string {
  *  infrastructure is kept out of the turn stream entirely — it belongs in the header. */
 const NOT_A_TURN = new Set(["rate_limit", "started", "done", "other"]);
 
-/** Long output has to be cut HERE. The panel runs with scripts disabled (agent output is
- *  untrusted), so a click-to-expand can never be retrofitted — an uncut 50-line result is simply
- *  a wall the reader scrolls past. Keep the head, say what was hidden. */
-const MAX_LINES = 14;
+/** How much of a long block is shown before it folds. The rest is one click away, not gone.
+ *
+ *  This used to CUT at 14 lines and say how many were hidden, justified by a comment claiming the
+ *  panel runs with scripts disabled so expansion "can never be retrofitted". That was stale — the
+ *  document carries a nonce'd script — and it was never needed anyway: `<details>` is a native
+ *  disclosure that needs no script at all. Truncating a tool result to fourteen lines and offering
+ *  no way to see the rest is exactly the wall it was trying to avoid.
+ */
+const FOLD_AFTER_LINES = 14;
+/** Also fold on sheer length: a tool result is frequently ONE enormous line of JSON, which has no
+ *  newlines to count and so sailed past the line check and filled the panel. */
+const FOLD_AFTER_CHARS = 1200;
 
-function clipLines(text: string): string {
+/** Escaped HTML for a block, folding the tail into a native disclosure when it is long. */
+function foldLongOutput(text: string): string {
   const lines = text.split("\n");
-  if (lines.length <= MAX_LINES) return text;
-  const hidden = lines.length - MAX_LINES;
-  return `${lines.slice(0, MAX_LINES).join("\n")}\n… ${hidden} more line${hidden > 1 ? "s" : ""}`;
+  if (lines.length > FOLD_AFTER_LINES) {
+    const head = escapeHtml(lines.slice(0, FOLD_AFTER_LINES).join("\n"));
+    const rest = escapeHtml(lines.slice(FOLD_AFTER_LINES).join("\n"));
+    const hidden = lines.length - FOLD_AFTER_LINES;
+    return `${head}<details class="more"><summary>${hidden} more line${hidden > 1 ? "s" : ""}` +
+      `</summary>${rest}</details>`;
+  }
+  if (text.length > FOLD_AFTER_CHARS) {
+    const hidden = text.length - FOLD_AFTER_CHARS;
+    return `${escapeHtml(text.slice(0, FOLD_AFTER_CHARS))}` +
+      `<details class="more"><summary>${hidden} more characters</summary>` +
+      `${escapeHtml(text.slice(FOLD_AFTER_CHARS))}</details>`;
+  }
+  return escapeHtml(text);
 }
 
 const LABEL: Record<string, string> = {
@@ -163,7 +183,7 @@ export function renderTurn(turn: Turn): string {
   // Agents write Markdown by habit, and the chat printed it literally — a verdict arrived as a
   // wall of asterisks. Rendered only for what an agent SAYS; a tool result is machine output and
   // stays verbatim in its pre.
-  const escaped = escapeHtml(clipLines(raw));
+  const escaped = foldLongOutput(raw);
   const body = turn.kind === "tool_result" ? escaped : renderMarkdown(escaped);
   const tag = turn.kind === "tool_result" ? "pre" : "div";
   // `result-of` marks the result as belonging to the call above it, so the two read as one unit
@@ -428,20 +448,51 @@ const STYLE = `
   .turn .body strong { font-weight: 700; color: var(--wp-fg); }
   .turn .body a { color: var(--vscode-textLink-foreground); }
   .turn-thinking { color: var(--wp-dim); font-style: italic; }
-  /* Machine surfaces sit on the wall colour with an ink edge — the room's own panels. */
+  /* Machine detail RECEDES. It used to wear the same wall-and-ink panel as a spoken message, so
+     a tool call and something you actually said were four identical grey plates — and the
+     assistant's own prose, which carries no plate at all, was the quietest thing on a screen whose
+     whole job is the conversation. The hierarchy was upside down: loudest for the machine,
+     nothing for the voice. Now a tool is a quiet inset with a rule down its left, prose is the
+     unadorned primary flow, and a spoken turn is the only thing that gets a plate. */
   .turn-tool, .turn-tool_result { font-family: var(--vscode-editor-font-family);
-           background: var(--wp-wall); border: 1px solid var(--wp-line); padding: .4em .6em;
+           font-size: .92em; color: var(--wp-dim);
+           border-left: 2px solid var(--wp-line); padding: .15em 0 .15em .6em;
            white-space: pre-wrap; overflow-wrap: break-word; }
+  .turn-tool .who, .turn-tool_result .who { font-size: 9px; }
+  /* A call and its result are ONE thing. The markup has said so since it was written — the result
+     carries a result-of class — but no rule ever targeted it, so the two sat a full inter-turn gap apart
+     with a broken rule between them, reading as two unrelated blocks. Closing the gap and running
+     the rule through is the whole of what the comment always claimed. */
+  .turn-tool { margin-bottom: 0; }
+  .turn.result-of { margin-top: 0; padding-top: 0; }
+  .turn.result-of .who { padding-top: .25em; }
   /* The container's pre-wrap is INHERITED, and the UA stylesheet's own pre{white-space:pre}
      beats an inherited value on the element itself — so a <pre> inside these blocks kept running
      off the panel. At a 300px side bar that cuts a tool's path or result mid-word, which is the
      one surface the tools are here to show. */
   .turn-tool pre, .turn-tool_result pre, .turn .body pre, pre.args {
            white-space: pre-wrap; overflow-wrap: break-word; margin: 0; }
-  .turn-error { color: var(--vscode-errorForeground); }
-  /* What YOU or another agent said: a plate, like a worker's speech in the room. */
-  .turn-message, .turn-prompt { background: var(--wp-wall); border: 1px solid var(--wp-line);
+  /* An error is the one turn most worth noticing, and it had nothing but a hue shift on the body
+     text — its label stayed the same dim grey as every other label, so it read as ordinary prose.
+     Given the same weight as a voice, in the error colour rather than the accent. */
+  .turn-error { color: var(--vscode-errorForeground);
+           background: color-mix(in srgb, var(--vscode-errorForeground, #e06c75) 9%, var(--wp-bg));
+           border: 1px solid color-mix(in srgb, var(--vscode-errorForeground, #e06c75) 38%, var(--wp-bg));
+           border-left-width: 3px; padding: .4em .6em; }
+  .turn-error .who { color: var(--vscode-errorForeground); }
+  /* A VOICE — you, or another agent talking to this one. The one thing on this surface that is
+     somebody speaking, so it is the one thing that gets a plate, and it carries the accent down
+     its edge so it cannot be mistaken for a machine panel at a glance. */
+  .turn-message, .turn-prompt {
+           background: color-mix(in srgb, var(--vscode-focusBorder, #4f9cf5) 10%, var(--wp-bg));
+           border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, #4f9cf5) 34%, var(--wp-bg));
+           border-left-width: 3px;
            box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .4em .6em; }
+  .turn-message .who, .turn-prompt .who {
+           color: color-mix(in srgb, var(--vscode-focusBorder, #4f9cf5) 62%, var(--wp-fg)); }
+  /* The fold on a long block: a quiet control, not another plate. */
+  .more > summary { cursor: pointer; color: var(--wp-dim); font-size: .92em; padding: .1em 0; }
+  .more[open] > summary { margin-bottom: .2em; }
 
   .details { margin: 0 0 .8em; font-size: .95em; }
   .details summary { cursor: pointer; color: var(--wp-dim); letter-spacing: .04em; }
@@ -470,8 +521,11 @@ const STYLE = `
   textarea { resize: vertical; font: inherit; color: var(--vscode-input-foreground);
              background: var(--vscode-input-background);
              border: 1px solid var(--wp-line); padding: .4em; }
+  /* Measured at 55x19px, which is under every published hit-target floor. A mouse-driven desktop
+     surface makes that low-stakes rather than harmless — it is still the control this panel exists
+     to be used through. */
   button { align-self: flex-end; font: inherit; cursor: pointer; border: 1px solid var(--wp-ink);
-           box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .35em 1em;
+           box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .6em 1.2em; min-height: 32px;
            color: var(--vscode-button-foreground); background: var(--vscode-button-background);
            letter-spacing: .08em; text-transform: uppercase; font-size: 11px; font-weight: 600; }
   button:hover { background: var(--vscode-button-hoverBackground); }
@@ -557,6 +611,6 @@ export function renderDetails(
   const links = (files ?? []).length
     ? `<div class="grid files">${(files ?? []).map(fileLink).join("")}</div>`
     : "";
-  return `<details class="details"><summary>about this agent</summary>
+  return `<details class="details" open><summary>about this agent</summary>
     <div class="grid">${table}</div>${brief}${links}</details>`;
 }

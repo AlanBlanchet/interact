@@ -337,7 +337,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "bash scripts/generate-types.sh && node scripts/sync-data.js && tsc -p ./ && tsc -p webview/tsconfig.json && node -e \"try{require('fs').cpSync('src/models.json','out/models.json')}catch{}\" && node -e \"try{require('fs').cpSync('src/benchmarks.json','out/benchmarks.json')}catch{}\" && node -e \"try{require('fs').cpSync('src/settings.json','out/settings.json')}catch{}\" && npm run build:webview && npm run build:workplace",
+    "compile": "npm run check-css && bash scripts/generate-types.sh && node scripts/sync-data.js && tsc -p ./ && tsc -p webview/tsconfig.json && node -e \"try{require('fs').cpSync('src/models.json','out/models.json')}catch{}\" && node -e \"try{require('fs').cpSync('src/benchmarks.json','out/benchmarks.json')}catch{}\" && node -e \"try{require('fs').cpSync('src/settings.json','out/settings.json')}catch{}\" && npm run build:webview && npm run build:workplace",
     "build:webview": "esbuild webview/app.tsx --bundle --outfile=out/webview.js --format=iife --target=es2022 --jsx=automatic --jsx-import-source=. && cp webview/styles.css out/webview.css",
     "watch": "tsc -watch -p ./",
     "package": "npm run compile && npx @vscode/vsce package",
@@ -346,7 +346,8 @@
     "generate-benchmarks": "uv run --project .. python scripts/generate-benchmarks.py",
     "test:vscode": "npm run compile && tsc -p tsconfig.test.json && vscode-test",
     "build:workplace": "esbuild webview/workplace/index.ts --bundle --outfile=out/workplace.js --format=cjs --platform=node --target=es2022",
-    "test": "node --test --experimental-strip-types src/*.test.ts"
+    "test": "node --test --experimental-strip-types src/*.test.ts",
+    "check-css": "node scripts/check-css-templates.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
