@@ -15,7 +15,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readOrg, orgTree, spawnChoices, modelFor, type Org } from "./org.ts";
+import { readOrg, orgTree, spawnChoices, modelFor, spawnArgs, type Org } from "./org.ts";
 
 const ORG: Org = {
   coordinator: { id: "main", title: "Main thread — session coordinator" },
@@ -156,4 +156,22 @@ test("'inherit' is not a model — it means take the session's", () => {
 test("an agent the company does not know has no declared model", () => {
   assert.equal(modelFor("nobody", ORG), null);
   assert.equal(modelFor("tester", null), null);
+});
+
+test("the spawn argv carries the agent, its declared model, and the folder", () => {
+  const org: Org = { ...ORG, agents: ORG.agents.map((a) =>
+    a.name === "tester" ? { ...a, model: "claude-sonnet-5" } : a) };
+
+  assert.deepEqual(spawnArgs({ task: "check it", agent: "tester", cwd: "/w", org }),
+    ["agents", "spawn", "check it", "--agent", "tester", "--model", "claude-sonnet-5", "--cwd", "/w"]);
+});
+
+test("a plain agent passes no --agent, and inherit passes no --model", () => {
+  const inheriting: Org = { ...ORG, agents: ORG.agents.map((a) =>
+    a.name === "tester" ? { ...a, model: "inherit" } : a) };
+
+  assert.deepEqual(spawnArgs({ task: "t", agent: "claude", cwd: null, org: ORG }),
+    ["agents", "spawn", "t"]);
+  assert.deepEqual(spawnArgs({ task: "t", agent: "tester", cwd: null, org: inheriting }),
+    ["agents", "spawn", "t", "--agent", "tester"]);
 });

@@ -177,3 +177,19 @@ export function modelFor(agent: string, org: Org | null): string | null {
   if (!model || model === "inherit" || model === "default") return null;
   return model;
 }
+
+/** The argv for starting an agent, so the flags are checkable without spawning anything.
+ *
+ *  Built here rather than inline in the command because "which flags did we actually pass" is the
+ *  question that matters and was previously only answerable by running a real agent.
+ */
+export function spawnArgs(
+  opts: { task: string; agent: string; cwd?: string | null; org: Org | null },
+): string[] {
+  const args = ["agents", "spawn", opts.task];
+  if (opts.agent !== "claude") args.push("--agent", opts.agent);
+  const model = modelFor(opts.agent, opts.org);
+  if (model) args.push("--model", model);
+  if (opts.cwd) args.push("--cwd", opts.cwd);
+  return args;
+}
