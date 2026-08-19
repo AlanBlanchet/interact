@@ -5,6 +5,7 @@ its detected coords are region-relative, so input must add the monitor origin to
 right screen. These are display-free unit tests (xrandr/maim mocked); the real e2e is opt-in.
 """
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -358,3 +359,164 @@ def test_resolve_nested_unknown_title_lists_sandbox_windows(monkeypatch):
     monkeypatch.setattr(DesktopWindow, "find_in", classmethod(lambda cls, be, title: None))
     win, mgr, err = srv._resolve_target("nested:missing", "default")
     assert win is None and isinstance(err, str) and "xclock" in err
+
+
+# --- A blank capture has TWO causes, and naming only one sends people the wrong way -----------
+#
+# Issue #113: a VS Code window had CRASHED ("The window terminated unexpectedly"), and per-window
+# capture returned uniform black. The error named a GPU surface and prescribed picom / adb — a
+# confident diagnosis of the wrong problem. The reporter's own fix was `target="screen"`, which
+# the message never mentioned, and they burned two capture rounds and ~30s waiting for a window
+# that was never coming back.
+
+
+def _black_png() -> bytes:
+    import io
+
+    from PIL import Image as PILImage
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", (40, 40), "black").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _blank_capture(monkeypatch, *, pid: str | None, alive: bool):
+    """A window whose every capture path comes back uniform, with a chosen liveness answer."""
+    black = _black_png()
+
+    def fake(cmd, *a, **k):
+        if cmd[0] == "xdotool":
+            if "getwindowpid" in cmd:
+                if pid is None:
+                    raise subprocess.CalledProcessError(1, cmd)
+                return f"{pid}\n"
+            return "WIDTH=388\nHEIGHT=863\nX=0\nY=0\n"
+        return black
+
+    monkeypatch.setattr("interact.desktop.subprocess.check_output", fake)
+    monkeypatch.setattr("interact.desktop.window._pid_alive", lambda _pid: alive)
+
+
+def test_a_blank_capture_of_a_DEAD_window_says_the_window_is_gone(monkeypatch):
+    """The process behind it no longer exists, so no compositor setting will ever help."""
+    from interact.desktop import CaptureError
+
+    _blank_capture(monkeypatch, pid="4242", alive=False)
+    win = DesktopWindow(name="interact - Visual Studio Code", wid=123, x=0, y=0, w=388, h=863)
+    with pytest.raises(CaptureError) as exc:
+        win.capture()
+    msg = str(exc.value)
+    assert "no longer running" in msg or "not running" in msg, msg
+    assert "GPU" not in msg, "a dead window is not a GPU-surface problem — do not say it is"
+    assert "4242" in msg, "name the pid, so the claim can be checked"
+
+
+def test_a_blank_capture_of_a_LIVE_window_still_reports_the_gpu_cause(monkeypatch):
+    """The original diagnosis stays for the case it was right about."""
+    from interact.desktop import CaptureError
+
+    _blank_capture(monkeypatch, pid="4242", alive=True)
+    win = DesktopWindow(name="Android Emulator - Pixel_7:5554", wid=123, x=0, y=0, w=388, h=863)
+    with pytest.raises(CaptureError) as exc:
+        win.capture()
+    assert "GPU" in str(exc.value)
+
+
+def test_every_blank_capture_offers_the_screen_fallback(monkeypatch):
+    """The cheap workaround the reporter found unaided. A whole-screen grab reveals crashes,
+    modals and anything else a per-window grab cannot read — and costs one call."""
+    from interact.desktop import CaptureError
+
+    for alive in (True, False):
+        _blank_capture(monkeypatch, pid="4242", alive=alive)
+        win = DesktopWindow(name="whatever", wid=123, x=0, y=0, w=388, h=863)
+        with pytest.raises(CaptureError) as exc:
+            win.capture()
+        assert 'target="screen"' in str(exc.value), f"alive={alive}: no fallback offered"
+
+
+def test_an_unknowable_pid_does_not_become_a_liveness_claim(monkeypatch):
+    """xdotool cannot always answer. Silence is not evidence the window is alive OR dead, and
+    asserting either from a failed lookup is how a wrong diagnosis gets stated confidently."""
+    from interact.desktop import CaptureError
+
+    _blank_capture(monkeypatch, pid=None, alive=True)
+    win = DesktopWindow(name="whatever", wid=123, x=0, y=0, w=388, h=863)
+    with pytest.raises(CaptureError) as exc:
+        win.capture()
+    msg = str(exc.value)
+    assert "no longer running" not in msg
+    assert 'target="screen"' in msg
+
+
+def test_a_window_whose_grab_FAILS_outright_is_reported_not_raised_raw(monkeypatch):
+    """Found by killing a real window rather than mocking one: for a genuinely dead window `maim
+    -i <wid>` does not return black at all — it exits non-zero. So the uniform-colour path never
+    runs, and what actually reached the agent was a raw CalledProcessError traceback naming a
+    numeric window id. Every real dead-window case took this branch, not the one above it.
+    """
+    from interact.desktop import CaptureError
+
+    def fake(cmd, *a, **k):
+        if cmd[0] == "xdotool":
+            if "getwindowpid" in cmd:
+                return "4242\n"
+            raise subprocess.CalledProcessError(1, cmd)
+        raise subprocess.CalledProcessError(1, cmd)  # maim cannot read a dead window
+
+    monkeypatch.setattr("interact.desktop.subprocess.check_output", fake)
+    monkeypatch.setattr("interact.desktop.window._pid_alive", lambda _pid: False)
+    win = DesktopWindow(name="doomed", wid=123, x=0, y=0, w=300, h=200)
+    with pytest.raises(CaptureError) as exc:
+        win.capture()
+    msg = str(exc.value)
+    assert "doomed" in msg, "name the window, not just a numeric id"
+    assert 'target="screen"' in msg
+
+
+def test_the_local_backend_reports_an_unreadable_window_the_same_way(monkeypatch):
+    """The same defect one layer down: LocalBackend.capture_window runs maim with check=True, so
+    a dead window raised a bare CalledProcessError there too. One report is one sample of a class;
+    both capture paths have to answer the same way or the message you get depends on which
+    internal route your target happened to take.
+    """
+    from interact.desktop import CaptureError
+    from interact.desktop.backend import LocalBackend
+
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "xdotool":
+            return subprocess.CompletedProcess(cmd, 0, stdout="555\n", stderr="")
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr("interact.desktop.backend.subprocess.run", fake_run)
+    backend = LocalBackend.__new__(LocalBackend)  # no real uinput device in a unit test
+    with pytest.raises(CaptureError) as exc:
+        backend.capture_window("doomed")
+    assert "doomed" in str(exc.value)
+
+
+def test_a_capture_failure_reaches_the_agent_as_an_ERROR_string(monkeypatch):
+    """interact's whole tool contract is "a short prose summary, errors prefixed ERROR: so an
+    agent can branch" (CLAUDE.md). A CaptureError RAISED instead becomes a transport-level error:
+    the text still arrives, but not in the shape every other failure takes, so an agent testing
+    `result.startswith("ERROR:")` sees an exception where it expected a string it can read.
+
+    Fixed at the one seam every tool already passes through rather than per tool, because the next
+    capture-taking tool would otherwise have to remember.
+    """
+    import asyncio
+
+    from interact.desktop import CaptureError, DesktopWindow
+
+    win = DesktopWindow(name="doomed", wid=9, x=0, y=0, w=10, h=10)
+
+    def boom(self):
+        raise CaptureError('Could not capture: stale. Try target="screen".')
+
+    monkeypatch.setattr(DesktopWindow, "capture", boom)
+    monkeypatch.setattr(srv.targets, "_resolve_target", lambda *a, **k: (win, None, None))
+    fn = getattr(srv.screenshot, "fn", srv.screenshot)
+    out = asyncio.run(fn(target="doomed"))
+    assert isinstance(out, str), "a capture failure must be a readable result, not an exception"
+    assert out.startswith("ERROR:"), out
+    assert 'target="screen"' in out, "the actionable half must survive the wrapping"

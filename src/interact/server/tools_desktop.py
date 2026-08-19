@@ -333,8 +333,9 @@ async def _record_desktop(
         dur_label = f"{duration}s"
 
     if desktop.Motion.is_blank(video_bytes):
-        # x11grab read a uniform-black surface — same GPU-surface wall as still capture.
-        raise desktop.gpu_surface_error(win.name)
+        # x11grab read a uniform-black surface — same wall as a still capture, and the same two
+        # possible causes: an unreadable GPU surface, or a window whose process has died.
+        raise desktop.blank_capture_error(win.name, win.wid)
     if path:
         core._save_to_path(path, video_bytes)
 

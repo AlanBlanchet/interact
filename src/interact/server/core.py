@@ -24,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 
 from interact.browser import SessionRegistry
 from interact.debug_utils import Debug, _CURRENT_INV
+from interact.desktop import CaptureError
 from interact.runtime import breaker, config  # noqa: F401 — breaker re-exported for tests/vlm
 
 _log = logging.getLogger("interact")
@@ -278,10 +279,26 @@ def instrumented(fn):
             _check_session_drift(kwargs.get("session") or _DEFAULT_SESSION)
         inv = Debug.new_invocation_dir(kwargs.get("debug_dir"), fn.__name__)
         token = _CURRENT_INV.set(inv)
-        _ok = False
+        _responded = False  # did _session_response run? (NOT 'did this succeed')
         try:
             result = await fn(*args, **kwargs)
-            _ok = True
+            _responded = True
+            Debug.dump_output(inv, result)
+            return result
+        except CaptureError as e:
+            # A capture that cannot produce pixels is an ANSWER — "that window is gone, try
+            # target='screen'" — not a transport failure. Raised, it arrives as an exception and
+            # an agent testing for the documented "ERROR:" prefix does not find one; every other
+            # failure in this server is a readable string. Converted at the one seam every tool
+            # passes through, so the next capture-taking tool cannot forget to do it.
+            #
+            # `_responded` deliberately stays False: the body raised BEFORE reaching
+            # `_session_response`, so the baseline was never refreshed and the drift note was
+            # never delivered — exactly the state the `finally` below exists to settle. Setting it
+            # True here would read as "handled" and quietly skip that cleanup. Inert today (every
+            # CaptureError needs a desktop target, which the cleanup already excludes), and a trap
+            # for the first browser-side capture failure.
+            result = f"ERROR: {e}"
             Debug.dump_output(inv, result)
             return result
         finally:
@@ -292,7 +309,7 @@ def instrumented(fn):
             # move from before the failed call — the "from URL names a page I left several calls
             # ago" report (#95). Settle both here: drop the undeliverable note and rebaseline to
             # where the session actually is, so the next call compares against reality.
-            if not kwargs.get("target") and not _ok:
+            if not kwargs.get("target") and not _responded:
                 session_name = kwargs.get("session") or _DEFAULT_SESSION
                 _session_drift_note.pop(_caller_key(session_name), None)
                 _observe_session_url(session_name)

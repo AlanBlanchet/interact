@@ -7,6 +7,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -57,17 +58,97 @@ class CaptureError(RuntimeError):
     Surfaced to the agent as a clear, actionable error instead of a black image."""
 
 
+#: Offered on EVERY blank capture, whatever the cause. A whole-screen grab reads crash dialogs,
+#: modals and anything else a per-window grab cannot — it is one call, and it is what the reporter
+#: of #113 found unaided after burning two rounds waiting for a window that had already died.
+_SCREEN_FALLBACK = 'Try target="screen": it costs one call and shows what is actually on the '\
+    "display, including a crash dialog a per-window grab cannot see."
+
+
+def _pid_alive(pid: int) -> bool:
+    """Is that process still there? Used only to tell a DEAD window from an unreadable one."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists, not ours to signal
+    return True
+
+
+def _window_pid(wid: int) -> int | None:
+    """The process behind a window, or None when X will not say. A failed lookup is not evidence
+    of anything — see the caller, which must not turn silence into a liveness claim."""
+    try:
+        out = subprocess.check_output(
+            ["xdotool", "getwindowpid", str(wid)],
+            text=True, timeout=5,
+            # An invalid window makes xdotool print an X error to the terminal. This is a probe
+            # whose failure is already handled; its noise must not reach the user's console.
+            stderr=subprocess.DEVNULL,
+        )
+        return int(out.strip())
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def dead_window_error(name: str, pid: int) -> "CaptureError":
+    """A uniform grab whose process is GONE. Distinct from the GPU case because the remedies do
+    not overlap at all: no compositor setting brings back a window that has crashed, and telling
+    somebody to install picom when their editor died is a confident answer to the wrong question.
+    """
+    return CaptureError(
+        f"Capture of {name!r} came back a single uniform colour and its process (pid {pid}) is "
+        "no longer running — the window is a dead frame, not an unreadable one. Nothing about "
+        f"capture settings will change this; the application has to be restarted. {_SCREEN_FALLBACK}"
+    )
+
+
 def gpu_surface_error(name: str) -> "CaptureError":
-    """The one diagnostic for a uniform-black grab — an X screen-grab (maim or ffmpeg x11grab)
-    can't read a GPU-rendered surface. Names the cause + the fixes, shared by capture() and the
-    record path so the agent gets the same actionable message wherever it hits this."""
+    """The diagnostic for a uniform-black grab whose process is still ALIVE — an X screen-grab
+    (maim or ffmpeg x11grab) can't read a GPU-rendered surface. Names the cause + the fixes,
+    shared by capture() and the record path so the agent gets the same actionable message
+    wherever it hits this."""
     return CaptureError(
         f"Capture of {name!r} came back a single uniform colour — an X screen-grab can't read it. "
         "That's the signature of a GPU-rendered surface (Android emulator, game, hardware-"
         "accelerated video) that isn't in the X framebuffer. Fixes: run a compositing manager "
         "(e.g. picom) so the surface is redirected and grabbable, or capture the app's own "
-        "framebuffer — for an Android emulator: `adb exec-out screencap -p` rather than a desktop grab."
+        "framebuffer — for an Android emulator: `adb exec-out screencap -p` rather than a desktop "
+        f"grab. {_SCREEN_FALLBACK}"
     )
+
+
+def unreadable_window_error(name: str, wid: int) -> "CaptureError":
+    """The grab itself failed — X would not hand over that window's pixels at all.
+
+    Distinct from a UNIFORM grab: there is no image to inspect, so the cause is read from the
+    process instead. Almost always the window is gone (its application quit or crashed) and the id
+    is now stale; occasionally X refuses a window it still lists.
+    """
+    pid = _window_pid(wid)
+    gone = pid is not None and not _pid_alive(pid)
+    why = (f"its process (pid {pid}) is no longer running, so the window id is stale"
+           if gone else
+           "X would not hand over its pixels — it may have closed since it was listed")
+    return CaptureError(
+        f"Could not capture {name!r} (window {wid}): {why}. "
+        f"Re-run list_desktop_windows to see what is actually open. {_SCREEN_FALLBACK}"
+    )
+
+
+def blank_capture_error(name: str, wid: int) -> "CaptureError":
+    """Which of the two it actually is, decided by asking rather than assuming.
+
+    An unknowable pid falls back to the GPU wording — it is the likelier cause and it no longer
+    hides the alternative, since both messages now carry the screen fallback. What must NOT happen
+    is a failed lookup being reported as "the window is dead": that is a claim about one lookup
+    path, not about the process.
+    """
+    pid = _window_pid(wid)
+    if pid is not None and not _pid_alive(pid):
+        return dead_window_error(name, pid)
+    return gpu_surface_error(name)
 
 
 def _is_blank_png(data: bytes) -> bool:
@@ -261,7 +342,14 @@ class DesktopWindow(BaseModel):
             img = subprocess.check_output(cmd, timeout=10)
         else:
             self._raise_window()  # a moved/buried window must come to the front first
-            img = subprocess.check_output(["maim", "-i", str(self.wid)], timeout=10)
+            try:
+                img = subprocess.check_output(["maim", "-i", str(self.wid)], timeout=10)
+            except subprocess.CalledProcessError:
+                # A window that is genuinely GONE does not grab black — the grab FAILS. Killing a
+                # real window and capturing it is what showed this: every actual dead-window case
+                # lands here rather than on the uniform-colour path below, and what reached the
+                # agent was a raw traceback naming a numeric window id and nothing else.
+                raise unreadable_window_error(self.name, self.wid) from None
             if _is_blank_png(img):
                 # window-id capture of a hardware-accelerated surface can come back blank; retry by
                 # geometry (reads the framebuffer region) — recovers non-GPU cases.
@@ -274,7 +362,7 @@ class DesktopWindow(BaseModel):
         if _is_blank_png(img):
             # Still uniform → an X screen-grab genuinely can't read this surface. Don't hand back a
             # black image the model will misread as a broken UI; say what it is and how to capture it.
-            raise gpu_surface_error(self.name)
+            raise blank_capture_error(self.name, self.wid)
         return img
 
     def _geometry_now(self) -> str | None:

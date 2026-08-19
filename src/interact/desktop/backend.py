@@ -18,6 +18,7 @@ import time
 from abc import ABC, abstractmethod
 
 from interact.desktop.input import ABS_MAX, UinputPointer, _BUTTONS, _parse_chord, screen_to_abs
+from interact.desktop.window import unreadable_window_error
 
 
 def _rects_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
@@ -329,7 +330,13 @@ class LocalBackend(DesktopBackend):
         ).stdout.split()
         if not found:
             return self.capture()
-        return subprocess.run(["maim", "-i", found[0]], capture_output=True, check=True).stdout
+        try:
+            return subprocess.run(
+                ["maim", "-i", found[0]], capture_output=True, check=True).stdout
+        except subprocess.CalledProcessError:
+            # A window that has died does not grab black — the grab fails outright, and this
+            # raised a bare CalledProcessError naming a numeric id and nothing else.
+            raise unreadable_window_error(name, int(found[0])) from None
 
     def close(self) -> None:
         self._pointer.close()
