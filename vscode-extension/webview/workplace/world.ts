@@ -368,7 +368,11 @@ function furnish(
   seed: number,
 ): void {
   const main = room.rects[0];
-  const alcove = room.rects[1] ?? null;
+  // A recess deep enough to stand something in. The plan forms also emit a WING — two or three
+  // rows, most of it wall — and treating that as an alcove put the room's one-of-a-kind prop
+  // inside the masonry, outside every room, on the building's own mass.
+  const wing = room.rects[1] ?? null;
+  const alcove = wing && wing.h >= 4 ? wing : null;
   const ix = main.x + 1; /* first interior column */
   const iy = main.y + 2; /* first interior row, under the wall face */
   const D = main.h - 3; /* interior rows */
@@ -454,7 +458,11 @@ function furnish(
     const ax = alcove.x + Math.floor(alcove.w / 2);
     const ay = alcove.y + 2;
     put(ax, ay, only);
-    const mate = uniques.pick(["fan", "coffee", "printer", "boxes" as TileId, "crates"]) ?? "crates";
+    // "boxes" was in this list, cast to TileId, and there is no such tile. The cast is what let it
+    // through the type system, and the room shapes this list is walked for never happened to reach
+    // it until the plan forms changed — so the whole map threw on an undefined grid. A tile id that
+    // needs a cast to compile is an id that does not exist.
+    const mate = uniques.pick(["fan", "coffee", "printer", "cabinet", "crates"]) ?? "crates";
     put(ax + 1, ay + 1, mate);
   } else {
     put(ix + (bays - 1) * BAY + 1, iy + D - 3, only);
@@ -588,6 +596,61 @@ export function buildWorld(
 
   const rooms: Room[] = [];
 
+  /** THE PLAN FORM of one room, and the reason the building has a silhouette.
+   *
+   *  Every room used to be a rectangle. Sized differently, furnished differently, lit differently
+   *  — and still eight rectangles in two rows, which is what a floor PLAN looks like and not what
+   *  a place looks like. A rectangle has nothing to stand behind, no corner to turn, and no wall
+   *  that runs out and comes back, so nothing in it can ever be tucked away.
+   *
+   *  Three forms, chosen by the department's own hash so a company file draws the same building
+   *  every time. All three keep the HALL-FACING edge at full width, because that edge carries the
+   *  door and the sign, and a door on a stepped wall is a door nobody can find.
+   *
+   *   - BAR      a plain rectangle. Small rooms stay rectangles; an L in four tiles is a corridor.
+   *   - ELL/TEE  the room is set back from the outer wall and one WING pushes out to it. At an end
+   *              that is an L; in the middle it is a T. The step is what the eye reads.
+   *   - ALCOVE   where there is spare depth behind the room, it keeps it as a recess — which is
+   *              where `furnish` already puts the one-of-a-kind thing in each trade.
+   */
+  const plan = (x: number, y: number, w: number, h: number, side: "n" | "s", spare: number, seed: number): Rect[] => {
+    const north = side === "n";
+    // Deep enough behind it to keep a recess: that reads better than a step, so it wins.
+    if (spare >= 3 && w >= 8) {
+      const aw = Math.min(6, w - 3);
+      const ax = x + 1 + (seed % Math.max(1, w - aw - 1));
+      return [
+        { x, y, w, h },
+        north ? { x: ax, y: y - spare, w: aw, h: spare + 2 } : { x: ax, y: y + h - 2, w: aw, h: spare + 2 },
+      ];
+    }
+    // Too small to step without becoming a corridor. Measured against the rooms this actually
+    // produces: at a floor of six tiles a three-tile wing still leaves three, which reads as a
+    // step; the first guard I wrote asked for nine and left four rooms out of five rectangular.
+    if (w < 7 || h < 5) return [{ x, y, w, h }];
+    const ww = 3 + ((seed >>> 3) % Math.max(1, w - 6));
+    // End or middle. Two thirds of rooms take an end, so the band reads as steps rather than as a
+    // row of identical castles.
+    const where = (seed >>> 11) % 3;
+    const wx = where === 0 ? x : where === 1 ? x + w - ww : x + Math.floor((w - ww) / 2);
+    // The wing pushes OUT into whatever depth is left rather than being carved out of the room:
+    // the first version set the whole room back two rows and gave one strip of it back, which
+    // stepped the silhouette correctly and cost every department a fifth of its floor. Where
+    // there is genuinely nothing behind, the room gives up ONE row for the step.
+    const out = Math.min(2, spare);
+    const back = out > 0 ? 0 : 1;
+    const deep = out > 0 ? out + 1 : 2;
+    return north
+      ? [
+          { x, y: y + back, w, h: h - back },
+          { x: wx, y: y + back - deep + 1, w: ww, h: deep },
+        ]
+      : [
+          { x, y, w, h: h - back },
+          { x: wx, y: y + h - back - 1, w: ww, h: deep },
+        ];
+  };
+
   /** One band of rooms, budding off the hall. They share party walls: the next room starts on the
    *  previous one's wall, which is what stops a row of rooms reading as a row of boxes. */
   const layBand = (band: Slot[], side: "n" | "s"): void => {
@@ -595,20 +658,8 @@ export function buildWorld(
     let x = bandStart;
     for (const s of band) {
       const y = side === "n" ? hallY - s.h : hallY + HALL_H;
-      const rects: Rect[] = [{ x, y, w: s.w, h: s.h }];
-      // What is left between the room and the outside wall. Four rows or more and the room keeps
-      // it as an alcove — the L-shaped rooms, and where the one-of-a-kind things stand.
-      const spare = avail - s.h;
       const seed = hash32(s.dept.id) >>> 0;
-      if (spare >= 4 && s.w >= 8) {
-        const aw = Math.min(6, s.w - 3);
-        const ax = x + 1 + (seed % Math.max(1, s.w - aw - 1));
-        rects.push(
-          side === "n"
-            ? { x: ax, y: y - spare, w: aw, h: spare + 2 }
-            : { x: ax, y: y + s.h - 2, w: aw, h: spare + 2 },
-        );
-      }
+      const rects: Rect[] = plan(x, y, s.w, s.h, side, avail - s.h, seed);
       const room = blank(s.dept.id, s.dept.label, rects, {
         kind: s.arch.kind,
         floor: s.arch.floor,
@@ -807,6 +858,37 @@ export function buildWorld(
     room.faceRuns = runsOf(shape.face, shape.box, cols);
     const body = new Set([...shape.wall].filter((k) => !shape.face.has(k)));
     room.wallRuns = runsOf(body, shape.box, cols);
+
+    /* A STANDING PLACE OUTRANKS A PROP, and it is enforced here rather than hoped for in the
+       furnisher.
+       `furnish` lays out desks, seats and clutter against the room's first rectangle on a fixed
+       inset, which is exactly right while every room IS that rectangle. The moment a plan form
+       steps the wall, some of those cells are masonry or are already carrying a crate — and a
+       body standing inside a wall is invisible until an invariant goes looking for it (this one
+       did: three seats, three departments, no visible symptom). So: anything standing on a seat
+       is removed, and a seat that is not floor walks to the nearest cell that is. */
+    const seatAt = new Set(room.seats.map((p) => p.x + ":" + p.y));
+    room.props = room.props.filter((p) => !seatAt.has(p.x + ":" + p.y));
+    const propAt = new Set(room.props.map((p) => p.x + ":" + p.y));
+    const taken = new Set<string>();
+    for (const seat of room.seats) {
+      const free = (x: number, y: number): boolean =>
+        shape.floor.has(y * cols + x) && !propAt.has(x + ":" + y) && !taken.has(x + ":" + y);
+      if (!free(seat.x, seat.y)) {
+        let best: [number, number] | null = null;
+        let near = Infinity;
+        for (const key of shape.floor) {
+          const x = key % cols;
+          const y = (key - x) / cols;
+          if (!free(x, y)) continue;
+          const d = Math.abs(x - seat.x) + Math.abs(y - seat.y);
+          if (d < near) { near = d; best = [x, y]; }
+        }
+        if (best) { seat.x = best[0]; seat.y = best[1]; }
+      }
+      taken.add(seat.x + ":" + seat.y);
+    }
+
     // Furniture is solid: the moment a route has to bend around a desk the floor stops being a
     // backdrop and becomes a place with things in it. A prop on the wall FACE is already solid.
     for (const p of room.props) block(p.x, p.y);

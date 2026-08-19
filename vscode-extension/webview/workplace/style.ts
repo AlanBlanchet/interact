@@ -108,6 +108,24 @@ body {
   --t-book2: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
   --t-ink: color-mix(in srgb, var(--wp-ink) 78%, var(--wp-bg));
 
+  /* ── the light model ────────────────────────────────────────────────────────────────────
+     Depth in this view comes from LIGHT, not from the theme. A room is dark and its lamps carve
+     quantised pools out of that dark; every wall drops a hard band; every standing thing drops
+     its own silhouette. Which is why the two themes are two TIMES OF DAY rather than one picture
+     with its contrast drained: at night the pools are most of what you can see, and by day the
+     range comes from shadow instead. */
+  --l-lamp: var(--wp-h3);
+  --l-tint: var(--l-lamp);
+  --l-mix: 0%;
+  /* Night. Strong pools on a genuinely dark floor. */
+  --l-0: 36%;
+  --l-1: 20%;
+  --l-2: 7%;
+  --l-edge: color-mix(in srgb, var(--wp-ink) 30%, transparent);
+  --l-unlit: color-mix(in srgb, var(--wp-ink) 58%, transparent);
+  --l-ao: color-mix(in srgb, var(--wp-ink) 50%, transparent);
+  --wp-drop: color-mix(in srgb, var(--wp-ink) 62%, transparent);
+
   --stamp-ink: var(--wp-fg);
   --stamp-quiet: var(--wp-dim);
   --stamp-mix: var(--wp-bg);
@@ -126,10 +144,49 @@ body.vscode-light .wp,
 body.vscode-high-contrast-light .wp {
   --wp-tint: #2f2a3a;
   --t-wall-foot: color-mix(in srgb, var(--wp-ink) 32%, var(--wp-bg));
-  --t-carpet: color-mix(in srgb, var(--wp-h1) 9%, var(--wp-bg));
-  --t-carpet-hi: color-mix(in srgb, var(--wp-h1) 15%, var(--wp-bg));
+  --t-carpet: color-mix(in srgb, color-mix(in srgb, var(--wp-h1) 26%, var(--wp-fg)) 30%, var(--wp-bg));
+  --t-carpet-hi: color-mix(in srgb, color-mix(in srgb, var(--wp-h1) 26%, var(--wp-fg)) 40%, var(--wp-bg));
   --t-shade: color-mix(in srgb, var(--wp-ink) 46%, var(--wp-bg));
-  --t-mass: color-mix(in srgb, var(--wp-ink) 34%, var(--wp-bg));
+
+  /* THE GROUND HAS TO BE A MID-TONE, or light has nothing to lift and shadow nothing to drop.
+     Every ground tile is mixed from the editor foreground toward the background, and on a WHITE
+     background thirteen percent of a dark grey is L* 92 — so the floor was already brighter than
+     any lamp could make it and the pools came out as pastel stickers on paper. */
+  --t-floor: color-mix(in srgb, var(--wp-fg) 28%, var(--wp-bg));
+  --t-floor-hi: color-mix(in srgb, var(--wp-fg) 20%, var(--wp-bg));
+  --t-grout: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
+  --t-rug: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
+  --t-rug-hi: color-mix(in srgb, var(--wp-fg) 40%, var(--wp-bg));
+  --t-hall: color-mix(in srgb, var(--wp-fg) 20%, var(--wp-bg));
+  --t-hall-band: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
+
+  /* AND THE WALL INVERTS. More foreground means LIGHTER on a dark background and DARKER on a
+     light one, so a cap tuned to be the brightest surface at night was the darkest by day and the
+     wall read as advancing out of the floor. The cap catches the light in both themes; the FACE —
+     the vertical surface you look at — is in shade in both. */
+  --t-wall: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
+  --t-wall-cap: color-mix(in srgb, var(--wp-fg) 19%, var(--wp-bg));
+  --t-face: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
+  --t-skirt: color-mix(in srgb, var(--wp-fg) 60%, var(--wp-bg));
+  /* The building's mass has to be the DARKEST thing in either theme. At 34% of a near-black over
+     white it came out mid-grey — brighter than several room floors — so the structure advanced
+     instead of receding and the whole plan flattened. It is the single biggest reason the light
+     theme read as washed out. */
+  --t-mass: color-mix(in srgb, var(--wp-ink) 62%, var(--wp-bg));
+
+  /* DAY. The sun is the fixture, so the pools are weaker and the SHADOWS carry the range: a hard
+     shadow on a bright floor is the whole reason a daylit pixel scene reads as three-dimensional.
+     Every one of these numbers is per-theme on purpose — the same alpha buys about four times the
+     ink on a light substrate, so copying a night value across is how the shadow ends up either
+     invisible or a black bar. */
+  --l-lamp: var(--wp-h5);
+  --l-0: 30%;
+  --l-1: 17%;
+  --l-2: 6%;
+  --l-edge: color-mix(in srgb, #2b3348 15%, transparent);
+  --l-unlit: color-mix(in srgb, #2b3348 30%, transparent);
+  --l-ao: color-mix(in srgb, #232a3d 30%, transparent);
+  --wp-drop: color-mix(in srgb, #232a3d 34%, transparent);
 }
 
 /* ── the window ────────────────────────────────────────────────────────────────────────────
@@ -263,26 +320,99 @@ body.vscode-high-contrast-light .wp {
 
 /* ── the rooms ─────────────────────────────────────────────────────────────────────────────*/
 
-/* A room with somebody in it is LIT, in a colour that belongs to what the room is FOR. Answering
-   "where is everyone" with the shape and the hue of the light happens before a label is read. */
-.wp-glow {
-  fill: color-mix(in srgb, var(--wp-h3) 15%, transparent);
+/* A room with somebody in it is LIT — and the light is a POOL, banded on the tile grid, with the
+   hue of what that room is DOING. "Where is everyone" and "who is in trouble" are both answered
+   by the colour and shape of the light, before a single label resolves.
+
+   data-voice is the engine's, and its values are the rail's own Attention names: the panel
+   that prints the word ERROR in charts-red is the panel this room is lit by. */
+.wp-pool {
+  /* The mix is written HERE, not hoisted into a token on the container. A custom property
+     substitutes its var()s at the element that DECLARES it, so a --l-hue declared on .wp resolved
+     --l-tint from .wp and inherited that finished colour down — every room, including the one
+     with a crashed agent in it, came out the same lamp yellow. Nesting the mix at the point of use
+     is what lets an ancestor data-voice reach it. */
+  fill: color-mix(in srgb,
+    color-mix(in srgb, var(--l-tint) var(--l-mix), var(--l-lamp)) var(--l-a, 0%), transparent);
   opacity: 0;
-  transition: opacity 420ms ease;
+  transition: opacity 520ms cubic-bezier(.33, 0, .2, 1), fill 700ms ease-in-out;
 }
+.wp-pool[data-l="0"] { --l-a: var(--l-0); }
+.wp-pool[data-l="1"] { --l-a: var(--l-1); }
+.wp-pool[data-l="2"] { --l-a: var(--l-2); }
+/* The two outer bands are SHADE, not weaker light, and that is the whole difference between a
+   ramp and a tint: three decreasing washes of one hue over one floor move the value by a handful
+   of points and read as a coloured rectangle — which is exactly the flat category-fill this layer
+   replaced. Light near the fixture, dark away from it, is what a light map actually does.
+   They are also never faded: the far corner of a room is dark whether or not anybody is home. */
+.wp-pool[data-l="3"] { fill: var(--l-edge); opacity: 1; }
+.wp-pool[data-l="4"] { fill: var(--l-unlit); opacity: 1; }
+.wp-rm[data-lit="1"] .wp-pool { opacity: 1; }
 .wp-shut {
   fill: var(--wp-shut);
   opacity: 1;
-  transition: opacity 420ms ease;
+  transition: opacity 520ms cubic-bezier(.33, 0, .2, 1);
 }
-.wp-rm[data-lit="1"] .wp-glow { opacity: 1; }
 .wp-rm[data-lit="1"] .wp-shut { opacity: 0; }
-.wp-rm[data-kind="machine"] .wp-glow { fill: color-mix(in srgb, var(--wp-h1) 10%, transparent); }
-.wp-rm[data-kind="stacks"] .wp-glow { fill: color-mix(in srgb, var(--wp-h2) 10%, transparent); }
-.wp-rm[data-kind="signals"] .wp-glow { fill: color-mix(in srgb, var(--wp-h6) 10%, transparent); }
-.wp-rm[data-kind="gallery"] .wp-glow { fill: color-mix(in srgb, var(--wp-h1) 9%, transparent); }
-.wp-rm[data-kind="boardroom"] .wp-glow { fill: color-mix(in srgb, var(--wp-h5) 10%, transparent); }
-.wp-rm[data-kind="drafting"] .wp-glow { fill: color-mix(in srgb, var(--wp-h4) 9%, transparent); }
+
+/* What each state does to the light. Only the states that WANT something take the room's colour
+   over; work in progress keeps the lamp warm, or a floor of eleven busy agents would be eleven
+   blue rooms and the one that needs a person would not stand out at all. */
+.wp-lit[data-voice="error"] { --l-tint: var(--vscode-charts-red, #f14c4c); --l-mix: 100%; }
+.wp-lit[data-voice="asked"] { --l-tint: var(--vscode-charts-blue, #4daafc); --l-mix: 82%; }
+.wp-lit[data-voice="held"] { --l-tint: var(--vscode-charts-yellow, #d7ba7d); --l-mix: 55%; }
+.wp-lit[data-voice="finished"] { --l-tint: var(--vscode-charts-green, #89d185); --l-mix: 46%; }
+
+/* And the fixture itself differs by trade: a machine room burns colder than a library. The old
+   flat wash carried this and it was worth keeping — it is most of what tells two lit rooms apart
+   when everyone in both of them is simply working. */
+/* THE LIGHT BREATHES WITH THE WORK, and that is the point of tying it to the taxonomy at all: a
+   static colour says what state a room is in, a rhythm says the room is LIVE. Both are on the one
+   beat everything else in this building runs on, and both are eased — a light that steps linearly
+   between two levels reads as a switch being flicked, not as a lamp.
+
+   ERROR takes the stamp's own alarm tempo, so the placard over the head and the light in the room
+   pulse together rather than beating against each other. Everything else takes a slow four-beat
+   breath, shallow enough that a floor of eleven working agents is alive rather than strobing. */
+.wp-lit[data-lit="1"] .wp-pool[data-l="0"],
+.wp-lit[data-lit="1"] .wp-pool[data-l="1"] {
+  animation: wp-breathe calc(var(--beat) * 4) cubic-bezier(.45, .05, .55, .95) var(--d, 0s) infinite;
+}
+/* fill-opacity, NOT opacity: the element's own opacity is what fades a room in when somebody
+   walks into it, and an animation on the same property wins outright over the declaration, so the
+   room stopped fading and started snapping on. The two multiply. */
+@keyframes wp-breathe {
+  0%, 100% { fill-opacity: .84; }
+  50% { fill-opacity: 1; }
+}
+.wp-lit[data-voice="error"] .wp-pool[data-l="0"],
+.wp-lit[data-voice="error"] .wp-pool[data-l="1"],
+.wp-lit[data-voice="error"] .wp-pool[data-l="2"] {
+  animation: wp-alarm calc(var(--beat) * 2 / 3) ease-in-out infinite;
+}
+@keyframes wp-alarm {
+  0%, 100% { fill-opacity: .55; }
+  50% { fill-opacity: 1; }
+}
+
+/* The passage burns a cooler, flatter light than any room off it: overheads in a corridor, not
+   lamps on a desk. It is also the one light in the building that is never switched off. */
+.wp-lit[data-kind="hall"] { --l-lamp: color-mix(in srgb, var(--wp-h1) 34%, var(--wp-fg)); }
+.wp-lit[data-kind="machine"] { --l-lamp: color-mix(in srgb, var(--wp-h1) 62%, var(--wp-h3)); }
+.wp-lit[data-kind="signals"] { --l-lamp: color-mix(in srgb, var(--wp-h6) 58%, var(--wp-h3)); }
+.wp-lit[data-kind="stacks"] { --l-lamp: color-mix(in srgb, var(--wp-h2) 40%, var(--wp-h3)); }
+.wp-lit[data-kind="boardroom"] { --l-lamp: color-mix(in srgb, var(--wp-h5) 48%, var(--wp-h3)); }
+.wp-lit[data-kind="drafting"] { --l-lamp: color-mix(in srgb, var(--wp-h4) 32%, var(--wp-h3)); }
+
+/* Every wall in the building, casting into the floor beside it. ONE path for the whole world, so
+   the overlaps at a corner paint once rather than stacking into a black notch. */
+.wp-ao { fill: var(--l-ao); pointer-events: none; }
+/* A prop's own silhouette, lying where the light is not.
+   NOT .wp-cast — that class is the ACTORS container the engine re-binds every refresh, and a
+   shadow wearing it appears earlier in the document, so querySelector('.wp-cast') found a desk's
+   shadow instead of the cast. */
+.wp-drop { pointer-events: none; }
+
 /* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
    every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */
 .wp-rug { fill: none; stroke: var(--t-rug-hi); stroke-width: 1; }
@@ -313,7 +443,7 @@ body.vscode-high-contrast-light .wp {
   opacity: 0;
   transform-box: fill-box;
   transform-origin: 50% 100%;
-  animation: wp-steam calc(var(--beat) * 2) ease-out infinite;
+  animation: wp-steam calc(var(--beat) * 2) cubic-bezier(.16, .72, .38, 1) infinite;
   animation-delay: var(--d, 0s);
 }
 @keyframes wp-steam {
@@ -323,14 +453,14 @@ body.vscode-high-contrast-light .wp {
 }
 .wp-lv-lamp {
   opacity: .3;
-  animation: wp-lamp calc(var(--beat) * 4) ease-in-out infinite;
+  animation: wp-lamp calc(var(--beat) * 4) cubic-bezier(.45, .05, .55, .95) infinite;
   animation-delay: var(--d, 0s);
 }
 @keyframes wp-lamp { 0%, 100% { opacity: .22; } 50% { opacity: .46; } }
 .wp-lv-sway {
   transform-box: fill-box;
   transform-origin: 50% 100%;
-  animation: wp-sway calc(var(--beat) * 3) ease-in-out infinite;
+  animation: wp-sway calc(var(--beat) * 3) cubic-bezier(.37, 0, .63, 1) infinite;
   animation-delay: var(--d, 0s);
 }
 @keyframes wp-sway {
@@ -429,14 +559,24 @@ body.vscode-high-contrast-light .wp {
 }
 
 .wp-shade {
+  /* A border-radius 50% ellipse is a SOFT shape in a scene made entirely of hard ones, and at
+     sprite scale it read as a smudge rather than as contact with the floor. Stepped in threes it
+     is a pixel shape.
+     It also has to come OUT from under the body: at 26px under a 36px sprite it was entirely
+     hidden behind the character it belonged to, which is why the floor still looked like a floor
+     nobody was standing on. Thrown down and to the right, the same way every wall and every prop
+     in this building throws. */
   position: absolute;
-  left: -12px;
-  bottom: -2px;
-  width: 24px;
-  height: 6px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--wp-ink) 46%, transparent);
+  left: -8px;
+  bottom: -5px;
+  width: 32px;
+  height: 8px;
+  background: var(--wp-drop);
+  clip-path: polygon(
+    6px 0, 24px 0, 24px 2px, 28px 2px, 28px 6px, 24px 6px, 24px 8px,
+    6px 8px, 6px 6px, 2px 6px, 2px 2px, 6px 2px);
 }
+.wp-actor.is-brain .wp-shade { width: 40px; left: -12px; }
 
 /* Two poses for standing, two for walking, in one element. Which pair shows is the engine's call:
    the walk frames are flipped on DISTANCE covered, not on a clock. */
@@ -452,7 +592,8 @@ body.vscode-high-contrast-light .wp {
 .wp-actor.is-walking .wp-walk .wp-f1 { opacity: 1; }
 .wp-actor.is-walking.wp-fA .wp-walk .wp-f1 { opacity: 0; }
 .wp-actor.is-walking.wp-fA .wp-walk .wp-f0 { opacity: 1; }
-.wp-actor.is-walking .wp-shade { opacity: .55; }
+/* A body off the ground throws a smaller, tighter shadow. */
+.wp-actor.is-walking .wp-shade { transform: scaleX(.82); }
 
 .wp-tag {
   position: absolute;
@@ -460,7 +601,10 @@ body.vscode-high-contrast-light .wp {
   top: 3px;
   transform: translateX(-50%);
   display: block;
-  max-width: 76px;
+  /* Seats are three tiles apart, i.e. seventy-two world pixels. A plate allowed seventy-six was
+     wider than the space between two people by construction, so two neighbours' names overlapped
+     before anything else in the scene did. */
+  max-width: 66px;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 7px;
@@ -488,24 +632,49 @@ body.vscode-high-contrast-light .wp {
    the character's own width and the loudest thing on them, which is the chrome-crowds-the-sprite
    complaint in miniature. The full set, with its words, is one hover away. */
 .wp-can {
+  /* TOOLS ON THE DESK, not a column of chips.
+     Three framed squares stacked beside a 36x54 character measured 32px each on screen — ninety-six
+     pixels of interface against fifty-four pixels of person, so the loudest object in a room full
+     of people was a stack of icons. Laid flat at the feet, with the plate taken away and the same
+     hard pixel shadow every sign in this building throws, they stop being interface and become
+     things lying on the desk. Same size, a quarter of the weight. */
   position: absolute;
-  left: -37px;
-  bottom: 4px;
+  left: 0;
+  top: var(--belt, 17px);
+  transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
   gap: 2px;
-  pointer-events: none;
+  /* LIVE. It carried a title and a pointer cursor while pointer-events said none, so it offered
+     an affordance it could never honour — the tooltip never fired and the cursor never changed.
+     A click on one now reaches the same handler a click on the person does. */
+  pointer-events: auto;
 }
+/* The back rank has no nameplate under its boots, so its belt sits right at them.
+   Tried and REJECTED: lifting it above the head, the way the nameplate is lifted. It clears the
+   front rank's placard and it reads as three icons floating unattached over somebody — tools that
+   have stopped belonging to anyone. The two measured overlaps that remain are a back-rank belt
+   under a front-rank stamp, where depth ordering already draws the stamp on top; that reads as one
+   person standing in front of another, which is what it is. */
+.wp-actor[data-label="up"] .wp-can { --belt: 2px; }
 .wp-fac {
-  --mark: var(--wp-bg);
+  --mark: color-mix(in srgb, var(--accent, var(--wp-h1)) 34%, #f4f1ff);
   font-style: normal;
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  /* Keeps the mark at sixteen world pixels, i.e. the thirty-two on screen an earlier round
+     measured as the point where these stop being illegible. Dropping the plate must not quietly
+     shrink them back. */
   padding: 1px;
-  background: color-mix(in srgb, var(--accent, var(--wp-h1)) 88%, var(--wp-bg));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wp-ink) 55%, transparent);
+  filter: drop-shadow(1px 1px 0 var(--wp-ink)) drop-shadow(-1px 0 0 var(--wp-ink))
+    drop-shadow(0 -1px 0 var(--wp-ink));
+  transition: transform 150ms cubic-bezier(.34, 1.56, .64, 1);
 }
+.wp-fac:hover,
+.wp-fac:focus-visible {
+  --mark: #fff;
+  transform: translateY(-4px) scale(1.15);
+  outline: none;
+}
+.wp-fac:active { transform: translateY(-1px); }
 .wp-fac svg { display: block; }
 .wp-actor[data-status="foreign"] .wp-fac,
 .wp-actor[data-status="done"] .wp-fac { background: color-mix(in srgb, var(--wp-dim) 70%, var(--wp-bg)); }
@@ -625,7 +794,8 @@ ${STAMP_CSS}
   .wp-actor .wp-stand .wp-f0,
   .wp-actor .wp-stand .wp-f1,
   .wp-actor.is-talking .wp-body { animation: none !important; }
-  .wp-glow, .wp-shut, .wp-leaf { transition: none; }
+  .wp-pool, .wp-shut, .wp-leaf { transition: none; }
+  .wp-lit .wp-pool { animation: none !important; }
   .wp-stand .wp-f0 { opacity: 1; }
   .wp-stand .wp-f1 { opacity: 0; }
   .wp-lv-steam { opacity: 0; }

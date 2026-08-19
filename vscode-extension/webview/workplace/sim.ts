@@ -447,18 +447,25 @@ var SAY_AT = 0;
 var SAID = [];
 
 function boxesOf(b, kind) {
-  /* The furniture a character carries, as rectangles in world pixels around its feet. Generous on
-     purpose: over-reserving costs one bubble, under-reserving draws words on top of a name. */
+  /* The furniture a character carries, as rectangles in world pixels around its feet.
+     MEASURED off the rendered elements, not guessed: the boxes here had drifted from what the
+     stylesheet actually draws — the stamp's reserve sat nine pixels below the stamp and missed its
+     top edge entirely, and the tools' reserve still described the column at the shoulder they were
+     moved off. A reserve that does not match the element it stands for refuses bubbles over empty
+     air and allows them over a word. Generous on purpose, in the direction that costs a bubble
+     rather than the one that draws words on top of a name. */
   var up = b.el && b.el.getAttribute("data-label") === "up";
   var x = b.px, y = b.py;
-  if (kind === "tag") return up ? [x - 44, y - 72, x + 44, y - 52] : [x - 44, y + 1, x + 44, y + 19];
-  if (kind === "can") return [x - 39, y - 58, x - 17, y - 2];
-  return up ? [x - 32, y - 88, x + 32, y - 70] : [x - 32, y - 58, x + 32, y - 40];
+  if (kind === "tag") return up ? [x - 34, y - 70, x + 34, y - 56] : [x - 34, y + 1, x + 34, y + 15];
+  if (kind === "can") return up ? [x - 28, y, x + 28, y + 20] : [x - 28, y + 15, x + 28, y + 35];
+  return up ? [x - 24, y - 95, x + 24, y - 82] : [x - 24, y - 65, x + 24, y - 52];
 }
 
 function sayBox(b, level) {
   var up = b.el && b.el.getAttribute("data-label") === "up";
-  var base = (up ? 96 : 66) + level * 26;
+  /* Clear of the stamp rather than three pixels off it: measured, the placard's top edge is
+     sixty-three world pixels above the boots and the lowest bubble's floor was sixty-six. */
+  var base = (up ? 100 : 72) + level * 26;
   /* The bubble holds a constant SCREEN size, so in world pixels it shrinks as the camera moves
      in. Reserving the unscaled box would refuse most of the lines at zoom two for a collision
      that is not there. */
@@ -575,6 +582,11 @@ function doors() {
   }
 }
 
+/* Worst first. A room holding one crashed agent and five happy ones is a room with a problem in
+   it, so the light takes the loudest state in the room rather than an average or the last body
+   the loop happened to see. Same order the rail sorts its own rows by. */
+var VOICES = ["error", "asked", "held", "finished", "working", "not-ours"];
+
 function lighting() {
   var now = {};
   for (var id in BODIES) {
@@ -582,25 +594,41 @@ function lighting() {
     if (!b.el || !b.el.isConnected) continue;
     for (var i = 0; i < W.rooms.length; i++) {
       var r = W.rooms[i];
-      if (b.x >= r.x && b.x < r.x + r.w && b.y >= r.y && b.y < r.y + r.h) { now[r.i] = 1; break; }
+      if (b.x >= r.x && b.x < r.x + r.w && b.y >= r.y && b.y < r.y + r.h) {
+        var v = b.el.getAttribute("data-attention") || "working";
+        var rank = VOICES.indexOf(v);
+        if (rank < 0) rank = VOICES.length - 1;
+        if (!now[r.i] || rank < now[r.i].rank) now[r.i] = { rank: rank, voice: v };
+        break;
+      }
     }
   }
   for (var k in now) {
-    if (LIT[k]) continue;
-    setLit(k, "1");
+    if (LIT[k] && LIT[k].voice === now[k].voice) continue;
+    setLit(k, "1", now[k].voice);
   }
   for (var k2 in LIT) {
     if (now[k2]) continue;
-    setLit(k2, "0");
+    setLit(k2, "0", "");
   }
   LIT = now;
 }
-function setLit(id, on) {
+function setLit(id, on, voice) {
   var q = '[data-room="' + cssq(id) + '"]';
-  var room = document.querySelector(".wp-rm" + q);
-  if (room) room.setAttribute("data-lit", on);
+  /* ALL of them: the building is drawn in layers now — grounds, light, structure — so one room is
+     several groups carrying the same id, and a querySelector lit whichever came first. */
+  var rooms = document.querySelectorAll(".wp-rm" + q);
+  for (var i = 0; i < rooms.length; i++) {
+    rooms[i].setAttribute("data-lit", on);
+    if (voice) rooms[i].setAttribute("data-voice", voice);
+    else rooms[i].removeAttribute("data-voice");
+  }
   var dot = document.querySelector(".wp-mini " + q);
-  if (dot) dot.setAttribute("data-lit", on);
+  if (dot) {
+    dot.setAttribute("data-lit", on);
+    if (voice) dot.setAttribute("data-voice", voice);
+    else dot.removeAttribute("data-voice");
+  }
 }
 function cssq(s) { return String(s).replace(/["\\]/g, "\\$&"); }
 

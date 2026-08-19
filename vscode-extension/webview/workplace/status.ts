@@ -24,39 +24,66 @@
  */
 import { draw } from "./pixels";
 import { MARKS } from "./art";
+import { STATUS, type Attention } from "../../src/statusLanguage";
 
 /** Past two minutes of nothing, a worker is not working. Both surfaces used to declare this
  *  privately, which is precisely how two views end up disagreeing about who is stalled. */
 export const STALL_SECONDS = 120;
 
-/** The states worth saying out loud. RUNNING is not one of them: an open job with nothing stamped
- *  on it is the oldest "in progress" signal there is, and leaving it unstamped is what keeps the
- *  loud marks meaning something. */
-export type StampKind = "done" | "error" | "held" | "foreign";
+/** The states worth saying out loud. WORKING is not one of them: an open job with nothing
+ *  stamped on it is the oldest "in progress" signal there is, and leaving it unstamped is what
+ *  keeps the loud marks meaning something.
+ *
+ *  These are `Attention` values, not a private enum. The building used to name its own four
+ *  states (`done` / `error` / `held` / `foreign`) beside a rail that named six — same taxonomy,
+ *  two spellings, which is how one product ends up looking like two.
+ */
+export type StampKind = Exclude<Attention, "working">;
 
 export interface Stamp {
   kind: StampKind;
-  /** The word, as it is printed. Uppercase is the stamp's, not the data's. */
+  /** The word, as it is printed. Comes from `statusLanguage`, never from here. */
   word: string;
-  /** Which mark in `MARKS` carries this state as a SHAPE. */
+  /** Which mark in `MARKS` carries this state as a SHAPE. The rail's `mark` is a TEXT glyph and
+   *  the fonts a webview actually has do not carry half of them (six identical tofu boxes was the
+   *  last attempt) — so the world draws the same MEANING in its own pixels. Word and accent are
+   *  shared; only the rendering of the shape is each surface's own. */
   mark: string;
+  /** The theme variable this state is tinted with, on BOTH surfaces. */
+  accent: string;
+}
+
+/** Which pixel drawing carries each state. `art.ts` owns the shapes; this is the only place that
+ *  says which shape means which state. */
+const SHAPES: Record<StampKind, string> = {
+  error: "error",
+  asked: "asked",
+  held: "held",
+  finished: "done",
+  "not-ours": "foreign",
+};
+
+function stampOf(kind: StampKind): Stamp {
+  const voice = STATUS[kind];
+  return { kind, word: voice.word, mark: SHAPES[kind], accent: voice.accent };
 }
 
 export const STAMPS: Record<StampKind, Stamp> = {
-  done: { kind: "done", word: "DONE", mark: "done" },
-  error: { kind: "error", word: "ERROR", mark: "error" },
-  held: { kind: "held", word: "HELD", mark: "held" },
-  foreign: { kind: "foreign", word: "NOT OURS", mark: "foreign" },
+  error: stampOf("error"),
+  asked: stampOf("asked"),
+  held: stampOf("held"),
+  finished: stampOf("finished"),
+  "not-ours": stampOf("not-ours"),
 };
 
 /** What a counter calls each state. Lowercase here — a tally is prose, a stamp is a stamp — but
  *  it is the SAME word underneath, which is the whole point of the table. */
 export const WORDS = {
   running: "on",
-  done: "done",
-  error: "error",
-  held: "held",
-  foreign: "not ours",
+  done: STATUS.finished.word.toLowerCase(),
+  error: STATUS.error.word.toLowerCase(),
+  held: STATUS.held.word.toLowerCase(),
+  foreign: STATUS["not-ours"].word.toLowerCase(),
 } as const;
 
 /** Anything either surface can hand this module. Neither view's row type is imported, so this
@@ -66,18 +93,27 @@ export interface Standing {
   idle_seconds: number;
 }
 
-/** THE rule for what a run is showing, in one place.
+/** THE rule for what a run is showing, in one place — and it produces the RAIL's vocabulary,
+ *  not a second one.
  *
  *  Note the order: a dead run is ERROR even if it has been dead for an hour, and only a RUNNING
  *  one can be HELD. Sleeping a finished or foreign run says "stuck" when it is simply over — the
  *  building used to do exactly that, snoozing a DONE worker, while the desk did not.
+ *
+ *  ASKED is deliberately unreachable from here and that is a DATA gap, not an omission: the rail
+ *  gets `awaitingReply` from the run record, and the workplace's own view model never carried it.
+ *  The state is declared so the world can draw it the day the field arrives.
  */
+export function attentionOf(w: Standing): Attention {
+  if (w.status === "error") return "error";
+  if (w.status === "foreign") return "not-ours";
+  if (w.status === "done") return "finished";
+  return w.idle_seconds >= STALL_SECONDS ? "held" : "working";
+}
+
 export function stampFor(w: Standing): Stamp | null {
-  if (w.status === "error") return STAMPS.error;
-  if (w.status === "done") return STAMPS.done;
-  if (w.status === "foreign") return STAMPS.foreign;
-  if (w.status === "running" && w.idle_seconds >= STALL_SECONDS) return STAMPS.held;
-  return null;
+  const a = attentionOf(w);
+  return a === "working" ? null : STAMPS[a];
 }
 
 /** Only work can stall. Used by both surfaces for the sleep mark and the stopped ambient. */
@@ -95,7 +131,7 @@ export function markOf(status: string, scale = 2): string {
 /** The stamp itself. One element, one class, both panels. */
 export function stampHtml(s: Stamp, scale = 2): string {
   return (
-    `<span class="wp-stamp" data-kind="${s.kind}">` +
+    `<span class="wp-stamp" data-kind="${s.kind}" style="--voice:var(${s.accent})">` +
     `${markOf(s.mark, scale)}<b>${s.word}</b></span>`
   );
 }
@@ -139,14 +175,14 @@ export const STAMP_CSS = String.raw`
   transform: rotate(-7deg);
 }
 .wp-stamp svg { display: block; }
-.wp-stamp[data-kind="done"] {
-  --stamp: color-mix(in srgb, var(--wp-ok) var(--stamp-mix, 52%), var(--stamp-ink));
+.wp-stamp[data-kind="finished"], .wp-stamp[data-kind="asked"] {
+  --stamp: color-mix(in srgb, var(--voice) var(--stamp-mix, 52%), var(--stamp-ink));
 }
-.wp-stamp[data-kind="foreign"], .wp-stamp[data-kind="held"] { --stamp: var(--stamp-ink); }
+.wp-stamp[data-kind="not-ours"], .wp-stamp[data-kind="held"] { --stamp: var(--stamp-ink); }
 .wp-stamp[data-kind="error"] {
   --stamp: #fff;
-  background: color-mix(in srgb, var(--wp-bad) 58%, #1a0508);
-  border-color: color-mix(in srgb, var(--wp-bad) 58%, #1a0508);
+  background: color-mix(in srgb, var(--voice) 58%, #1a0508);
+  border-color: color-mix(in srgb, var(--voice) 58%, #1a0508);
   /* The one state where a person is wanted NOW keeps a piece of motion, and it is a halo rather
      than a blink: blinking a word to 15% opacity makes it unreadable half the time, which is a
      strange thing to do to the only word that matters. The plate holds still and full strength;
@@ -154,8 +190,8 @@ export const STAMP_CSS = String.raw`
   animation: wp-stamp-alarm calc(var(--beat) * 2 / 3) ease-in-out infinite;
 }
 @keyframes wp-stamp-alarm {
-  0%, 100% { box-shadow: var(--stamp-shadow, 0 0 0 0 transparent), 0 0 0 0 color-mix(in srgb, var(--wp-bad) 65%, transparent); }
-  50% { box-shadow: var(--stamp-shadow, 0 0 0 0 transparent), 0 0 0 5px color-mix(in srgb, var(--wp-bad) 0%, transparent); }
+  0%, 100% { box-shadow: var(--stamp-shadow, 0 0 0 0 transparent), 0 0 0 0 color-mix(in srgb, var(--voice) 65%, transparent); }
+  50% { box-shadow: var(--stamp-shadow, 0 0 0 0 transparent), 0 0 0 5px color-mix(in srgb, var(--voice) 0%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
   .wp-stamp[data-kind="error"] { animation: none; }

@@ -392,6 +392,12 @@ export const MARKS: Record<string, Piece> = {
     grid: ["MMMMMM", "M....M", "M....M", "M....M", "M....M", "MMMMMM"],
     pal: { M: "var(--mark)" },
   },
+  // asked — a sealed note. The one state where the agent is waiting on a PERSON, so the shape is
+  // the only one in the set that depicts a thing handed over rather than a condition.
+  asked: {
+    grid: ["MMMMMM", "MM..MM", "M.MM.M", "M....M", "M....M", "MMMMMM"],
+    pal: { M: "var(--mark)" },
+  },
   // held — an hourglass: running, but nothing has happened for a long time.
   //
   // It needed its own shape. The side bar used to stamp HELD with the open square, which is the

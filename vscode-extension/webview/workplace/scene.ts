@@ -38,7 +38,8 @@ import type { TileId } from "./tiles";
 import { buildWorld } from "./world";
 import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
 import { assignAccents, atMillis, faceOf, hash, idleAmount, shortDuration } from "./palette";
-import { WORDS, isHeld, markOf, stampFor, stampHtml } from "./status";
+import { WORDS, attentionOf, isHeld, markOf, stampFor, stampHtml } from "./status";
+import { CAST, inkPalette, lampsFor, poolRuns, runPath as litPath, wallShadow, LEVELS } from "./light";
 import { buildPods, posts, tally } from "./layout";
 import type { Post } from "./layout";
 import { clip, esc } from "./esc";
@@ -148,6 +149,28 @@ function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
   });
 }
 
+/** The same drawing, in one flat ink, offset — a prop's own SILHOUETTE lying on the floor beside
+ *  it. Everything in the building is lit from the north-west, so everything in the building drops
+ *  the same way; a scene where each object invents its own light direction reads as collage.
+ *
+ *  Ground tiles do not cast (a floor casting a shadow on the floor is a chequerboard) and neither
+ *  do the walls, which have their own band in `wallShadow`. */
+const FLAT: ReadonlySet<TileId> = new Set<TileId>([
+  "floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug",
+  "doorCap", "doorWay", "matt",
+]);
+
+function castOf(id: TileId, x: number, y: number): string {
+  if (FLAT.has(id)) return "";
+  const t = TILES[id];
+  return draw(t.grid, inkPalette(t.pal), {
+    scale: 1,
+    outline: false,
+    className: "wp-drop",
+    attrs: `x="${x * TILE_CELLS + CAST.dx}" y="${y * TILE_CELLS + CAST.dy}"`,
+  });
+}
+
 function patch(id: TileId, r: Rect): string {
   return (
     `<rect x="${r.x * TILE_CELLS}" y="${r.y * TILE_CELLS}" ` +
@@ -205,6 +228,10 @@ function drift(x: number, y: number): string {
 }
 
 function propHtml(p: Prop): string {
+  return castOf(p.tile, p.x, p.y) + propBody(p);
+}
+
+function propBody(p: Prop): string {
   const cls =
     (p.tile === "core" ? "wp-core " : "") + (p.live === "sway" ? "wp-lv-sway " : "") + (p.live === "fan" ? "wp-lv-fan " : "");
   const own = p.live === "sway" || p.live === "fan" ? drift(p.x, p.y) : "";
@@ -252,11 +279,21 @@ function renderMap(world: World): string {
   // The spine.
   out += patch("lino", world.hall);
 
+  /* THREE PASSES, and the order is the whole reason this looks like a room rather than a plan.
+     Rooms share party walls, so a single pass drew room B's floor over room A's furniture — and,
+     more importantly, LIGHT and SHADOW are properties of the building, not of one room: a wall
+     between two departments casts into both. Grounds first, then the light that falls on them,
+     then the shadow that cuts it, and only then anything that stands up. */
+
+  // Everything under the roof takes the light layer, not only the rooms with doors on them. The
+  // first version lit the departments and left the lobby, the plazas, the chamber and the whole
+  // corridor flat — which is most of the floor, so half the building went on reading as a plan
+  // while the other half read as a place. Only the yard is left out: it has no ceiling.
+  const inside = world.rooms.filter((r) => !r.outdoor);
+
+  // 1. GROUNDS.
   for (const r of world.rooms) {
-    const lit = r.outdoor || r.open ? "" : ` data-lit="0"`;
-    out +=
-      `<g class="wp-rm${r.brain ? " is-brain" : ""}${r.open ? " is-open" : ""}" ` +
-      `data-room="${esc(r.id)}" data-kind="${esc(r.kind)}"${lit}>`;
+    out += `<g class="wp-rm wp-gr" data-room="${esc(r.id)}" data-kind="${esc(r.kind)}">`;
     if (r.outdoor) {
       out += patch("path", { x: world.facadeX, y: world.gateY - 1, w: 4, h: 3 });
     } else if (r.open) {
@@ -273,18 +310,61 @@ function renderMap(world: World): string {
           `width="${r.rug.w * TILE_CELLS - 2}" height="${r.rug.h * TILE_CELLS - 2}"/>`;
       }
       if (r.dais) out += patch("dais", r.dais);
+    }
+    out += `</g>`;
+  }
+
+  // 2. LIGHT. A room is DARK, and its lamps carve pools out of the dark in four quantised bands
+  //    on the tile grid. `data-lit` on the group is the engine's; it decides whether the lamps
+  //    are on, and `data-voice` decides what colour they burn — the same status accent the rail
+  //    prints the word in.
+  for (const r of inside) {
+    const pools = poolRuns(r, lampsFor(r), world.cols);
+    const floor = litPath(r.floorRuns);
+    // A head start of the room's own, so eight lit rooms breathe as a floor rather than as one
+    // animation played eight times — the same reason every prop and every person carries one.
+    out += `<g class="wp-rm wp-lit" data-room="${esc(r.id)}" data-kind="${esc(r.kind)}" data-lit="0" ` +
+      `style="--d:-${(((hash(r.id) % 480) / 100)).toFixed(2)}s">`;
+    for (let i = 0; i <= LEVELS; i++) {
+      if (!pools[i].length) continue;
+      out += `<path class="wp-pool" data-l="${i}" d="${litPath(pools[i])}"/>`;
+    }
+    out += `<path class="wp-shut" d="${floor}"/>`;
+    out += `</g>`;
+  }
+
+  // A passage is lit whether or not anybody is in it — that is the difference between a corridor
+  // and a room, and it is what gives the plan a bright spine to read the dark rooms against.
+  {
+    const spine: Room = { ...world.rooms[0], id: "__hall", kind: "hall", rects: [world.hall], floorRuns: [world.hall], props: [] };
+    const pools = poolRuns(spine, lampsFor(spine), world.cols);
+    out += `<g class="wp-rm wp-lit is-hall" data-room="__hall" data-kind="hall" data-lit="1">`;
+    for (let i = 0; i <= LEVELS; i++) {
+      if (!pools[i].length) continue;
+      out += `<path class="wp-pool" data-l="${i}" d="${litPath(pools[i])}"/>`;
+    }
+    out += `</g>`;
+  }
+
+  // 3. SHADOW. One direction for the whole building, computed from the same grid a body walks on,
+  //    so the party wall between two departments casts into both of them and the structural mass
+  //    casts onto the corridor beside it.
+  {
+    const d = wallShadow(world);
+    if (d) out += `<path class="wp-ao" d="${d}"/>`;
+  }
+
+  // 4. STRUCTURE, and everything standing on the floor.
+  for (const r of world.rooms) {
+    out += `<g class="wp-rm wp-bu${r.brain ? " is-brain" : ""}${r.open ? " is-open" : ""}" ` +
+      `data-room="${esc(r.id)}" data-kind="${esc(r.kind)}">`;
+    if (!r.outdoor && !r.open) {
       out += patches("wall", r.wallRuns);
       out += patches("face", r.faceRuns);
       for (const d of r.doors) {
         if (d.deep) out += at("doorCap", d.x, d.y) + at("doorWay", d.x, d.y + 1) + at("matt", d.x, d.y + 2);
         else out += at("doorWay", d.x, d.y) + at("matt", d.x, d.y - 1);
         out += at("doorLeaf", d.x, d.y + (d.deep ? 1 : 0), "wp-leaf");
-      }
-      if (!r.open) {
-        // The light a room casts when somebody is in it, and the veil over it when nobody is.
-        // Both follow the room's actual floor, so an L-shaped room is lit as an L.
-        const d = runPath(r.floorRuns);
-        out += `<path class="wp-glow" d="${d}"/><path class="wp-shut" d="${d}"/>`;
       }
     }
     for (const p of r.props) out += propHtml(p);
@@ -418,6 +498,9 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
   return (
     `<div class="wp-actor${brain ? " is-brain" : ""}" data-run-id="${esc(w.run_id)}" ` +
     `data-status="${esc(w.status)}" data-zone="${esc(w.zone)}" data-stalled="${stalled}" ` +
+    // The state in the RAIL's words, so the room's light and the rail's stamp are one taxonomy
+    // read by two renderers rather than two tables that happen to agree today.
+    `data-attention="${esc(attentionOf(w))}" ` +
     `data-seat="${seat.x},${seat.y}" data-say="${esc(say)}" data-home="${esc(home.id)}" ` +
     (seat.up ? `data-label="up" ` : "") +
     `data-dept="${esc(w.room || w.department || "")}" ` +
