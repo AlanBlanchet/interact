@@ -51,6 +51,12 @@ def _print_resolved_models(indent: str = "  ") -> None:
 
     def _line(task: str, role: str) -> None:
         print(f"{indent}{task:<33}→ {_resolved(role)[0]}  [{role}]")
+        # What it stepped over. "Are we using the best model?" is unanswerable from the chosen id
+        # alone — that reads identically whether the walk found the strongest available or a stale
+        # default was returned with no walk at all. Naming the stronger models it could not reach,
+        # and why, is what makes the answer checkable — and shows which key to add to get more.
+        for passed in config.explain_model(role).skipped:
+            print(f"{indent}{'':<33}  ↑ {passed.model} — {passed.reason}")
 
     _line("screenshot(query) · describe", "image")
     _line("get_interactive_elements", "component")

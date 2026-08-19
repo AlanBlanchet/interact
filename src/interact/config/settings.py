@@ -1,4 +1,5 @@
 import functools
+from dataclasses import dataclass
 import glob
 import json
 import os
@@ -79,6 +80,24 @@ _DEFAULT_SOVEREIGN_MODEL = _SOVEREIGN_MODELS[0]  # preferred default (also a bac
 # by model name — low = quick glance, critical = final pre-ship sign-off. interact maps the tier to
 # a model (sovereign for low/medium, best-available frontier for high/critical) + extra rigor.
 QUALITY_TIERS = ("low", "medium", "high", "critical")
+
+
+@dataclass(frozen=True)
+class SkippedModel:
+    """A stronger model the walk passed over, and why it could not be used."""
+
+    model: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ModelWalk:
+    """What a role resolved to, and what it stepped over getting there."""
+
+    role: str
+    chosen: str
+    pinned: bool
+    skipped: list[SkippedModel]
 
 
 class Config(BaseSettings):
@@ -244,6 +263,34 @@ class Config(BaseSettings):
         if chain.preferences:
             return chain.preferences[0].id
         raise RuntimeError(f"no model available for role {role!r}: empty model catalog")
+
+    def explain_model(self, role: ModelRole) -> ModelWalk:
+        """Which model this role picks, and what it passed over on the way.
+
+        The chosen id alone cannot answer "are we using the best model we have" — that reads the
+        same whether the walk found the strongest available or whether a stale default was
+        returned without any walk at all, which is exactly what used to happen. The skipped list
+        is the evidence, and it distinguishes a key somebody could ADD from a provider interact
+        will not drive at all.
+        """
+        chain = self.chain_for(role)
+        pinned = self.model_for(role)
+        skipped: list[SkippedModel] = []
+        for model in chain.preferences:
+            if model.id == pinned or model.is_available():
+                return ModelWalk(role=role, chosen=model.id, pinned=bool(pinned), skipped=skipped)
+            keys = Model._provider_keys.get(model.provider)
+            if keys:
+                absent = [k for k in keys if not os.environ.get(k)]
+                reason = "no " + ", ".join(absent)
+            elif keys is not None:
+                # Declares no keys at all: a subscription wrapper. interact never drives somebody's
+                # subscription credentials, and its auth is an interactive flow that blocks.
+                reason = "subscription provider — interact does not drive those credentials"
+            else:
+                reason = "unknown provider"
+            skipped.append(SkippedModel(model=model.id, reason=reason))
+        return ModelWalk(role=role, chosen="", pinned=bool(pinned), skipped=skipped)
 
     def resolve_quality_model(self, quality: str) -> str:
         """Map a quality tier to a model PREFERENCE (the "choose the model for me" literal). low/medium

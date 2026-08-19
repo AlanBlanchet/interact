@@ -208,3 +208,35 @@ def test_only_a_provably_unusable_pin_is_walked_past(monkeypatch):
     assert Model.from_litellm_id("alpha/strong").key_missing() is True
     assert Model.from_litellm_id("my-own-box/qwen-vl").key_missing() is False, (
         "an id outside the catalog must not be declared unusable")
+
+
+def test_doctor_can_show_what_was_skipped_and_why(monkeypatch):
+    """"Are we using the best models?" is not answerable from the chosen id alone. The walk is
+    the interesting part — which stronger models were passed over, and for what reason — and
+    without it a person cannot tell "this IS the best I have" from "this is a stale default"."""
+    monkeypatch.setenv("BETA_KEY", "k")
+    cfg = _config(monkeypatch)
+    monkeypatch.setattr(cfg, "_recommendations", CATALOG["recommendations"], raising=False)
+    monkeypatch.setattr(cfg, "image_model", "", raising=False)
+
+    walk = cfg.explain_model("image")
+    assert walk.chosen == "beta/middling"
+    skipped = {s.model: s.reason for s in walk.skipped}
+    assert skipped["alpha/strong"] == "no ALPHA_KEY"
+    # The keyless wrapper is passed over for a DIFFERENT reason, and saying so matters: it is not
+    # a missing key somebody could add, it is a provider interact will not drive.
+    assert "subscription" in skipped["keyless/genius"]
+
+
+def test_the_walk_stops_at_the_chosen_model(monkeypatch):
+    """Only what ranked ABOVE the winner is reported. Anything below was never considered, and
+    listing it would imply it lost on merit rather than never being reached."""
+    monkeypatch.setenv("ALPHA_KEY", "k")
+    cfg = _config(monkeypatch)
+    monkeypatch.setattr(cfg, "_recommendations", CATALOG["recommendations"], raising=False)
+    monkeypatch.setattr(cfg, "image_model", "", raising=False)
+    walk = cfg.explain_model("image")
+    assert walk.chosen == "alpha/strong"
+    # keyless/genius scores 99 — above the winner — so it IS passed over, and saying why is the
+    # whole point. beta/middling ranks below and must not appear.
+    assert [s.model for s in walk.skipped] == ["keyless/genius"]
