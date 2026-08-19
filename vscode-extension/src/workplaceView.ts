@@ -77,13 +77,13 @@ export function plainRoom(state: TeamState, nonce: string): string {
   .rooms { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem; }
   .zone { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: .6rem; }
   h2 { margin: 0 0 .5rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
-       color: var(--vscode-descriptionForeground); }
+       color: color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4)); }
   .worker { border-left: 2px solid var(--vscode-focusBorder); padding: .2rem .5rem; margin: .4rem 0; }
   .worker.done, .worker.foreign { border-left-color: var(--vscode-panel-border); opacity: .55; }
   .who { font-weight: 600; }
-  .doing { color: var(--vscode-descriptionForeground); font-size: .9em; }
+  .doing { color: color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4)); font-size: .9em; }
   .reports { margin-left: .8rem; }
-  .empty { color: var(--vscode-descriptionForeground); margin: 0; }
+  .empty { color: color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4)); margin: 0; }
   .worker { cursor: pointer; }
   .worker:hover { background: var(--vscode-list-hoverBackground); }
 </style></head>

@@ -109,6 +109,18 @@ function esc(v: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** The same mix as `themeTokens.DIM_FOREGROUND`, spelled out rather than imported.
+ *
+ *  This module is loaded directly by `sequence.test.ts` under `--experimental-strip-types`, which
+ *  needs an explicit `.ts` specifier on every import, while `tsc` refuses one when it emits. So a
+ *  file the tests reach this way stays import-free, and the theme tokens live beside the status
+ *  colours below, which are already spelled here for the same reason. `themeTokens.test.ts` fails
+ *  if the two copies ever drift.
+ */
+const DIM_FOREGROUND =
+  "color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, " +
+  "var(--vscode-editor-foreground, #d4d4d4))";
+
 const STATUS_COLOR: Record<string, string> = {
   running: "var(--vscode-charts-blue)",
   done: "var(--vscode-charts-green)",
@@ -125,7 +137,7 @@ export function renderSequence(seq: Sequence): string {
   }
   const parts: string[] = [];
   for (const lane of seq.lanes) {
-    const color = STATUS_COLOR[lane.status] ?? "var(--vscode-descriptionForeground)";
+    const color = STATUS_COLOR[lane.status] ?? DIM_FOREGROUND;
     parts.push(
       `<line class="lifeline" x1="${lane.x}" y1="58" x2="${lane.x}" y2="${seq.height - 12}"/>`,
       `<circle cx="${lane.x}" cy="30" r="5" fill="${color}"/>`,

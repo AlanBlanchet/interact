@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import { ModelsData, providerOf, RangeId } from "./shared";
+import { DIM_FOREGROUND } from "./themeTokens";
 
 export interface UsageEntry {
   timestamp: string;
@@ -143,7 +144,7 @@ export function aggregateStackedByModel(
     name,
     color:
       name === "other"
-        ? "var(--vscode-descriptionForeground)"
+        ? DIM_FOREGROUND
         : colorFor(name),
     values,
   }));

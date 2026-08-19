@@ -87,13 +87,13 @@ export class ConversationPanel {
       background:var(--vscode-editor-background);padding:16px 22px;line-height:1.5;
       max-width:900px;margin:0 auto}
  h1{font-size:16px;margin:0 0 2px}
- .meta{color:var(--vscode-descriptionForeground);font-size:12px;margin:0 0 12px}
+ .meta{color:color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4));font-size:12px;margin:0 0 12px}
  .dim{opacity:.7}
  .task{margin:0 0 18px;padding:8px 12px;border-left:2px solid var(--vscode-focusBorder);
        background:var(--vscode-textBlockQuote-background);font-size:13px}
  .turn{margin:0 0 12px;padding-left:10px;border-left:2px solid transparent}
  .who{font-size:11px;text-transform:uppercase;letter-spacing:.04em;
-      color:var(--vscode-descriptionForeground);margin-bottom:3px}
+      color:color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4));margin-bottom:3px}
  .body{white-space:pre-wrap;word-break:break-word;margin:0;font-family:inherit}
  pre.body,pre.args{font-family:var(--vscode-editor-font-family);font-size:12px;
       background:var(--vscode-textCodeBlock-background);padding:8px 10px;border-radius:4px;

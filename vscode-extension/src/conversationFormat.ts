@@ -354,15 +354,28 @@ follow(true);
 //: spaced on a light plate, panels sit on a hard 2px offset shadow with a solid ink border, and
 //: nothing is rounded softer than the pixel grid allows.
 const STYLE = `
-  :root {
+  /* On BODY, not :root. VS Code injects the live --vscode-* theme variables as an inline style
+     on the body element, and :root (the html element) is body's ANCESTOR — so a var() reading them from :root never
+     resolves and silently falls back. This panel was therefore permanently dark whatever theme
+     the user had chosen, and it looked deliberate. workplace/style.ts scopes its tokens to a
+     body DESCENDANT, which is why the same block works there. */
+  body {
     --wp-bg: var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e));
     --wp-fg: var(--vscode-editor-foreground, #d4d4d4);
-    --wp-dim: var(--vscode-descriptionForeground, #9a9a9a);
+    /* NOT the raw token. VS Code's own Light theme ships descriptionForeground at #767676 on
+       #f8f8f8 — 4.28:1 nominal, under the AA floor before this panel touches it — and this is the
+       label saying WHO spoke, not decoration. Dark clears it comfortably, which is why it went
+       unseen until the light theme first rendered. Pulled toward the foreground, the same
+       treatment --wp-ink and --wp-plate already get here. */
+    --wp-dim: color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, var(--vscode-editor-foreground, #d4d4d4));
     --wp-ink: color-mix(in srgb, var(--wp-fg) 62%, var(--wp-bg));
     --wp-line: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
     --wp-wall: color-mix(in srgb, var(--wp-fg) 7%, var(--wp-bg));
     /* Carries background-coloured text, so it is light enough to read against the background. */
-    --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
+    /* 90%, not 82%: the plate carries BACKGROUND-coloured letters at 10-11px, and at 82% the
+       pair measured 7.3:1 nominal — which is a good deal less than that once anti-aliasing is
+       counted, on text this small. Lighter plate, same device, comfortably readable. */
+    --wp-plate: color-mix(in srgb, var(--wp-fg) 90%, var(--wp-bg));
   }
   body { margin: 0; display: flex; flex-direction: column; height: 100vh;
          font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
@@ -374,7 +387,19 @@ const STYLE = `
            border: 1px solid var(--wp-ink); box-shadow: 2px 2px 0 0 var(--wp-ink);
            align-self: flex-start; }
   .who { font-weight: 700; letter-spacing: .18em; font-size: 11px; text-transform: uppercase; }
-  .status { font-size: 10px; opacity: .78; }
+  /* No opacity. The header is a light plate carrying background-coloured letters, so fading the
+     word composites it toward the plate it sits on — the same way the workplace nameplate and
+     three of the sidebar's devices lost their contrast. Said quieter with size and weight, which
+     cost nothing legible; see plateContrast.test.ts. */
+  /* 11px at 600. Removing the opacity was necessary and not sufficient: at 500/10px the glyphs
+     never reach solid ink, so the composited reading stayed near 2.4:1 however good the colour
+     pair was. Weight and size are what get a small label over the line. */
+  .status { font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+  /* An explicit focus ring rather than the UA's outline:auto, whose rendering against a dark
+     webview background could not be settled from a static harness — ambiguity is not a thing to
+     ship on a keyboard path. */
+  textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 1px; }
 
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
   .hint { color: var(--wp-dim); }
@@ -407,6 +432,12 @@ const STYLE = `
   .turn-tool, .turn-tool_result { font-family: var(--vscode-editor-font-family);
            background: var(--wp-wall); border: 1px solid var(--wp-line); padding: .4em .6em;
            white-space: pre-wrap; overflow-wrap: break-word; }
+  /* The container's pre-wrap is INHERITED, and the UA stylesheet's own pre{white-space:pre}
+     beats an inherited value on the element itself — so a <pre> inside these blocks kept running
+     off the panel. At a 300px side bar that cuts a tool's path or result mid-word, which is the
+     one surface the tools are here to show. */
+  .turn-tool pre, .turn-tool_result pre, .turn .body pre, pre.args {
+           white-space: pre-wrap; overflow-wrap: break-word; margin: 0; }
   .turn-error { color: var(--vscode-errorForeground); }
   /* What YOU or another agent said: a plate, like a worker's speech in the room. */
   .turn-message, .turn-prompt { background: var(--wp-wall); border: 1px solid var(--wp-line);

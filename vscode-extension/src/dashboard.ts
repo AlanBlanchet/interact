@@ -26,6 +26,7 @@ import { readAgentRuns, summarise, withDepth } from "./agents";
 import { describeAge as describeBoardAge, readLeaderboard } from "./leaderboard";
 import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Catalog } from "./catalog";
 import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
+import { DIM_FOREGROUND } from "./themeTokens";
 import {
   readUsageLog,
   filterByRange,
@@ -795,7 +796,7 @@ export class DashboardPanel {
       donutSegs.push({
         label: "other",
         value: otherCalls,
-        color: "var(--vscode-descriptionForeground)",
+        color: DIM_FOREGROUND,
       });
     }
     const donutCell: CellContent = {

@@ -120,3 +120,36 @@ test("hex parsing keeps its channels straight when an alpha is present", () => {
   assert.deepEqual(parseHex("#1e1e1eff"), parseHex("#1e1e1e"));
   assert.throws(() => parseHex("#12345"));
 });
+
+// The chat panel wears the same sign as the rooms — a light plate carrying background-coloured
+// letters — and its status word had `opacity: .78` on it. That is the same mistake as the
+// workplace nameplate and the sidebar's three: opacity dims the TEXT along with the plate, and
+// `getComputedStyle` reports the declared colour, so nothing but a composited read can see it.
+// Fourth instance of one defect, so it gets checked here rather than found again.
+
+const chat = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "conversationFormat.ts"),
+  "utf8",
+);
+
+function chatDecl(selector: string, prop: string): string {
+  const block = chat.split(selector)[1] ?? "";
+  const body = block.slice(0, block.indexOf("}"));
+  const m = new RegExp(`${prop}\\s*:\\s*([^;]+)`).exec(body);
+  return m ? m[1].trim() : "";
+}
+
+test("the chat header's status word is readable on the plate", () => {
+  const opacity = Number(chatDecl(".status {", "opacity") || 1);
+  const failures: string[] = [];
+  for (const theme of THEMES) {
+    // header: background var(--wp-plate), color var(--wp-bg) — the room sign, verbatim.
+    // Read the plate's mix out of the file, so changing the token moves this number.
+    const pct = Number(/--wp-plate:\s*color-mix\(in srgb, var\(--wp-fg\) ([\d.]+)%/.exec(chat)?.[1] ?? 82);
+    const plate = mix(theme.fg, theme.bg, pct);
+    const ink = over(theme.bg, plate, opacity);
+    const ratio = contrastRatio(ink, plate);
+    if (ratio < SMALL_TEXT_FLOOR) failures.push(`${theme.name}: ${ratio.toFixed(2)}:1`);
+  }
+  assert.deepEqual(failures, [], `chat status under ${SMALL_TEXT_FLOOR}:1`);
+});

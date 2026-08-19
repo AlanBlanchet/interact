@@ -10,6 +10,7 @@ import * as vscode from "vscode";
 import { readAgentMessages, readAgentRuns } from "./agents";
 import { agentsDir } from "./paths";
 import { buildSequence, renderSequence } from "./sequenceFormat";
+import { DIM_FOREGROUND } from "./themeTokens";
 
 export class SequencePanel {
   private static current: SequencePanel | undefined;
@@ -62,12 +63,12 @@ export class SequencePanel {
  body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);
       background:var(--vscode-editor-background);padding:14px 18px}
  h1{font-size:14px;margin:0 0 2px}
- .meta{color:var(--vscode-descriptionForeground);font-size:12px;margin:0 0 14px}
- .empty{color:var(--vscode-descriptionForeground)}
+ .meta{color:${DIM_FOREGROUND};font-size:12px;margin:0 0 14px}
+ .empty{color:${DIM_FOREGROUND}}
  .scroll{overflow:auto;max-width:100%}
  .lifeline{stroke:var(--vscode-panel-border);stroke-width:1;stroke-dasharray:3 4}
  .lane-name{fill:var(--vscode-foreground);font-size:12px;font-weight:600}
- .lane-meta{fill:var(--vscode-descriptionForeground);font-size:10px}
+ .lane-meta{fill:${DIM_FOREGROUND};font-size:10px}
  .arrow{stroke-width:1.4}
  .arrow.message{stroke:var(--vscode-charts-blue)}
  .arrow.spawn{stroke:var(--vscode-charts-purple);stroke-dasharray:4 3}
@@ -77,7 +78,7 @@ export class SequencePanel {
  .arrow-label{font-size:10px}
  .arrow-label.message{fill:var(--vscode-charts-blue)}
  .arrow-label.spawn{fill:var(--vscode-charts-purple)}
- .key{margin-top:14px;font-size:11px;color:var(--vscode-descriptionForeground)}
+ .key{margin-top:14px;font-size:11px;color:${DIM_FOREGROUND}}
 </style></head><body>
 <h1>Agent sequence</h1>
 <p class="meta">${seq.lanes.length} agent${seq.lanes.length === 1 ? "" : "s"} · ${live} running · time flows downward</p>
