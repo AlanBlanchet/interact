@@ -8,17 +8,15 @@
  *  editor background stops looking like a person.
  *
  *  MOTION follows one beat. Every ambient animation's duration is an integer ratio of `--beat`,
- *  so a room full of sprites moves as one thing rather than as nine independent loops. The only
- *  duration that is not a ratio of the beat is travel, and that is deliberate: walking between
- *  rooms is an EVENT, and an event that lands on the ambient beat is invisible.
+ *  so a room full of sprites moves as one thing rather than as nine independent loops. The one
+ *  exception is walking, and it is deliberate: a walk is driven by the ENGINE, frame by frame off
+ *  the distance covered, because a footfall on a CSS clock slides the moment a body speeds up.
  */
 
 import { STAMP_CSS } from "./status";
 
 export const STYLE = String.raw`
 *, *::before, *::after { box-sizing: border-box; }
-/* A worker is a <figure> and a nameplate a <figcaption> — the right elements, and both carry a
-   UA margin (1em 40px) that silently padded every person in the building by 80px of width. */
 html, body, figure, figcaption, header, footer, p { margin: 0; padding: 0; }
 
 body {
@@ -27,920 +25,429 @@ body {
   background: var(--vscode-editor-background, #1e1e1e);
   font-size: 12px;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 .wp {
-  /* ── tempo ──────────────────────────────────────────────────────────────────────────────
-     One beat. Everything ambient is a ratio of it; change this line and the whole workplace
-     speeds up or slows down together. */
   --beat: 2.4s;
-  --gait: calc(var(--beat) / 2);
-  /* Travel runs on the same clock as everything else: a stride is one eighth of the beat, which
-     at a walking pace of ~118px/s puts a footfall about every 15px. Slow it and people moonwalk;
-     speed it and they scurry. */
-  --stride: calc(var(--beat) / 8);
-  /* Daylight through the open door, and the flat tone a courier is drawn in. Both follow the
-     theme rather than being literals, so the light is warm on a dark wall and cool on a bright
-     one instead of a hole punched in the elevation. */
-  --wp-daylight: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
-  --wp-runner: color-mix(in srgb, var(--wp-fg) 88%, var(--wp-bg));
-  --wp-runner-ink: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
-  --travel: 820ms;
-  --ease-walk: cubic-bezier(.34, .02, .2, 1);
-  --ease-settle: cubic-bezier(.22, 1, .32, 1);
 
-  /* ── world ──────────────────────────────────────────────────────────────────────────────
-     Mixed from the theme so one set of rules serves every colour scheme. */
   --wp-bg: var(--vscode-editor-background, #1e1e1e);
   --wp-fg: var(--vscode-editor-foreground, #d4d4d4);
-  --wp-dim: var(--vscode-descriptionForeground, #9a9a9a);
+  /* The editor's description colour is tuned for the EDITOR background, not for a small label on
+     a busy floor: it measures 3.95:1 at 10px in a light theme, under the 4.5 floor. Lifted toward
+     the foreground until both themes clear it — the same trap this project has already been bitten
+     by on the side bar's role line. */
+  --wp-dim: color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 68%, var(--wp-fg));
   --wp-ink: #14101c;
   --wp-tint: #e8e4f0;
 
-  --wp-wall: color-mix(in srgb, var(--wp-fg) 7%, var(--wp-bg));
-  --wp-wall-lit: color-mix(in srgb, var(--wp-fg) 13%, var(--wp-bg));
-  --wp-line: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
-  --wp-floor: color-mix(in srgb, var(--wp-fg) 19%, var(--wp-bg));
-  --wp-floor-line: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
-  --wp-lamp: color-mix(in srgb, var(--wp-h3) 22%, transparent);
-  /* The moment a room is left or entered. Its own token, not the resting lamp: the lamp says
-     "someone works here" and has to sit quietly under text all day, while this fires for under a
-     second and its whole job is to be caught in peripheral vision. Tuned by measurement — at the
-     lamp's own strength the pulse moved 22 levels, which is a glow you find only by looking for
-     it, and that is the defect it exists to fix. */
-  --wp-stir: color-mix(in srgb, var(--wp-h3) 58%, transparent);
-  --wp-slab: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
-  /* A plate that carries BACKGROUND-coloured text, so it has to be light enough to read against
-     the background — the decorative slab above is not (measured 2.38:1 dark, 1.89:1 light). */
-  --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
-
-  --wp-metal: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
-  --wp-wood: color-mix(in srgb, #8a5a2b 74%, var(--wp-bg));
-  --wp-door: color-mix(in srgb, #8a5a2b 44%, var(--wp-bg));
-  --wp-screen: color-mix(in srgb, #0b2a33 78%, var(--wp-bg));
-  --wp-paper: color-mix(in srgb, #f3efe4 82%, var(--wp-bg));
-  --wp-glass: color-mix(in srgb, #9fd6e0 46%, var(--wp-bg));
-  --wp-cushion: color-mix(in srgb, #d9c9a8 66%, var(--wp-bg));
-  --wp-cloud: color-mix(in srgb, #ffffff 62%, transparent);
-  --wp-leaf: var(--wp-h4);
-  --wp-brass: #d2a54a;
-  --wp-exit: var(--wp-h4);
-  --wp-led: var(--wp-h4);
-  --wp-led-dim: color-mix(in srgb, var(--wp-h4) 26%, var(--wp-ink));
-  --wp-glow: var(--wp-h3);
-  --wp-far: color-mix(in srgb, var(--wp-ink) 58%, var(--wp-h1));
-  --wp-disc: color-mix(in srgb, var(--wp-h3) 72%, #ffffff);
-
-  /* The six pod hues, from the theme's own chart palette. */
   --wp-h1: var(--vscode-charts-blue, #4f9cf5);
   --wp-h2: var(--vscode-charts-purple, #b180d7);
-  --wp-h3: var(--vscode-charts-yellow, #e2c08d);
-  --wp-h4: var(--vscode-charts-green, #6fc28b);
-  --wp-h5: var(--vscode-charts-orange, #e8925a);
-  /* Two more mixed from the palette rather than reaching for red, which is spoken for. */
+  --wp-h3: var(--vscode-charts-yellow, #d7ba7d);
+  --wp-h4: var(--vscode-charts-green, #89d185);
+  --wp-h5: var(--vscode-charts-orange, #d18616);
   --wp-h6: color-mix(in srgb, var(--wp-h1) 55%, var(--wp-h4));
-  --wp-h7: color-mix(in srgb, var(--wp-h2) 62%, var(--vscode-charts-red, #e06c75));
+  --wp-h7: color-mix(in srgb, var(--wp-h2) 55%, var(--wp-h5));
+  --wp-ok: var(--wp-h4);
+  --wp-bad: var(--vscode-errorForeground, #f14c4c);
+  --wp-line: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
+  /* A room nobody is in. A VEIL rather than an absent glow: in a light theme "no light" left the
+     empty room the BRIGHTEST thing on screen, so occupancy read backwards. Mixing toward ink
+     greys it in a light theme and darkens it in a dark one, which is "off" in both. */
+  --wp-shut: color-mix(in srgb, var(--wp-ink) 34%, transparent);
+  --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
+  --wp-paper: color-mix(in srgb, #f3efe4 82%, var(--wp-bg));
 
-  --wp-ok: var(--vscode-charts-green, #6fc28b);
-  --wp-bad: var(--vscode-errorForeground, #e06c75);
-  --wp-bubble-bg: color-mix(in srgb, var(--wp-fg) 90%, var(--wp-bg));
-  --wp-bubble-fg: var(--wp-bg);
+  /* ── the tile palette ───────────────────────────────────────────────────────────────────
+     Every colour any tile may use, in one place. The art is authored against these names, so a
+     light building and a dark one are the same drawings — no second tileset exists. */
+  --t-floor: color-mix(in srgb, var(--wp-fg) 13%, var(--wp-bg));
+  --t-floor-hi: color-mix(in srgb, var(--wp-fg) 20%, var(--wp-bg));
+  --t-grout: color-mix(in srgb, var(--wp-fg) 19%, var(--wp-bg));
+  --t-dais: color-mix(in srgb, var(--wp-h3) 22%, var(--wp-bg));
+  --t-dais-hi: color-mix(in srgb, var(--wp-h3) 34%, var(--wp-bg));
+  --t-carpet: color-mix(in srgb, var(--wp-fg) 11%, var(--wp-bg));
+  --t-carpet-hi: color-mix(in srgb, var(--wp-fg) 16%, var(--wp-bg));
+  --t-wall: color-mix(in srgb, var(--wp-fg) 24%, var(--wp-bg));
+  --t-wall-cap: color-mix(in srgb, var(--wp-fg) 38%, var(--wp-bg));
+  --t-wall-foot: color-mix(in srgb, var(--wp-ink) 60%, var(--wp-bg));
+  --t-mat: color-mix(in srgb, var(--wp-h3) 26%, var(--wp-bg));
+  --t-wood: color-mix(in srgb, #8a5a2b 74%, var(--wp-bg));
+  --t-wood-hi: color-mix(in srgb, #b8834a 74%, var(--wp-bg));
+  --t-metal: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
+  --t-lit: var(--wp-h4);
+  --t-glass: color-mix(in srgb, #9fd6e0 52%, var(--wp-bg));
+  --t-leaf: color-mix(in srgb, var(--wp-h4) 62%, var(--wp-bg));
+  --t-ground: color-mix(in srgb, var(--wp-h4) 26%, var(--wp-bg));
+  --t-ground-hi: color-mix(in srgb, var(--wp-h4) 36%, var(--wp-bg));
+  --t-path: color-mix(in srgb, var(--wp-h3) 30%, var(--wp-bg));
+  --t-path-hi: color-mix(in srgb, var(--wp-h3) 40%, var(--wp-bg));
+  --t-fabric: color-mix(in srgb, var(--wp-h5) 40%, var(--wp-bg));
+  --t-book: color-mix(in srgb, var(--wp-h2) 62%, var(--wp-bg));
+  --t-book2: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
+  --t-ink: color-mix(in srgb, var(--wp-ink) 78%, var(--wp-bg));
 
-  /* How the shared stamp is MOUNTED in a room. The device itself — the rule, the tilt, the
-     tracking, the four colour treatments — comes from status.ts and is byte-identical on the
-     desk; what a room supplies is only the physics. A placard here stands over someone's head
-     against whatever the room is painted, so unlike ink on paper it has to be OPAQUE (the same
-     argument that made the nameplate opaque: a label whose background is decided by the prop
-     behind it has an uncomputable contrast) and it throws the hard pixel shadow every other sign
-     in this building throws. Its ink is the editor foreground, not --wp-ink: --wp-ink is a
-     near-black outline colour and would vanish into a dark room. */
   --stamp-ink: var(--wp-fg);
-  --stamp-quiet: var(--wp-fg);
-  --stamp-mix: 52%;
+  --stamp-quiet: var(--wp-dim);
+  --stamp-mix: var(--wp-bg);
   --stamp-bg: var(--wp-bg);
-  --stamp-shadow: 2px 2px 0 0 var(--wp-ink);
+  --stamp-shadow: var(--wp-ink);
 
-  --w-lead: 122px;
-  --w-rep: 104px;
-  --w-mini: 92px;
-
+  padding: 6px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px 16px;
-  min-width: 320px;
+  gap: 6px;
+  min-height: 100vh;
 }
 
-/* A light theme needs a softer ink and the tint mixes the other way, or every report's shirt
-   washes out to nothing. */
+/* A light theme has to flip the tint dark, or every team colour pastels out against cream. */
 body.vscode-light .wp,
 body.vscode-high-contrast-light .wp {
-  --wp-ink: #2c2438;
   --wp-tint: #2f2a3a;
-  /* A light theme's chart green is mid-valued against near-white, so the same 52% that clears the
-     floor on a dark room leaves it too pale here. Re-derived, never copied across — the desk
-     learned the same lesson at the same number. */
-  --stamp-mix: 40%;
-  /* An empty room must be the QUIETEST thing on screen, which on a light theme means greyer than
-     its neighbours — not whiter. Lighting it up was exactly backwards: the dark room reading was
-     inverted and "where is everyone" answered wrong. */
-  --wp-wall: color-mix(in srgb, var(--wp-fg) 15%, var(--wp-bg));
-  --wp-wall-lit: color-mix(in srgb, var(--wp-h3) 14%, var(--wp-bg));
-  --wp-floor: color-mix(in srgb, var(--wp-fg) 22%, var(--wp-bg));
-  --wp-floor-line: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
-  --wp-lamp: color-mix(in srgb, var(--wp-h3) 30%, transparent);
-  --wp-stir: color-mix(in srgb, var(--wp-h3) 62%, transparent);
-  --wp-bubble-bg: color-mix(in srgb, var(--wp-fg) 84%, var(--wp-bg));
+  --t-wall-foot: color-mix(in srgb, var(--wp-ink) 32%, var(--wp-bg));
+  --t-carpet: color-mix(in srgb, var(--wp-h1) 9%, var(--wp-bg));
+  --t-carpet-hi: color-mix(in srgb, var(--wp-h1) 15%, var(--wp-bg));
 }
 
-/* ── the board by the door ───────────────────────────────────────────────────────────────── */
+/* ── the board by the door ─────────────────────────────────────────────────────────────────── */
 
 .wp-hud {
   display: flex;
   align-items: center;
-  gap: 10px 16px;
+  gap: 10px;
   flex-wrap: wrap;
+  font-size: 11px;
 }
-
 .wp-sign {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 3px 9px;
-  background: var(--wp-plate);
-  color: var(--wp-bg);
-  border: 1px solid var(--wp-ink);
-  box-shadow: 2px 2px 0 0 var(--wp-ink);
+  gap: 6px;
+  padding: 2px 8px;
+  border: 2px solid var(--wp-line);
+  background: color-mix(in srgb, var(--wp-fg) 8%, var(--wp-bg));
 }
-.wp-sign-name { font-weight: 700; letter-spacing: .18em; font-size: 11px; text-transform: uppercase; }
-.wp-sign-sub { font-size: 10px; opacity: .78; }
+.wp-sign-name { font-weight: 700; letter-spacing: .13em; text-transform: uppercase; font-size: 11px; }
+.wp-sign-sub { color: var(--wp-dim); font-size: 10px; }
+.wp-tally { display: inline-flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.wp-chip { display: inline-flex; align-items: center; gap: 4px; color: var(--wp-dim); }
+.wp-chip b { color: var(--wp-fg); }
+.wp-clock { margin-left: auto; color: var(--wp-dim); font-size: 10px; }
 
-.wp-tally { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.wp-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--wp-dim); }
-.wp-chip b { color: var(--wp-fg); font-weight: 600; font-variant-numeric: tabular-nums; }
-.wp-chip svg { display: block; }
-.wp-clock { margin-left: auto; font-size: 10px; color: var(--wp-dim); font-variant-numeric: tabular-nums; }
+/* ── the stage ─────────────────────────────────────────────────────────────────────────────
+   The building is laid out ONCE at its true tile size and then scaled as one object. Letting it
+   reflow would be the flexbox mistake in another costume: a floor plan has a shape, and every
+   route the engine computes is in tiles, so the picture must stay in exact proportion at any
+   panel width. */
 
-/* ── the scene: a building, and the outdoors beside it ───────────────────────────────────── */
-
-.wp-scene {
+.wp-view {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(158px, .26fr);
-  align-items: stretch;
-  border: 2px solid var(--wp-ink);
-  background: var(--wp-bg);
-  overflow: hidden;
+  overflow: auto;
+  margin: 0 auto;
+  border: 2px solid var(--wp-line);
+  background: color-mix(in srgb, var(--wp-ink) 30%, var(--wp-bg));
 }
-
-/* Nobody outside: the street narrows to a strip. It keeps its sky, its sun and its skyline, so
-   the building still has an outside to be inside of — it simply stops being a quarter of the
-   picture on a day when the whole team is indoors. */
-.wp-scene[data-outside="0"] { grid-template-columns: minmax(0, 1fr) minmax(72px, .1fr); }
-.wp-scene[data-outside="0"] .wp-disc { transform: scale(.7); top: 10px; right: 8px; }
-
-.wp-building { display: flex; flex-direction: column; min-width: 0; }
-
-.wp-roof {
-  height: 12px;
-  background:
-    repeating-linear-gradient(90deg, var(--wp-slab) 0 7px, color-mix(in srgb, var(--wp-slab) 70%, var(--wp-ink)) 7px 8px);
-  border-bottom: 2px solid var(--wp-ink);
-}
-
-.wp-floor {
-  display: grid;
-  grid-template-columns: var(--cols, 1fr);
-  grid-template-rows: 66px auto;
-  min-width: 0;
-  border-bottom: 2px solid var(--wp-ink);
-}
-.wp-floor:last-of-type { border-bottom: 0; }
-/* An empty storey keeps its rooms and its shape, at a fraction of the height: with a small team
-   the vacant floors were most of the canvas while the people crammed into a corner of it. The
-   props scale with it rather than being cropped, so a dark room still reads as that room. */
-.wp-floor[data-vacant="1"] { grid-template-rows: 30px auto; }
-.wp-floor[data-vacant="1"] .wp-prop { transform: scale(.62); transform-origin: center bottom; }
-.wp-floor[data-vacant="1"] .wp-sign { opacity: .72; }
-
-.wp-base {
-  height: 10px;
-  background: var(--wp-slab);
-  border-top: 2px solid var(--wp-ink);
-}
-
-/* ── a room ──────────────────────────────────────────────────────────────────────────────── */
-
-.wp-room {
-  --heads: 0;
+.wp-stagebox {
   position: relative;
-  min-width: 0;
-  display: grid;
-  grid-row: 1 / -1;
-  /* Rows come from the floor, so every room on a storey puts its floorboards at the same height
-     and the building has continuous storeys instead of a stepped skyline of panels. */
-  grid-template-rows: subgrid;
-  background: var(--wp-wall);
-  border-right: 2px solid var(--wp-ink);
+  transform-origin: 0 0;
+  image-rendering: pixelated;
 }
-.wp-floor > .wp-room:last-child { border-right: 0; }
+.wp-map { position: absolute; inset: 0; display: block; }
+.wp-world { display: none; }
 
-/* Not a zone: the stairwell that ties the storeys together, and the only way between them.
-   It runs the full height as the first column of every storey, so the flights line up by
-   construction rather than by a fr unit happening to agree. */
-.wp-lobby { background: color-mix(in srgb, var(--wp-fg) 9%, var(--wp-bg)); }
-.wp-lobby .wp-wall { align-items: stretch; margin-bottom: 0; padding: 0; }
-.wp-lobby .wp-prop { opacity: .8; align-self: flex-end; }
-/* The landing: the strip of floor at the top of each flight, so a storey reads as somewhere you
-   arrive rather than as a wall the stairs are painted on. */
-.wp-shaft .wp-deck {
-  background:
-    linear-gradient(var(--wp-ink), var(--wp-ink)) left bottom 11px / 100% 2px no-repeat,
-    repeating-linear-gradient(90deg, var(--wp-metal) 0 5px, color-mix(in srgb, var(--wp-metal) 62%, var(--wp-ink)) 5px 6px)
-      left bottom / 100% 11px no-repeat;
+/* Daylight crossing the building. One rectangle, one minute, no layout: it is the only thing on
+   screen slower than a person, which is what makes the place feel like it has a time of day. */
+.wp-view::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 400;
+  background: linear-gradient(105deg,
+    transparent 0%,
+    color-mix(in srgb, var(--wp-h3) 7%, transparent) 42%,
+    transparent 74%);
+  background-size: 260% 100%;
+  animation: wp-daylight calc(var(--beat) * 25) ease-in-out infinite alternate;
 }
+@keyframes wp-daylight { from { background-position: 0% 0; } to { background-position: 100% 0; } }
 
-/* Occupied rooms are LIT. An empty room going dark is the cheapest possible answer to "where is
-   everyone" — you see the shape of the team before you read one name. */
-.wp-room[data-lit="1"] {
-  background:
-    radial-gradient(118% 84% at 50% -8%, var(--wp-lamp) 0%, transparent 64%),
-    var(--wp-wall-lit);
+/* A room with somebody in it is LIT. Answering "where is everyone" with the shape of the light
+   costs nothing to read and happens before a single label does. */
+.wp-glow {
+  fill: color-mix(in srgb, var(--wp-h3) 15%, transparent);
+  opacity: 0;
+  transition: opacity 420ms ease;
 }
-
-.wp-wall {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  overflow: hidden;
-  margin-bottom: -6px;
-  min-width: 0;
+.wp-shut {
+  fill: var(--wp-shut);
+  opacity: 1;
+  transition: opacity 420ms ease;
 }
-.wp-prop { opacity: .5; flex: none; }
-.wp-room[data-lit="1"] .wp-prop { opacity: 1; }
-/* One breath per busy room, on twice the beat: the building is alive, not twitching. */
-.wp-room[data-busy="1"] .wp-prop { animation: wp-breathe calc(var(--beat) * 2) ease-in-out infinite; }
+.wp-rm[data-lit="1"] .wp-glow { opacity: 1; }
+.wp-rm[data-lit="1"] .wp-shut { opacity: 0; }
+.wp-rm.is-brain .wp-glow { fill: color-mix(in srgb, var(--wp-h3) 18%, transparent); }
+.wp-core { animation: wp-core calc(var(--beat) * 1.5) ease-in-out infinite; transform-origin: center; }
+@keyframes wp-core { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
 
 .wp-plaque {
   position: absolute;
-  top: 4px;
-  left: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 9px;
-  letter-spacing: .16em;
+  z-index: 300;
+  font-size: 8px;
+  letter-spacing: .09em;
   text-transform: uppercase;
-  color: var(--wp-dim);
-  background: color-mix(in srgb, var(--wp-bg) 72%, transparent);
+  font-weight: 700;
+  color: var(--wp-bg);
+  background: var(--wp-plate);
   padding: 1px 4px;
-  z-index: 3;
+  box-shadow: 2px 2px 0 var(--wp-ink);
+  white-space: nowrap;
   pointer-events: none;
 }
-.wp-room[data-lit="1"] .wp-plaque { color: var(--wp-fg); }
-.wp-plaque b { font-weight: 700; font-size: 10px; letter-spacing: 0; color: var(--wp-fg); }
 
-/* The floor people stand on. Boards drawn at whole pixels so the surface stays pixel art. */
-.wp-deck {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 5px;
-  padding: 4px 6px 13px;
-  background:
-    linear-gradient(var(--wp-ink), var(--wp-ink)) left bottom 11px / 100% 2px no-repeat,
-    repeating-linear-gradient(90deg, var(--wp-floor) 0 11px, var(--wp-floor-line) 11px 12px)
-      left bottom / 100% 11px no-repeat;
+/* ── a character ───────────────────────────────────────────────────────────────────────────
+   The element is a POINT — a zero-sized anchor standing on a tile — and everything hangs off it.
+   That is what lets the engine move a person with one transform, and what stops the text around
+   somebody from deciding where they are allowed to be.
+
+   The text is deliberately small and deliberately below them. The version this replaced put a
+   paragraph in a grey box over every head: the words out-massed the characters, and a place whose
+   labels are bigger than its people is a diagram, not a place. */
+
+.wp-cast { position: absolute; inset: 0; }
+.wp-actor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 100;
+  cursor: pointer;
+  --c-shirt: var(--accent, var(--wp-h1));
+  --c-badge: color-mix(in srgb, var(--accent, var(--wp-h1)) 42%, var(--wp-ink));
+  --c-eye: #1b1723;
+  --c-mouth: color-mix(in srgb, var(--c-skin, #e0a877) 62%, var(--wp-ink));
+  --c-ghost: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
+  --c-ghost-ink: color-mix(in srgb, var(--wp-fg) 52%, var(--wp-bg));
 }
+.wp-actor[data-depth]:not([data-depth="0"]) { --c-shirt: color-mix(in srgb, var(--accent) 60%, var(--wp-tint)); }
 
-/* ── a pod: a lead and the people they sent out ──────────────────────────────────────────── */
-
-.wp-pod {
-  --accent: var(--wp-h1);
-  position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 2px;
-  padding: 0 5px 6px;
-  background:
-    linear-gradient(
-      180deg,
-      transparent 0%,
-      color-mix(in srgb, var(--accent) 9%, transparent) 62%,
-      color-mix(in srgb, var(--accent) 26%, transparent) 100%
-    );
-  box-shadow:
-    inset 0 -3px 0 0 var(--accent),
-    inset 2px 0 0 -1px color-mix(in srgb, var(--accent) 55%, transparent),
-    inset -2px 0 0 -1px color-mix(in srgb, var(--accent) 55%, transparent);
-  max-width: 100%;
+.wp-body {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 36px;
+  height: 54px;
+  transform: translateX(-50%) rotate(var(--lean, 0deg));
+  transform-origin: 50% 100%;
 }
-/* When a room is too narrow for its teams they stack, and a platform on the upper row is no
-   longer sitting on the floorboards — so every platform carries its own base. A pod reads as a
-   thing standing on something at any height, which is what it is. */
-.wp-pod::after {
+.wp-body .wp-sprite { position: absolute; left: 0; bottom: 0; }
+.wp-actor.face-left .wp-body .wp-sprite { transform: scaleX(-1); }
+
+/* The head of the company stands taller. It is the cheapest true thing the picture can say about
+   the one agent everybody else reports to, and it needs no label to say it. */
+.wp-actor.is-brain .wp-body { transform: translateX(-50%) scale(1.3) rotate(var(--lean, 0deg)); }
+.wp-actor.is-brain::before {
   content: "";
   position: absolute;
-  left: 0; right: 0; bottom: -2px;
-  height: 2px;
-  background: color-mix(in srgb, var(--wp-ink) 50%, transparent);
+  left: -22px;
+  bottom: -5px;
+  width: 44px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--wp-h3) 76%, transparent);
+  animation: wp-crown calc(var(--beat) * 2) ease-in-out infinite;
+}
+@keyframes wp-crown {
+  0%, 100% { opacity: .35; transform: scale(.9); }
+  50% { opacity: .9; transform: scale(1.08); }
 }
 
-/* A visiting member's platform is the same object, smaller — its colour is the whole message:
-   that person belongs to a pod somewhere else in the building. */
-.wp-pod[data-visiting="1"] {
-  background: linear-gradient(180deg, transparent 55%, color-mix(in srgb, var(--accent) 18%, transparent) 100%);
-  box-shadow: inset 0 -2px 0 0 color-mix(in srgb, var(--accent) 75%, transparent);
+.wp-shade {
+  position: absolute;
+  left: -12px;
+  bottom: -2px;
+  width: 24px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--wp-ink) 46%, transparent);
 }
 
-/* ── a worker ────────────────────────────────────────────────────────────────────────────── */
+/* Two poses for standing, two for walking, in one element. Which pair shows is the engine's call:
+   the walk frames are flipped on DISTANCE covered, not on a clock, so a body that accelerates
+   keeps its feet under it. */
+.wp-f { opacity: 0; }
+.wp-stand .wp-f0 { opacity: 1; }
+.wp-actor[data-status="running"] .wp-stand .wp-f0 { animation: wp-fa calc(var(--beat) / 2) steps(1, end) infinite; }
+.wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) / 2) steps(1, end) infinite; }
+@keyframes wp-fa { 0%, 62% { opacity: 1; } 63%, 100% { opacity: 0; } }
+@keyframes wp-fb { 0%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
+.wp-walk { visibility: hidden; }
+.wp-actor.is-walking .wp-stand { visibility: hidden; }
+.wp-actor.is-walking .wp-walk { visibility: visible; }
+.wp-actor.is-walking .wp-walk .wp-f1 { opacity: 1; }
+.wp-actor.is-walking.wp-fA .wp-walk .wp-f1 { opacity: 0; }
+.wp-actor.is-walking.wp-fA .wp-walk .wp-f0 { opacity: 1; }
+.wp-actor.is-walking .wp-shade { opacity: .55; }
 
-.wp-worker {
-  --idle: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 var(--w-rep);
-  /* Definite px, and it has to be max-width, not width: a flex item offers its content's
-     max-content size to the container unless a px maximum clamps it, which is how one long
-     activity phrase used to make its pod 70% wider than the people standing in it. */
-  max-width: var(--w-rep);
-  min-width: 0;
-  cursor: pointer;
-}
-/* The idle fade is on the SPRITE, not on the person's whole card — the third instance of one
-   mistake on this surface, and the one that hid behind the other two. An ancestor opacity here
-   composited the nameplate AND (once the building started printing words) the status stamp: a
-   fifteen-minute-old ghost's NOT OURS measured 4.69 against the desk's 12.36 for the identical
-   stamp, which is the map whispering exactly the fact the desk shouts. The reading was never
-   about the label anyway. Faded and still = idle is a statement about the PERSON. */
-.wp-worker .wp-stage {
-  filter: saturate(calc(1 - .72 * var(--idle))) opacity(calc(1 - .3 * var(--idle)));
-}
-.wp-worker[data-depth="0"] { flex: 0 0 var(--w-lead); max-width: var(--w-lead); }
-.wp-worker[data-depth="2"], .wp-worker[data-depth="3"] { flex: 0 0 var(--w-mini); max-width: var(--w-mini); }
-/* Scoped to the sprite, not the whole worker: filtering the figure faded the NAME PLATE too,
-   down to ~4.24:1 on real pixels — a contrast a computed-style check cannot even see. Someone who
-   has finished should look finished; their name still has to be readable.
-
-   The plate then carried an 'opacity: .82', which is the same mistake one level down: opacity
-   composites the TEXT along with the plate, onto whatever room art is behind a translucent
-   background, and visual-critic measured the result at 3.81-4.05:1 across four samples in three
-   rooms. At 10px almost every pixel of a glyph is anti-aliased, so nominal contrast is not what
-   is read — see plateContrast.test.ts, which holds the whole stack to a floor with headroom.
-   Finished is already said twice over, by the faded sprite and by the dim status mark; the name
-   does not have to whisper it a third time. */
-/* Two fades on one element, so the done grey has to carry the idle terms too rather than be
-   overwritten by them. */
-.wp-worker[data-status="done"] .wp-stage {
-  filter: grayscale(.6) opacity(calc(.58 * (1 - .3 * var(--idle))));
-}
-/* Scoped to the sprite for the same reason the done fade is, and it took a stamp to make it
-   visible: an opacity on the WHOLE worker composites the nameplate and now the NOT OURS stamp
-   along with the person, which is the third time this surface has said "quieter" with a filter
-   over something that has words on it. A ghost is already flat, one-toned and faceless — the
-   sprite carries "not ours" without needing to be dimmed on top, and the label it stands under
-   has to be read like every other. */
-.wp-worker[data-status="foreign"] .wp-stage {
-  filter: opacity(calc(.72 * (1 - .3 * var(--idle))));
-}
-.wp-worker:hover .wp-stage { filter: none; }
-.wp-worker:focus-visible { outline: 1px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 2px; }
-/* A worker carries role="button" and opens its conversation, and the pointer said otherwise.
-   No screenshot can show this — the cursor property puts nothing in the frame — so it survived
-   pass until a critic read the computed style instead of looking. */
-.wp-worker { cursor: pointer; }
-
-/* Activity is the liveliest thing here — it changes about once a second while an agent works —
-   so it is the biggest text in the room, above the head, not a caption under a name. */
-.wp-bubble {
-  position: relative;
-  max-width: 100%;
-  margin-bottom: 5px;
-  padding: 2px 4px;
-  font-size: 10.5px;
-  line-height: 1.2;
-  text-align: center;
-  color: var(--wp-bubble-fg);
-  background: var(--wp-bubble-bg);
-  border: 1px solid var(--wp-ink);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  /* Ellipsis, matching the name plates: a line that simply stops mid-word reads as a rendering
-     fault rather than as text that carries on. */
-  text-overflow: ellipsis;
+.wp-tag {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  transform: translateX(-50%);
+  display: block;
+  max-width: 76px;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  font-size: 7px;
+  line-height: 1.35;
+  letter-spacing: .01em;
+  white-space: nowrap;
+  color: var(--wp-fg);
+  /* Opaque, not translucent. Two characters standing a tile apart WILL overlap — that is what a
+     crowd is — so the one in front has to cover the one behind cleanly rather than blending into
+     it. Depth ordering already decides which that is. */
+  background: color-mix(in srgb, var(--wp-bg) 92%, var(--wp-fg));
+  padding: 0 3px;
+  border-bottom: 1px solid var(--accent, var(--wp-h1));
+  pointer-events: none;
 }
-.wp-bubble::before,
-.wp-bubble::after {
+.wp-actor:hover .wp-tag,
+.wp-actor:focus-visible .wp-tag { max-width: none; overflow: visible; }
+.wp-tag i { font-style: normal; color: var(--wp-dim); margin-left: 3px; }
+.wp-actor.is-brain .wp-tag { font-weight: 700; border-bottom-color: var(--wp-h3); }
+
+/* What this one can DO, read off its own definition file. Six glyphs is the whole vocabulary, so
+   a character that can only read is visibly a different character from one that drives a browser
+   and puts others to work — without a word of prose anywhere. */
+.wp-can {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 1px;
+  pointer-events: none;
+}
+.wp-fac {
+  --mark: var(--wp-bg);
+  font-style: normal;
+  font-size: 8px;
+  line-height: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  color: var(--wp-bg);
+  background: color-mix(in srgb, var(--accent, var(--wp-h1)) 86%, var(--wp-bg));
+}
+.wp-fac svg { display: block; }
+.wp-actor[data-status="foreign"] .wp-fac,
+.wp-actor[data-status="done"] .wp-fac { background: color-mix(in srgb, var(--wp-dim) 70%, var(--wp-bg)); }
+
+/* The line above their head. Hidden by default and shown for a few seconds when it CHANGES, or
+   while a reader is pointing at them. Permanently-open speech was the single biggest thing making
+   this read as a labelled diagram. */
+.wp-say {
+  position: absolute;
+  left: 0;
+  bottom: 66px;
+  transform: translate(-50%, 4px);
+  max-width: 190px;
+  padding: 2px 5px;
+  font-size: 9px;
+  line-height: 1.3;
+  color: var(--wp-ink);
+  background: var(--wp-paper);
+  box-shadow: 2px 2px 0 var(--wp-ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  z-index: 5;
+}
+.wp-say b { font-weight: 400; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-say::after {
   content: "";
   position: absolute;
   left: 50%;
-  background: var(--wp-bubble-bg);
-  border-left: 1px solid var(--wp-ink);
-  border-right: 1px solid var(--wp-ink);
+  bottom: -4px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  background: var(--wp-paper);
 }
-.wp-bubble::before { top: 100%; width: 8px; height: 3px; margin-left: -4px; }
-.wp-bubble::after  { top: calc(100% + 3px); width: 4px; height: 3px; margin-left: -2px; border-bottom: 1px solid var(--wp-ink); }
+.wp-actor.is-saying .wp-say,
+.wp-actor:hover .wp-say,
+.wp-actor:focus-visible .wp-say { opacity: 1; transform: translate(-50%, 0); }
+.wp-actor:hover .wp-say b,
+.wp-actor:focus-visible .wp-say b { white-space: normal; }
+.wp-actor:hover, .wp-actor:focus-visible { z-index: 900 !important; }
 
-/* Someone has stopped: the bubble goes quiet rather than shouting a stale sentence. */
-.wp-worker[data-stalled="1"] .wp-bubble { opacity: .5; }
+/* The back rank wears its name over its head. See Seat.up in world.ts: three tiles is room for two
+   people and not enough for two people plus their labels, and the front body would otherwise be
+   drawn over the back body's name — the wrong person hiding the right person's identity. */
+.wp-actor[data-label="up"] .wp-tag { top: auto; bottom: 58px; }
+.wp-actor[data-label="up"] .wp-can { top: auto; bottom: 70px; }
+.wp-actor[data-label="up"] .wp-say { bottom: 96px; }
+.wp-actor[data-label="up"] .wp-mark { bottom: 84px; }
 
-.wp-stage { position: relative; display: flex; align-items: flex-end; justify-content: center; }
-.wp-sprite { display: block; }
-
-/* The two poses. Both frames are in the same svg so the sprite cannot shift by a pixel between
-   them; the stylesheet just decides which one is showing. */
-.wp-f { opacity: 0; }
-.wp-f0 { opacity: 1; }
-.wp-worker[data-status="running"][data-stalled="0"] .wp-f0 { animation: wp-fa var(--gait) steps(1, end) infinite; }
-.wp-worker[data-status="running"][data-stalled="0"] .wp-f1 { animation: wp-fb var(--gait) steps(1, end) infinite; }
-.wp-worker[data-status="running"][data-stalled="0"] .wp-sprite { animation: wp-bob var(--gait) steps(1, end) infinite; }
-/* Walking is the same two frames, six times the tempo. One asset, two speeds. */
-.wp-worker.is-walking { --gait: calc(var(--beat) / 8); }
-.wp-worker.is-walking .wp-f0 { animation: wp-fa var(--gait) steps(1, end) infinite; }
-.wp-worker.is-walking .wp-f1 { animation: wp-fb var(--gait) steps(1, end) infinite; }
-
-.wp-shadow {
-  position: absolute;
-  bottom: -1px; left: 50%;
-  width: 60%; height: 3px;
-  transform: translateX(-50%);
-  background: color-mix(in srgb, var(--wp-ink) 42%, transparent);
-}
-
-/* Sleep, drawn. Three grey sprites with z's above them say "half the team has stalled" faster
-   than three timestamps ever will. */
-.wp-snooze {
-  position: absolute;
-  top: -2px; right: 4px;
-  animation: wp-snooze calc(var(--beat) * 1.5) ease-out infinite;
-}
-
-/* The placard a worker is standing under. In flow above the head rather than absolutely placed,
-   so a stamped worker grows UPWARD and every pair of boots in the room stays on the same floor
-   line — the one thing a diorama cannot trade away.
-
-   It is allowed to overhang its worker: a stamp that had to fit inside a 92px column would have
-   to drop either its shape or its word, and both are the vocabulary. Physical stamps overhang. */
-.wp-hang {
-  position: relative;
-  z-index: 3;
-  display: flex;
-  justify-content: center;
-  margin-bottom: 5px;
-  pointer-events: none;
-}
-${STAMP_CSS}
-/* The key at the foot of the view prints the STAMPS themselves, so what is explained there is the
-   identical element printed over a person's head and across a work order on the desk. */
-.wp-key { display: inline-flex; align-items: center; gap: 5px; }
-
-/* The nameplate. Status is a SHAPE first — a disc, a tick, a wedge, an open square — because a
-   red dot and a green dot are the same dot to a lot of people, and at this size to everyone. */
-.wp-plate {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  max-width: 100%;
-  margin-top: 3px;
-  padding: 1px 4px;
-  /* Opaque, so what the plate is made of is not decided by the room behind it. At 78% it took a
-     tint from whatever prop it stood over — which meant the same nameplate read dark-on-light in
-     one room and light-on-dark in the next, and made its contrast uncomputable rather than merely
-     low. A label's job is to be read; the room shows through everywhere else. */
-  background: var(--wp-bg);
-  border: 1px solid color-mix(in srgb, var(--wp-ink) 55%, transparent);
-}
-.wp-name {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--wp-fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.wp-worker[data-depth="0"] .wp-name { font-size: 11px; }
-.wp-plate svg { flex: none; }
-/* Was 9px at plain --wp-dim: measured 1.5-2.6:1 on real pixels — worse than the name-plate
-   complaint that started this, and missed by the first fix because it only looked at the name.
-   Mixed toward --wp-dim rather than toward the background, so it stays dark in the light theme
-   instead of washing out. */
-.wp-since {
-  /* 11px, not 10. Measured on real pixels this text came in at 4.64:1 against a 9.40 nominal —
-     AA on a small glyph eats about half — so it cleared the floor by 0.14, which is not headroom.
-     Size is the stronger lever than colour here: the mix cannot go much past the name's own
-     contrast without the two reading as equals, but a larger glyph keeps more of its ink. */
-  font-size: 11px;
-  color: color-mix(in srgb, var(--wp-fg) 90%, var(--wp-dim));
-  font-variant-numeric: tabular-nums;
-  flex: none;
-}
-.wp-lead-of {
-  max-width: 100%;
-  font-size: 9px;
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--accent) 50%, var(--wp-fg));
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-/* An empty footprint where a report used to stand, and where they went. The pod stays honest
-   about its size even when half of it is out of the building. */
-.wp-out {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-end;
-  align-items: center;
-  gap: 2px 4px;
-  max-width: 116px;
-  padding-bottom: 3px;
-}
-.wp-away {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0 3px 1px;
-  font-size: 9px;
-  line-height: 1.4;
-  /* 8.5px at plain --wp-dim measured 4.49:1 — one hundredth under AA, which is under. */
-  color: color-mix(in srgb, var(--wp-dim) 62%, var(--wp-fg));
-  white-space: nowrap;
-  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 85%, transparent);
-}
-.wp-away i { font-style: normal; color: color-mix(in srgb, var(--accent) 88%, var(--wp-fg)); }
-
-.wp-empty {
-  align-self: center;
-  margin: 0 auto;
-  font-size: 10px;
-  color: color-mix(in srgb, var(--wp-dim) 60%, transparent);
-}
-
-/* ── outside ─────────────────────────────────────────────────────────────────────────────── */
-
-.wp-outside {
-  position: relative;
-  display: grid;
-  grid-template-rows: minmax(66px, 1fr) auto;
-  min-width: 0;
-  overflow: hidden;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--wp-h2) 34%, var(--wp-bg)) 0%,
-      color-mix(in srgb, var(--wp-h1) 30%, var(--wp-bg)) 34%,
-      color-mix(in srgb, var(--wp-h1) 15%, var(--wp-bg)) 68%,
-      color-mix(in srgb, var(--wp-h5) 16%, var(--wp-bg)) 100%
-    );
-}
-.wp-outside .wp-deck {
-  background:
-    linear-gradient(var(--wp-ink), var(--wp-ink)) left bottom 11px / 100% 2px no-repeat,
-    repeating-linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--wp-h4) 22%, var(--wp-bg)) 0 13px,
-      color-mix(in srgb, var(--wp-ink) 26%, transparent) 13px 14px
-    ) left bottom / 100% 11px no-repeat;
-}
-/* Two clouds, sixty seconds across — the slowest thing on screen, so the eye reads the sky as
-   sky and never as something to watch. */
-.wp-cloud {
+.wp-mark {
   position: absolute;
   left: 0;
-  opacity: .8;
-  animation: wp-drift calc(var(--beat) * 25) linear infinite;
+  bottom: 54px;
+  transform: translateX(-50%) scale(.55);
+  transform-origin: 50% 100%;
   pointer-events: none;
 }
-/* Three depths, three speeds — the nearest cloud is biggest and quickest, which is the whole of
-   parallax and costs three declarations. */
-.wp-cloud.a { top: 14%; animation-duration: calc(var(--beat) * 30); opacity: .55; }
-.wp-cloud.b { top: 34%; animation-duration: calc(var(--beat) * 46); opacity: .38; }
-.wp-cloud.c { top: 52%; animation-duration: calc(var(--beat) * 20); opacity: .7; }
+.wp-zzz { position: absolute; left: 22px; bottom: 44px; --mark: var(--wp-dim); }
 
-.wp-disc {
-  position: absolute;
-  top: 16px; right: 18px;
-  opacity: .85;
-  pointer-events: none;
-}
+/* Somebody has come over to say something. Both of them stop and turn to each other — a message
+   that lands with nobody reacting is a note flying past a person rather than to one. */
+.wp-actor.is-talking .wp-body { animation: wp-talk 480ms ease-in-out infinite; }
+@keyframes wp-talk { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-1px); } }
+.wp-actor.has-post .wp-shade { background: color-mix(in srgb, var(--wp-h3) 60%, transparent); }
 
-/* The rest of the world, far enough away to be one flat tone. It exists so the sky reads as
-   distance rather than as an empty column beside the building. */
-.wp-skyline {
-  position: absolute;
-  left: 0; right: 0;
-  bottom: -2px;
-  display: block;
-  opacity: .5;
-  pointer-events: none;
-}
-.wp-wall.wp-yard { position: relative; padding-bottom: 0; overflow: hidden; }
+/* A worker the registry says has stopped stops. Scoped to the sprite, never to the whole actor:
+   an ancestor opacity composites the nameplate and the stamp with it, and a greyed-out ERROR is
+   the one word that must never be hard to read. */
+.wp-actor[data-stalled="1"] .wp-body,
+.wp-actor[data-status="done"] .wp-body,
+.wp-actor[data-status="foreign"] .wp-body { opacity: calc(1 - var(--idle, 0) * .38); }
+.wp-actor[data-status="error"] .wp-body { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--wp-bad) 70%, transparent)); }
 
-/* The threshold. The entrance is the last room on the ground floor and the street is immediately
-   to its right, so the two are joined by the one thing that makes it a route: a path. */
-.wp-gangway {
-  position: absolute;
-  left: 0; bottom: 26px;
-  width: 34px; height: 3px;
-  background: repeating-linear-gradient(90deg, var(--wp-ink) 0 4px, transparent 4px 8px);
-  opacity: .8;
-  pointer-events: none;
-}
-.wp-gangway::after {
-  content: "";
-  position: absolute;
-  left: 30px; top: -3px;
-  border: 4px solid transparent;
-  border-left-color: var(--wp-ink);
-  opacity: .8;
-}
-
-/* ── the wake ────────────────────────────────────────────────────────────────────────────────
-   The route drawn behind a traveller, in their pod's colour. It is not decoration: a single 30px
-   figure crossing a scene full of still ones is missable, and this is the mark that is BIGGER
-   than the walker and OUTLIVES them — glance up two seconds late and the line still says somebody
-   went from the Lab, up the stairs, into the Code room. */
-.wp-wake {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  overflow: visible;
-}
-.wp-wake path {
-  fill: none;
-  stroke: var(--accent, var(--wp-h1));
-  stroke-width: 3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 4 5;
-  opacity: .72;
-  /* A soft halo in the same hue, so the route survives crossing a nameplate strip or a lit room.
-     A 2px dashed line at half opacity measured fine in isolation and still had to be hunted for
-     in a 120-worker scene — thin is not the same as quiet, and this signal is meant to be found
-     by someone who glanced away. */
-  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent, var(--wp-h1)) 55%, transparent));
-  /* Runs on the beat like everything else, so a route reads as part of the same building rather
-     than as an overlay someone bolted on. */
-  animation: wp-wake-crawl calc(var(--beat) / 2) linear infinite;
-}
-.wp-wake path.is-spent { opacity: 0; transition: opacity 900ms ease-out; }
-
-/* The walker and the courier draw ON TOP of their own route. */
-.wp-travelling, .wp-errand { z-index: 2; }
-
-@keyframes wp-wake-crawl { to { stroke-dashoffset: -18; } }
-
-/* ── the stir ────────────────────────────────────────────────────────────────────────────────
-   A room brightens for a moment when somebody leaves it or arrives in it. A room is thousands of
-   pixels against a sprite's few hundred, so this is the half of the signal caught in peripheral
-   vision — and it reuses the lamp the building already lights occupied rooms with rather than
-   inventing a second vocabulary for "something happened here".
-
-   Deliberately an inset SHADOW and not a filter: an ancestor filter composites the plaque and the
-   nameplates with it, and every contrast figure on this surface was measured without one. */
-.wp-room.is-stirring, .wp-outside.is-stirring {
-  animation: wp-stir 900ms cubic-bezier(.22,1,.32,1) 1;
-}
-@keyframes wp-stir {
-  0%   { box-shadow: inset 0 0 0 0 transparent; }
-  30%  { box-shadow: inset 0 42px 54px -20px var(--wp-stir); }
-  100% { box-shadow: inset 0 0 0 0 transparent; }
-}
-
-/* ── legend ──────────────────────────────────────────────────────────────────────────────── */
+/* ── the key ───────────────────────────────────────────────────────────────────────────────── */
 
 .wp-legend {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
   font-size: 10px;
   color: var(--wp-dim);
 }
-.wp-legend span { display: inline-flex; align-items: center; gap: 4px; }
-
-/* People's own colours. The SHIRT is the pod's — that is the whole mechanism by which a report
-   three rooms from its lead is still visibly theirs — and everything else is the person's own,
-   hashed from their run id so the same agent has the same face every refresh. */
-.wp-worker {
-  --c-shirt: var(--accent, var(--wp-h1));
-  --c-badge: color-mix(in srgb, var(--accent, var(--wp-h1)) 42%, var(--wp-ink));
-  --c-eye: var(--wp-ink);
-  --c-mouth: color-mix(in srgb, var(--wp-ink) 62%, #a8564a);
-  --c-ghost: color-mix(in srgb, var(--wp-dim) 55%, var(--wp-bg));
-  --c-ghost-ink: color-mix(in srgb, var(--wp-dim) 92%, var(--wp-bg));
+.wp-key { display: inline-flex; align-items: center; gap: 4px; }
+.wp-facs { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.wp-facs .wp-fac {
+  margin-left: 6px;
+  background: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
+  color: var(--wp-bg);
 }
-.wp-worker:not([data-depth="0"]) {
-  --c-shirt: color-mix(in srgb, var(--accent, var(--wp-h1)) 60%, var(--wp-tint));
-}
+.wp-proto { position: absolute; visibility: hidden; pointer-events: none; }
 
-/* Post already exchanged. Quiet, because the arrival is what is worth watching — but present on a
-   cold load, when there is no arrival left to show. */
-.wp-mail {
-  position: absolute;
-  top: -2px; left: -5px;
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-}
-.wp-mail b { font-size: 8px; font-weight: 700; color: var(--wp-fg); }
+${STAMP_CSS}
 
-/* The bag the script reads the exchanges out of, and the note it clones to carry one. */
-.wp-post { display: none; }
-.wp-courier { position: absolute; z-index: 60; pointer-events: none; will-change: transform; }
-
-/* Status colour, applied to whichever mark the markup asked for. */
-.wp-worker[data-status="running"] { --mark: var(--wp-ok); }
-.wp-worker[data-status="done"] { --mark: var(--wp-dim); }
-.wp-worker[data-status="error"] { --mark: var(--wp-bad); }
-.wp-worker[data-status="foreign"] { --mark: var(--wp-dim); }
-
-/* ── motion ──────────────────────────────────────────────────────────────────────────────── */
-
-/* ── traffic: the people who are not in a room right now ─────────────────────────────────────
-   The one layer that draws OVER the elevation. A person crossing the building is genuinely
-   between rooms, so they cannot live in a grid cell — they live here, in scene coordinates, above
-   the walls and below the signs. */
-.wp-traffic {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 45;
-  overflow: visible;
-}
-/* The prototypes the engine clones. Present in the document, never on screen. */
-.wp-proto { position: absolute; width: 0; height: 0; overflow: hidden; opacity: 0; }
-/* The one copy of every drawing in the building. Present, referenced, never rendered. */
-.wp-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
-
-.wp-travelling,
-.wp-errand {
-  position: absolute;
-  left: 0;
-  top: 0;
-  /* The transform the engine writes puts the FEET at the point, not the corner. */
-  transform-origin: 50% 100%;
-  will-change: transform;
-}
-.wp-travelling > svg,
-.wp-errand > svg { display: block; transform: translate(-50%, -100%); }
-/* The courier is small on purpose — it must never be mistaken for a worker changing rooms — so
-   it buys legibility with SEPARATION rather than with size: a hard pixel shadow lifts it off
-   whatever wall it is crossing, the same device every sign in this building already uses. */
-.wp-errand > svg { filter: drop-shadow(2px 2px 0 var(--wp-ink)); }
-/* Facing is a property of the BODY, not of the thing it is carrying. Flipping the host mirrored
-   the message label with it and every note crossed the building written backwards. */
-.wp-travelling.face-left > svg,
-.wp-errand.face-left > svg { transform: translate(-50%, -100%) scaleX(-1); }
-
-/* The walk cycle. Two frames, one eighth of a beat apart — the same tempo the whole building
-   keeps, so a person walking a corridor is in step with the room they are heading for. */
-.wp-travelling .wp-f0 { animation: wp-fa var(--stride) steps(1, end) infinite; }
-.wp-travelling .wp-f1 { animation: wp-fb var(--stride) steps(1, end) infinite; }
-.wp-errand .wp-f0 { animation: wp-fa calc(var(--stride) * .72) steps(1, end) infinite; }
-.wp-errand .wp-f1 { animation: wp-fb calc(var(--stride) * .72) steps(1, end) infinite; }
-/* Stairs are climbed, not strolled: a slower cycle and a slight lean into the flight. */
-.wp-travelling.on-stairs .wp-f0 { animation-duration: calc(var(--stride) * 1.7); }
-.wp-travelling.on-stairs .wp-f1 { animation-duration: calc(var(--stride) * 1.7); }
-.wp-travelling.on-stairs > svg { transform: translate(-50%, -100%) rotate(-4deg); }
-.wp-travelling.on-stairs.face-left > svg { transform: translate(-50%, -100%) scaleX(-1) rotate(-4deg); }
-
-.wp-travel-shadow {
-  position: absolute;
-  left: 50%;
-  bottom: -1px;
-  width: 22px;
-  height: 3px;
-  margin-left: -11px;
-  background: var(--wp-ink);
-  opacity: .28;
-}
-
-/* What the runner is carrying, said in words. A note with no text is a shape crossing a room;
-   the first few words of the actual message are what make it an exchange you can follow. */
-.wp-errand-word {
-  position: absolute;
-  left: 50%;
-  bottom: 100%;
-  transform: translateX(-50%);
-  /* Clear of the nameplates. At the floor line a 20px courier puts its label exactly where the
-     plates are, so a note crossing a busy room sat on top of two people's names. */
-  margin-bottom: 16px;
-  max-width: 116px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 9px;
-  line-height: 1.5;
-  padding: 0 4px;
-  /* Ink on paper. It was the panel foreground on paper stock — light grey on cream — which is why
-     every note crossing the building looked like a blank bar being dragged. */
-  color: var(--wp-ink);
-  background: var(--wp-paper);
-  border: 1px solid var(--wp-ink);
-  opacity: .92;
-}
-.wp-errand.is-handing .wp-errand-word { opacity: 0; transition: opacity .18s linear; }
-
-/* Where somebody ISN'T. Their cell keeps its width so the room does not jump when they arrive —
-   the space is theirs, they are simply not standing in it yet. */
-.wp-worker.is-away { visibility: hidden; }
-.wp-worker.just-arrived .wp-stage { animation: wp-land 520ms cubic-bezier(.22,1,.32,1) 1; }
-/* Someone strolling inside their own room walks; someone at a desk does not. */
-.wp-worker.is-pacing .wp-f0 { animation-duration: var(--stride); }
-.wp-worker.is-pacing .wp-f1 { animation-duration: var(--stride); }
-
-/* The hand-over. The recipient stops what they are doing and takes it — without this the note
-   flew PAST a person rather than TO one, which is the whole difference between a decoration and
-   an exchange. */
-.wp-worker.has-post .wp-stage { animation: wp-took 900ms cubic-bezier(.22,1,.32,1) 1; }
-.wp-worker.has-post .wp-mail { animation: wp-took-note 900ms ease-out 1; }
-
-/* The front door. Two frames on one grid, so it swings rather than the wall jumping. It opens
-   because somebody walked through it, and it is shut the rest of the time. */
-.wp-door .wp-f1 { opacity: 0; }
-.wp-door.is-open .wp-f0 { opacity: 0; }
-.wp-door.is-open .wp-f1 { opacity: 1; }
-.wp-door .wp-f0, .wp-door .wp-f1 { transition: opacity 90ms steps(1, end); }
-
-@keyframes wp-land {
-  0% { transform: translateY(-2px); }
-  55% { transform: translateY(1px); }
-  100% { transform: translateY(0); }
-}
-@keyframes wp-took {
-  0% { transform: translateY(0); }
-  22% { transform: translateY(-4px); }
-  46% { transform: translateY(0); }
-  62% { transform: translateY(-2px); }
-  100% { transform: translateY(0); }
-}
-@keyframes wp-took-note {
-  0% { transform: scale(1); opacity: .55; }
-  30% { transform: scale(1.5); opacity: 1; }
-  100% { transform: scale(1); opacity: 1; }
-}
-
-@keyframes wp-fa { 0%, 49.99% { opacity: 1 } 50%, 100% { opacity: 0 } }
-@keyframes wp-fb { 0%, 49.99% { opacity: 0 } 50%, 100% { opacity: 1 } }
-@keyframes wp-bob { 0%, 49.99% { transform: translateY(0) } 50%, 100% { transform: translateY(-1px) } }
-@keyframes wp-breathe { 0%, 100% { filter: brightness(1) } 50% { filter: brightness(1.11) } }
-@keyframes wp-snooze {
-  0% { transform: translate(0, 0) scale(1); opacity: 0 }
-  22% { opacity: .95 }
-  100% { transform: translate(5px, -11px) scale(1); opacity: 0 }
-}
-@keyframes wp-drift {
-  0% { transform: translateX(-46px) }
-  100% { transform: translateX(240px) }
-}
-
-/* A stalled worker stops moving. That is the whole idea — the absence of motion IS the reading,
-   so nothing here fades it out gently. */
+/* ── reduced motion ────────────────────────────────────────────────────────────────────────
+   Everything above degrades to a still floor plan with everybody standing at their own desk. The
+   engine never starts its clock, so nothing walks, nothing pulses and the picture is exactly the
+   one a reader would get if they paused it. */
 @media (prefers-reduced-motion: reduce) {
-  .wp * { animation: none !important; }
-  .wp { --travel: 1ms; }
-}
-
-/* ── narrow ──────────────────────────────────────────────────────────────────────────────── */
-
-@media (max-width: 860px) {
-  .wp-scene { grid-template-columns: minmax(0, 1fr); }
-  .wp-outside { border-top: 2px solid var(--wp-ink); min-height: 148px; }
-  .wp-gangway { display: none; }
-  .wp { --w-lead: 108px; --w-rep: 96px; --w-mini: 86px; }
-}
-
-/* A narrow panel gets a NARROWER BUILDING, never a different object.
-   This used to re-flow the storeys into a two-column grid, drop the shared subgrid, and hide the
-   stairwell — which is to say, below 620px the cutaway stopped existing and the view became the
-   stack of bordered cards this whole design was chosen instead of. It also broke the motion
-   outright: every route in the engine goes through the stairwell, and the stairwell was
-   hidden outright. Rooms get thinner and the people get smaller; the section stays a section. */
-@media (max-width: 620px) {
-  .wp { --w-lead: 100px; --w-rep: 92px; --w-mini: 84px; }
-  .wp-floor { grid-template-rows: 46px auto; }
-  .wp-floor[data-vacant="1"] { grid-template-rows: 22px auto; }
-  .wp-deck { gap: 3px; padding: 3px 3px 13px; }
-  .wp-pod { padding: 0 2px 5px; }
-  .wp-plaque { font-size: 8px; letter-spacing: .1em; padding: 1px 3px; }
-  .wp-prop { transform: scale(.72); transform-origin: center bottom; }
-}
-
-@media (max-width: 440px) {
-  .wp-floor { grid-template-rows: 34px auto; }
-  /* The sign is what makes a 40px-wide room still a room. The plaque count goes; the name stays. */
-  .wp-plaque b { display: none; }
+  .wp-view::after,
+  .wp-core,
+  .wp-actor.is-brain::before,
+  .wp-actor .wp-stand .wp-f0,
+  .wp-actor .wp-stand .wp-f1,
+  .wp-actor.is-talking .wp-body { animation: none !important; }
+  .wp-glow, .wp-shut { transition: none; }
+  .wp-stand .wp-f0 { opacity: 1; }
+  .wp-stand .wp-f1 { opacity: 0; }
 }
 `;

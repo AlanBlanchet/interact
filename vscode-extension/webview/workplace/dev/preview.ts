@@ -9,7 +9,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { renderScene, renderWorkplace } from "../index";
+import { renderActors, renderWorkplace } from "../index";
 import { fixture, fixtureMoved } from "./fixture";
 
 const DARK = `
@@ -47,7 +47,7 @@ function themed(html: string, vars: string, klass: string): string {
  *  than wait for it.
  */
 function live(base: string, vars: string, klass: string, every = 7000): string {
-  const scenes = [renderScene(fixture()), renderScene(fixtureMoved())];
+  const scenes = [renderActors(fixture()), renderActors(fixtureMoved())];
   const driver =
     `<script nonce="devnonce123">` +
     `var WP_SCENES=${JSON.stringify(scenes)};var wpAt=0;` +

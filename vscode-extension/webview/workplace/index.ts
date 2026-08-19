@@ -10,8 +10,8 @@
  *  Render it ONCE, then keep it. The engine inside is a running simulation with its own clock, so
  *  the way to update it is to post the next scene rather than to reassign the document:
  *
- *      panel.webview.html = renderWorkplace(state, nonce)                    // once
- *      panel.webview.postMessage({ type: "team", html: renderScene(state) }) // every refresh
+ *      panel.webview.html = renderWorkplace(state, nonce)                     // once
+ *      panel.webview.postMessage({ type: "team", html: renderActors(state) }) // every refresh
  *
  *  The engine swaps `#wp-mount`, re-binds every body by `data-run-id`, and carries positions and
  *  journeys across the swap — so somebody sent to another room is watched the whole way there.
@@ -23,7 +23,8 @@ import { renderScene } from "./scene";
 import { STYLE } from "./style";
 import { SCRIPT } from "./motion";
 
-export { renderScene } from "./scene";
+export { renderScene, renderActors, brainOf, deptsOf, worldFor, placeOf } from "./scene";
+export type { Cast } from "./scene";
 export { STYLE } from "./style";
 // The status lexicon is part of the workplace's public surface, not a private helper: the side
 // bar imports it, and anything else that ever has to name a run's state must take these words
@@ -52,7 +53,7 @@ export function renderWorkplace(state: TeamState, nonce: string): string {
 <style>${STYLE}</style>
 </head>
 <body>
-<div id="wp-mount">${renderScene(state)}</div>
+${renderScene(state)}
 <script nonce="${n}">${SCRIPT}</script>
 </body>
 </html>`;

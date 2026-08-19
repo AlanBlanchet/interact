@@ -53,139 +53,81 @@ def scene(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def page(scene):
+def browser():
+    """ONE browser for the module.
+
+    `asyncio_mode = "auto"` puts every test inside an event loop, and Playwright's sync API
+    refuses to open a second context inside one — so a per-test `sync_playwright()` passes when
+    run alone and errors in a full run, which is the worst kind of test. It is also one chromium
+    instead of six on a machine with no swap.
+    """
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as p:
         browser = p.chromium.launch()
-        # Explicitly NOT reduced motion: every animation in this file is the thing under test, and
-        # a harness that quietly disables them reports "identical" no matter what broke.
-        pg = browser.new_page(viewport={"width": 1100, "height": 800},
-                              reduced_motion="no-preference")
-        pg.goto((scene / "live.html").as_uri())
-        pg.wait_for_timeout(600)
-        yield pg
+        yield browser
         browser.close()
 
 
-def _send_someone(page, *, depth: str | None = None) -> dict:
-    """Put a real worker on a real journey and read every colour they wear, before and during.
+@pytest.fixture(scope="module")
+def page(scene, browser):
+    # Explicitly NOT reduced motion: every animation in this file is the thing under test, and a
+    # harness that quietly disables them reports "identical" no matter what broke.
+    pg = browser.new_page(viewport={"width": 1100, "height": 800},
+                          reduced_motion="no-preference")
+    pg.goto((scene / "live.html").as_uri())
+    pg.wait_for_timeout(600)
+    yield pg
+    pg.close()
 
-    On demand rather than waiting for the sim's own schedule: the defect exists only WHILE a
-    person walks, and racing a spontaneous trip is how it stayed invisible for so long.
 
-    ``depth`` picks who travels — "0" for a lead, anything else for a report. Without it the first
-    body in the fixture was taken, so the report test skipped whenever that happened to be a lead
-    and was green forever.
+# NO traveller-colour tests here any more, and the reason is worth keeping.
+#
+# They guarded a real bug: a walking character was a CLONE of its sprite, reparented onto a
+# traffic layer outside its pod, so it lost the `--accent` it inherited from there and wore
+# another team's colour for the whole walk. Invisible in every still frame of a standing team.
+#
+# The tile rewrite deleted the mechanism. A body now owns a tile coordinate and the element ITSELF
+# moves — `wp-travelling`, `makeWalker` and the copied-property list are all gone from sim.ts. So
+# the defect is not fixed, it is unreachable: there is no clone and no reparenting for a custom
+# property to fall out of. A test for a mechanism that does not exist passes forever and protects
+# nothing, which is the same trap as the contrast guard that ERRORED instead of failing when its
+# element was renamed.
+#
+# What replaced the coverage: `test_every_word_in_the_world_is_readable` measures what actually
+# paints in both themes, and the movement tests below check that bodies genuinely move.
+
+def test_saying_something_makes_the_sender_walk(page):
+    """"Place the characters on it and make them move (when interacting)."
+
+    The previous version of this asserted that two COURIER SPRITES did not overlap. The tile
+    rewrite deleted couriers-as-sprites: a note now makes the SENDER cross the building to deliver
+    it, which is the behaviour actually asked for. The old test skipped silently once `.wp-errand`
+    stopped existing — a skip is not a pass, and a test that can only skip protects nothing.
     """
-    return page.evaluate(
-        """([readColours, wantDepth]) => {
-          const colours = eval('(' + readColours + ')');
-          const bodies = window.__wp && window.__wp.bodies;
-          if (!bodies || !window.__wp.send) return {error: 'the sim exposes no bodies to drive'};
-          for (const id in bodies) {
-            const el = bodies[id].el;
-            if (!el || !el.closest('.wp-pod')) continue;
-            const d = el.getAttribute('data-depth');
-            if (wantDepth === '0' && d !== '0') continue;
-            if (wantDepth === 'report' && (d === '0' || d === null)) continue;
-            const before = colours(el);
-            const travel = window.__wp.send(id, bodies[id].zone === 'code' ? 'lab' : 'code');
-            if (!travel || !travel.walker) continue;
-            return {id, depth: d, before, after: colours(travel.walker)};
-          }
-          return {error: 'no matching body could be sent anywhere'};
-        }""",
-        [COLOUR_PROPS_JS, depth],
-    )
-
-
-def test_a_traveller_is_the_same_person_walking(page):
-    """The defect: a walker is reparented onto the traffic layer, OUTSIDE its pod — and the shirt
-    is resolved from `--accent`, which the pod supplies by inheritance. So a traveller left the
-    room and instantly wore whatever accent was in scope on the traffic layer: not a missing
-    colour but ANOTHER TEAM'S, in a view whose whole job is showing whose journey you watch.
-    """
-    moved = _send_someone(page)
-    assert "error" not in moved, moved.get("error")
-
-    wrong = {k: (v, moved["after"].get(k))
-             for k, v in moved["before"].items() if moved["after"].get(k) != v}
-    assert not wrong, (
-        f"{moved['id']} changes colour the moment they start walking: "
-        + "; ".join(f"{k} {was!r} -> {now!r}" for k, (was, now) in wrong.items())
-    )
-
-
-def test_the_shirt_a_traveller_wears_is_actually_painted(page):
-    """Distinct from the test above, which only demands the two AGREE. Both being empty would
-    satisfy it, and an unpainted sprite is the exact way this failed."""
-    moved = _send_someone(page)
-    assert "error" not in moved, moved.get("error")
-    assert moved["after"]["--c-shirt"], "the walker's shirt resolves to nothing at all"
-
-
-def test_a_report_keeps_its_lighter_tint_on_the_road(page):
-    """A report is drawn in a LIGHTER mix of its lead's colour, so depth is visible at a glance.
-    Rebuilding a walker's shirt from the pod's raw accent would repaint every report as its lead
-    the moment it stepped into the corridor — correct-looking, and wrong.
-
-    A report is DEMANDED rather than hoped for: the earlier version took whichever body came
-    first and skipped when that was a lead, which made it green whether or not it ever ran. And
-    the comparison is against the lead's own colour rather than a "60%" literal copied out of the
-    stylesheet — the point is that the two DIFFER, not what the mix happens to be.
-    """
-    report = _send_someone(page, depth="report")
-    assert "error" not in report, (
-        f"{report.get('error')} — the fixture must contain a report for this to mean anything")
-    lead = _send_someone(page, depth="0")
-    assert "error" not in lead, lead.get("error")
-    assert report["after"]["--c-shirt"] != lead["after"]["--c-shirt"], (
-        "a report on the road wears its lead's colour exactly — depth is invisible mid-journey")
-
-
-def test_two_notes_between_the_SAME_pair_do_not_stack(page):
-    """The courier collision that IS reachable, and the two tests before this one could not see.
-
-    Different pairs never stacked — `startErrand` routes foot-to-foot between two people, who
-    never stand in the same place, so those paths differ at both endpoints whatever the lane says.
-    Both earlier attempts therefore passed with the fix reverted, which is a test proving nothing.
-
-    The real case is the SAME pair twice: a back-and-forth between two agents puts two A->B notes
-    on the road at once, and identical endpoints meant an identical route. Keyed on the pair, they
-    also got an identical lane and pace — perfectly stacked.
-    """
-    spread = page.evaluate(
+    moved = page.evaluate(
         """() => {
-          const bodies = window.__wp && window.__wp.bodies;
-          if (!bodies || !window.__wp.note) return {error: 'the sim exposes no courier seam'};
-          window.__wp.tick.on = false;
-          // The scene's own notes hold both MAX_ERRANDS slots, so without this the couriers below
-          // are queued and never dispatched — and the test measures the fixture's traffic instead
-          // of its own. That is precisely how two earlier versions passed against a reverted fix.
-          window.__wp.clearNotes();
-          const ids = Object.keys(bodies);
-          if (ids.length < 2) return {error: 'need two people to send a note between'};
-          // The same two people, twice — a conversation, not two unrelated messages.
-          window.__wp.note(ids[0], ids[1], 'first');
-          window.__wp.note(ids[0], ids[1], 'second');
-          window.__wp.step(performance.now() + 600);
-          const seen = new Set();
-          let runners = 0;
-          for (const el of document.querySelectorAll('.wp-errand')) {
-            const r = el.getBoundingClientRect();
-            if (!r.width) continue;
-            runners++;
-            seen.add(Math.round(r.left) + ',' + Math.round(r.top));
-          }
-          return {runners, distinct: seen.size};
+          const wp = window.__wp;
+          if (!wp || !wp.note || !wp.bodies) return {error: 'the sim exposes no messaging seam'};
+          wp.tick.on = false;
+          if (wp.clearNotes) wp.clearNotes();
+          const ids = Object.keys(wp.bodies);
+          if (ids.length < 2) return {error: 'need two people for one to walk to the other'};
+          // Two people as far apart as the roster allows, so a delivery is a real journey.
+          const from = ids[0], to = ids[ids.length - 1];
+          const before = {x: wp.bodies[from].x, y: wp.bodies[from].y};
+          wp.note(from, to, 'come and look at this');
+          // Step the engine forward rather than waiting on its own schedule — racing a
+          // spontaneous trip is exactly how the last movement bug stayed invisible.
+          for (let t = 0; t < 40; t++) wp.step(performance.now() + t * 120);
+          const after = {x: wp.bodies[from].x, y: wp.bodies[from].y};
+          return {from, to, before, after,
+                  travelled: Math.abs(after.x - before.x) + Math.abs(after.y - before.y)};
         }"""
     )
-    assert "error" not in spread, spread.get("error")
-    if spread["runners"] < 2:
-        pytest.skip(f"only {spread['runners']} courier(s) on the road — nothing to collide")
-    assert spread["distinct"] == spread["runners"], (
-        f"{spread['runners']} couriers between the same two people occupy "
-        f"{spread['distinct']} position(s) — stacked, so a conversation looks like one note")
+    assert "error" not in moved, moved.get("error")
+    assert moved["travelled"] > 0, (
+        f"{moved['from']} said something to {moved['to']} and never left its tile "
+        f"({moved['before']} -> {moved['after']}) — interaction has to cause movement")
 
 
 # --- The chat panel's reliability, in a real browser -----------------------------------------
@@ -198,21 +140,18 @@ def test_two_notes_between_the_SAME_pair_do_not_stack(page):
 
 
 @pytest.fixture(scope="module")
-def chat_page(scene):
+def chat_page(browser):
     """The chat document, rendered from source with the host's API stubbed."""
-    playwright = pytest.importorskip("playwright.sync_api")
     render = Path("/tmp/chatrender.ts")
     if not render.exists():
         pytest.skip("the chat render fixture is not present")
     subprocess.run(["node", "--experimental-strip-types", str(render)],
                    check=True, capture_output=True)
-    with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
-        pg = browser.new_page(viewport={"width": 420, "height": 600})
-        pg.goto("file:///tmp/chat/dark.html")
-        pg.wait_for_timeout(300)
-        yield pg
-        browser.close()
+    pg = browser.new_page(viewport={"width": 420, "height": 600})
+    pg.goto("file:///tmp/chat/dark.html")
+    pg.wait_for_timeout(300)
+    yield pg
+    pg.close()
 
 
 def test_a_failed_send_returns_your_message(chat_page):
@@ -307,23 +246,20 @@ def _ratio(fg, bg) -> float:
 
 
 @pytest.mark.parametrize("theme", ["live", "live-light"])
-def test_every_word_in_the_world_is_readable(scene, theme):
+def test_every_word_in_the_world_is_readable(scene, browser, theme):
     """Both themes, every text role the scene actually paints.
 
     The light theme is where this breaks: dark backdrops flatter almost any ink, so a guard that
     only ever ran against the dark build passes while the light one is unreadable.
     """
-    playwright = pytest.importorskip("playwright.sync_api")
     page_file = scene / f"{theme}.html"
     if not page_file.exists():
         pytest.skip(f"{theme}.html was not built")
-    with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
-        pg = browser.new_page(viewport={"width": 1400, "height": 900})
-        pg.goto(page_file.as_uri())
-        pg.wait_for_timeout(800)
-        measured = pg.evaluate(_CONTRAST_JS)
-        browser.close()
+    pg = browser.new_page(viewport={"width": 1400, "height": 900})
+    pg.goto(page_file.as_uri())
+    pg.wait_for_timeout(800)
+    measured = pg.evaluate(_CONTRAST_JS)
+    pg.close()
 
     assert measured, "no text found in the scene at all — the selectors have moved"
     failures = []
@@ -337,25 +273,22 @@ def test_every_word_in_the_world_is_readable(scene, theme):
 
 
 @pytest.mark.parametrize("theme", ["dark", "light"])
-def test_the_rail_stays_readable_too(theme):
+def test_the_rail_stays_readable_too(browser, theme):
     """The same measurement, on the panel rather than the world.
 
     The rail grew two new text roles after its last contrast check — the per-row action glyphs
     and the brain badge — which is exactly how a surface drifts under a floor: not in one big
     change, but one small addition at a time, each looking fine against a dark backdrop.
     """
-    playwright = pytest.importorskip("playwright.sync_api")
     fixture = Path("/tmp/rail") / f"{theme}.html"
     if not fixture.exists():
         pytest.skip("the rail render fixture is not present")
-    with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
-        pg = browser.new_page(viewport={"width": 292, "height": 460})
-        pg.goto(fixture.as_uri())
-        pg.wait_for_timeout(250)
-        measured = pg.evaluate(_CONTRAST_JS.replace('[class^="wp-"], [class*=" wp-"]',
-                                                    ".scope,.counts,.who,.note,.chip,.act,.brain"))
-        browser.close()
+    pg = browser.new_page(viewport={"width": 292, "height": 460})
+    pg.goto(fixture.as_uri())
+    pg.wait_for_timeout(250)
+    measured = pg.evaluate(_CONTRAST_JS.replace('[class^="wp-"], [class*=" wp-"]',
+                                                ".scope,.counts,.who,.note,.chip,.act,.brain"))
+    pg.close()
 
     assert measured, "no text found in the rail — the selectors have moved"
     failures = [
@@ -364,3 +297,51 @@ def test_the_rail_stays_readable_too(theme):
         if _ratio(i["fg"], i["bg"]) < (AA_LARGE if i["size"] >= 18 else AA_SMALL)
     ]
     assert not failures, f"rail {theme} below the readable floor:\n  " + "\n  ".join(failures)
+
+
+@pytest.mark.parametrize("theme", ["live", "live-light"])
+def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser, theme):
+    """At a real team's density, in both themes.
+
+    The complaint that started this rewrite was partly that text out-massed the characters. It
+    still does when two long activity strings land in the same room: "reviewing the diff a…"
+    over "benchmark harness di…" is not a legible workplace, it is a collision.
+
+    Measured over EVERY text-bearing leaf. A previous version of this scoped by class and
+    compared three header elements while the character labels went unchecked — a measurement that
+    reports zero because it looked in the wrong place is worse than none.
+    """
+    page_file = scene / f"{theme}.html"
+    if not page_file.exists():
+        pytest.skip(f"{theme}.html was not built")
+    pg = browser.new_page(viewport={"width": 1400, "height": 900})
+    pg.goto(page_file.as_uri())
+    pg.wait_for_timeout(2500)          # let the cast settle where it actually stands
+    result = pg.evaluate(
+        """() => {
+          const boxes = [];
+          for (const el of document.querySelectorAll('*')) {
+            const t = (el.textContent || '').trim();
+            if (!t || el.children.length) continue;
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            boxes.push({t: t.slice(0, 24), x: r.left, y: r.top, w: r.width, h: r.height});
+          }
+          const hits = [];
+          for (let i = 0; i < boxes.length; i++)
+            for (let j = i + 1; j < boxes.length; j++) {
+              const a = boxes[i], b = boxes[j];
+              const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+              const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+              // A couple of pixels of antialiasing overlap is not a collision.
+              if (ox > 2 && oy > 2) hits.push(`"${a.t}" over "${b.t}"`);
+            }
+          return {count: boxes.length, hits};
+        }"""
+    )
+    pg.close()
+    assert result["count"] > 10, "almost no text found — the scene did not render"
+    assert not result["hits"], (
+        f"{theme}: {len(result['hits'])} labels drawn over each other:\n  "
+        + "\n  ".join(result["hits"][:8])
+    )

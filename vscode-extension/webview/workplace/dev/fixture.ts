@@ -18,38 +18,60 @@ type Seed = [
   project: string,
   cost: number | null,
   idle: number,
+  /** The department the company file files them under, and the faculties their own definition
+   *  grants. Both taken from the REAL roster rather than invented: a fixture that exercises a
+   *  shape the product does not use is not a fixture, it is an alibi — this project has been bitten
+   *  by that four times (a unit, an id space, a baked clock, a synthetic image). */
+  dept: string | null,
+  faculties: string[],
 ];
+
+/** The rooms exactly as `~/.claude/org.json` words them, so the building's signs are the
+ *  company's own and not a paraphrase. */
+const ROOMS: Record<string, string> = {
+  quality: "Quality & Critics",
+  production: "Production & Makers",
+  research: "Research & Intelligence",
+  records: "Office of Records",
+  wealth: "Wealth Desk",
+};
+
+const ALL = ["reads", "writes", "runs", "sees", "searches", "delegates"];
 
 const SEEDS: Seed[] = [
   // Pod A — a session driving this very piece of work, its people spread over four rooms.
-  ["main", null, "running", "managers", "delegating the workplace view to the artist", null, "interact", 1.94, 3],
-  ["artist", "artist", "running", "studio", "drawing the pixel sprites for the team room", "a", "interact", 0.61, 1],
-  ["researcher", "researcher", "running", "web", "searching the web for pixel art css techniques", "a", "interact", 0.22, 0],
-  ["scraper", "scraper", "running", "web", "pulling the tilemap gallery", "c", "interact", 0.08, 6],
-  ["tester", "tester", "running", "lab", "running the webview suite", "a", "interact", 0.34, 12],
-  ["Explore", "Explore", "done", "code", "read 14 files under webview/", "a", "interact", 0.05, 240],
-  ["librarian", "librarian", "done", "library", "synced paradigms/creative.md", "a", "interact", 0.41, 320],
+  ["main", null, "running", "managers", "delegating the workplace view to the artist", null, "interact", 1.94, 3, null, ALL],
+  ["artist", "artist", "running", "studio", "drawing the pixel sprites for the team room", "a", "interact", 0.61, 1, "production", ["reads", "writes", "runs", "sees", "delegates"]],
+  ["researcher", "researcher", "running", "web", "searching the web for pixel art css techniques", "a", "interact", 0.22, 0, "research", ["reads", "writes", "searches", "delegates"]],
+  ["scraper", "scraper", "running", "web", "pulling the tilemap gallery", "c", "interact", 0.08, 6, "research", ["reads", "writes", "runs", "searches", "delegates"]],
+  ["tester", "tester", "running", "lab", "running the webview suite", "a", "interact", 0.34, 12, "quality", ["reads", "writes", "runs", "delegates"]],
+  ["Explore", "Explore", "done", "code", "read 14 files under webview/", "a", "interact", 0.05, 240, null, ["reads"]],
+  ["librarian", "librarian", "done", "library", "synced paradigms/creative.md", "a", "interact", 0.41, 320, "records", ["reads", "writes", "runs", "delegates"]],
 
   // Pod B — another project entirely, same lead NAME, different colour.
-  ["main", null, "running", "code", "editing crates/engine/src/kernels.rs", null, "any-compute", 0.77, 8],
-  ["code-reviewer", "code-reviewer", "running", "code", "reviewing the diff against the ideology", "h", "any-compute", 0.19, 2],
-  ["generalizer", "generalizer", "running", "code", "auditing the Tensor base class", "h", "any-compute", 0.16, 150],
-  ["perf-critic", "perf-critic", "error", "lab", "benchmark harness died at p99", "h", "any-compute", 0.09, 61],
+  ["main", null, "running", "code", "editing crates/engine/src/kernels.rs", null, "any-compute", 0.77, 8, null, ALL],
+  ["code-reviewer", "code-reviewer", "running", "code", "reviewing the diff against the ideology", "h", "any-compute", 0.19, 2, "quality", ["reads", "runs", "delegates"]],
+  ["generalizer", "generalizer", "running", "code", "auditing the Tensor base class", "h", "any-compute", 0.16, 150, "quality", ["reads", "delegates"]],
+  ["perf-critic", "perf-critic", "error", "lab", "benchmark harness died at p99", "h", "any-compute", 0.09, 61, "quality", ["reads", "runs", "sees", "delegates"]],
 
   // Pod C — a lead whose own parent has already been forgotten by the registry.
-  ["visual-critic", "visual-critic", "running", "studio", "measuring contrast on the agents panel", null, "interact", 0.28, 4],
-  ["ux-critic", "ux-critic", "running", "studio", "walking the surface graph from cold entry", "l", "interact", 0.12, 9],
+  ["visual-critic", "visual-critic", "running", "studio", "measuring contrast on the agents panel", null, "interact", 0.28, 4, "quality", ["reads", "runs", "sees", "delegates"]],
+  ["ux-critic", "ux-critic", "running", "studio", "walking the surface graph from cold entry", "l", "interact", 0.12, 9, "quality", ["reads", "runs", "sees", "delegates"]],
 
   // Someone else's session, and someone who has finished and come back to the door.
-  ["codex", null, "foreign", "idle", "", null, "unknown", null, 900],
-  ["optimizer", "optimizer", "done", "entry", "handed the hot path back", null, "any-compute", 0.53, 44],
+  ["codex", null, "foreign", "idle", "", null, "unknown", null, 900, null, []],
+  ["optimizer", "optimizer", "done", "entry", "handed the hot path back", null, "any-compute", 0.53, 44, "production", ["reads", "writes", "runs", "delegates"]],
+
+  // The Wealth Desk, which is the whole point of departments: finance work is filed elsewhere and
+  // therefore stands in a room of its own, on the other side of the building from the critics.
+  ["fiscal-auditor", "fiscal-auditor", "running", "data", "netting the PFU on the arbitrage", "a", "interact", 0.07, 5, "wealth", ["reads"]],
 ];
 
 const ID = "abcdefghijklmnopqrstuvwxyz";
 
 export function fixture(at = Date.UTC(2026, 7, 18, 14, 3, 22)): TeamState {
   const workers: Worker[] = SEEDS.map(
-    ([name, agent, status, zone, activity, parent, project, cost, idle], i) => ({
+    ([name, agent, status, zone, activity, parent, project, cost, idle, dept, faculties], i) => ({
       run_id: `run-${ID[i]}`,
       name,
       agent,
@@ -61,6 +83,12 @@ export function fixture(at = Date.UTC(2026, 7, 18, 14, 3, 22)): TeamState {
       cost_usd: cost,
       input_tokens: cost === null ? null : Math.round(cost * 42000),
       idle_seconds: idle,
+      department: dept ?? undefined,
+      room: dept ? ROOMS[dept] : undefined,
+      // Exactly one brain: the first agent Alan asked for something. On the real roster that is
+      // `main`, and it is the run with no parent that started first.
+      brain: i === 0,
+      faculties,
     }),
   );
   // Real exchanges, both ends present. `run-a` is the first seed, `run-b` the second, and so on.
