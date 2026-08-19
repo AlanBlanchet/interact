@@ -277,6 +277,14 @@
     "views": {
       "interactAgentsSecondary": [
         {
+          "id": "interactAgents.rail",
+          "name": "Team",
+          "type": "webview",
+          "contextualTitle": "Interact team",
+          "visibility": "visible",
+          "initialSize": 4
+        },
+        {
           "id": "interactAgents.board",
           "name": "Agents",
           "contextualTitle": "Interact agents",

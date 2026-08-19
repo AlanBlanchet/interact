@@ -189,7 +189,7 @@ export interface RunLike {
  *  the vendor writes no timestamp of its own. That observation time is exactly the right clock
  *  for a watched workplace: not when the agent acted (unknowable), but when we noticed.
  */
-function lastObservedAt(steps: Step[]): number | null {
+export function lastObservedAt(steps: Step[]): number | null {
   for (let i = steps.length - 1; i >= 0; i--) {
     const at = (steps[i] as { at?: number }).at;
     if (typeof at === "number" && at > 0) return at;

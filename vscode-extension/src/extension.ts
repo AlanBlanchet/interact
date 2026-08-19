@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { ACTIVITY_SCHEME, activityPath, formatActivity, runIdFromPath } from "./activityDocument";
 import { ChatViewProvider } from "./chatView";
+import { RailViewProvider } from "./railView";
 import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
@@ -382,9 +383,17 @@ export async function activate(
   // The chat surface, under the agent list in the same side-bar container: the list says what is
   // running, this is where you talk to it.
   const chatProvider = new ChatViewProvider(log);
+  // Clicking somebody in the rail aims the chat at them, exactly as clicking a tree row does —
+  // one behaviour, so the two surfaces cannot teach different things.
+  const railProvider = new RailViewProvider((runId) => chatProvider.show(runId));
   context.subscriptions.push(
     agentsProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider),
+    // The rail: the panel's own chrome, VISIBLE AT REST. A TreeView's title actions are hidden
+    // until the pointer enters the header and clipped with no overflow menu, which is why the
+    // team view could not be reached at all — measured on a real editor, not inferred. Clicking
+    // somebody here aims the chat at them, exactly as the tree does.
+    vscode.window.registerWebviewViewProvider(RailViewProvider.viewId, railProvider),
     // Picking an agent aims the chat at it — the reason the two views sit together.
     // Switching which agent you are reading meant leaving the chat for the tree, which is half of
     // "i can't control everything from there". Scoped to the current workspace, so the list is the
@@ -457,6 +466,7 @@ export async function activate(
     vscode.commands.registerCommand("interact.agents.workspace", async () => {
       if (await scope.pick()) {
         agentsProvider.refresh();
+        railProvider.refresh();
         const { WorkplacePanel } = await import("./workplacePanel");
         WorkplacePanel.refreshIfOpen();
       }
@@ -524,6 +534,7 @@ export async function activate(
         }
         void vscode.window.showInformationMessage(`${picked.label} is working (${said.slice(0, 8)}).`);
         agentsProvider.refresh();
+        railProvider.refresh();
       });
     }),
     // The autonomy a new agent gets here, set WITHOUT having to spawn one to be asked. A
@@ -590,6 +601,7 @@ export async function activate(
         }
         vscode.window.showInformationMessage(said || `Sent to ${run.name}.`);
         agentsProvider.refresh();
+        railProvider.refresh();
       });
     }),
     vscode.commands.registerCommand("interact.agents.openConversation", async (arg?: string | { run?: { run_id: string } }) => {
@@ -618,6 +630,7 @@ export async function activate(
       execFile("interact", ["agents", "stop", run.run_id], (err) => {
         if (err) vscode.window.showErrorMessage(`Could not stop ${run.name}: ${err.message}`);
         agentsProvider.refresh();
+        railProvider.refresh();
       });
     }),
     vscode.commands.registerCommand("interact.agents.showEvents", async (node?: { run?: { run_id: string; name: string } }) => {

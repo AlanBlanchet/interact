@@ -157,3 +157,21 @@ export function railAction(message: unknown): RailAction | null {
   }
   return null;
 }
+
+/** What to do with a message from the webview.
+ *
+ *  Lives here beside the validation rather than in the provider, so the part that can silently
+ *  execute the wrong thing is testable without an extension host — the provider imports `vscode`
+ *  and cannot be loaded by the test runner at all.
+ */
+export interface RailHandlers {
+  run: (command: string) => void;
+  open: (runId: string) => void;
+}
+
+export function railRoute(message: unknown, handlers: RailHandlers): void {
+  const action = railAction(message);
+  if (!action) return;
+  if (action.kind === "command") handlers.run(action.command);
+  else handlers.open(action.runId);
+}

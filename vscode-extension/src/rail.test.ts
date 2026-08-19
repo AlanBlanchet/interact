@@ -10,7 +10,7 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { attentionOf, buildRail, railAction, CHIPS, HELD_SECONDS } from "./rail.ts";
+import { attentionOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS } from "./rail.ts";
 
 const run = (over: Record<string, unknown> = {}) => ({
   run_id: "r", name: "worker", provider: "claude", status: "running", started_at: 100, ...over,
@@ -102,4 +102,37 @@ test("junk is refused rather than guessed at", () => {
   for (const junk of [null, undefined, 0, "open", { type: "nope" }, {}]) {
     assert.equal(railAction(junk), null, `${JSON.stringify(junk)} produced an action`);
   }
+});
+
+test("a chip the rail offers runs its command", () => {
+  const done: string[] = [];
+  railRoute({ type: "command", command: "interact.agents.team" }, {
+    run: (c) => done.push(c), open: () => {},
+  });
+  assert.deepEqual(done, ["interact.agents.team"]);
+});
+
+test("a command the rail does NOT offer runs nothing", () => {
+  // The rail renders agent output. A postMessage naming any command id would be a real hole, so
+  // "is it a real command" is not the test — "does this surface offer it" is.
+  const done: string[] = [];
+  for (const command of ["interact.agents.stop", "workbench.action.terminal.new", ""]) {
+    railRoute({ type: "command", command }, { run: (c) => done.push(c), open: () => {} });
+  }
+  assert.deepEqual(done, []);
+});
+
+test("clicking a row opens that run", () => {
+  const opened: string[] = [];
+  railRoute({ type: "open", runId: "abc" }, { run: () => {}, open: (id) => opened.push(id) });
+  assert.deepEqual(opened, ["abc"]);
+});
+
+test("junk does nothing at all", () => {
+  let touched = false;
+  const mark = () => { touched = true; };
+  for (const junk of [null, undefined, 0, "open", {}, { type: "eval", code: "1" }]) {
+    railRoute(junk, { run: mark, open: mark });
+  }
+  assert.equal(touched, false);
 });
