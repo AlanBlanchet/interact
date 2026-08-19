@@ -56,6 +56,18 @@ const T: Palette = {
   s: "var(--accent, var(--t-lit))",
   A: "var(--t-dais)",
   B: "var(--t-dais-hi)",
+  r: "var(--t-runner)",
+  R: "var(--t-runner-hi)",
+  F: "var(--t-face)",
+  S: "var(--t-skirt)",
+  G: "var(--t-screen)",
+  i: "var(--t-warm)",
+  z: "var(--t-shade)",
+  H: "var(--t-hall)",
+  J: "var(--t-hall-band)",
+  K: "var(--t-mass)",
+  U: "var(--t-rug)",
+  Z: "var(--t-rug-hi)",
 };
 
 const tile = (grid: Grid, extra: Partial<Tile> = {}): Tile => ({ grid, pal: T, rim: false, ...extra });
@@ -339,6 +351,547 @@ export const MAST = tile(
 
 /** Everything a room plan may name, so the plan is DATA and this file is the only place a tile
  *  exists. A new domain room costs a row in `world.ts`, never a drawing here. */
+/* ── the corridor ────────────────────────────────────────────────────────────────────────────
+   A corridor is not "the room floor, outside a room". It has its own ground, banded ACROSS the
+   direction of travel so the eye runs along it, and a carpet runner down the middle. The moment a
+   passage looks different from the places it joins, the plan stops being a partition of one
+   surface and becomes a building you could walk through. */
+
+export const LINO = tile([
+  "JJJJJJJJ",
+  "HHHHHHHH",
+  "HHHHHHHH",
+  "HHHHHHHH",
+  "JJJJJJJJ",
+  "HHHHHHHH",
+  "HHHHHHHH",
+  "HHHHHHHH",
+]);
+
+/** The building's own mass: everything inside the envelope that is neither a room nor a passage.
+ *  Drawn DARKER than any floor and hatched, so the plan reads as spaces carved out of a solid
+ *  block rather than as rectangles drawn on a sheet. Without it a shallow room leaves a hole the
+ *  same colour as the corridor and the whole thing goes back to being a diagram. */
+export const MASS = tile(
+  [
+    "KKKKKKKK",
+    "KKKKKKKK",
+    "KKwKKKKK",
+    "KKKKKKKK",
+    "KKKKKKKK",
+    "KKKKKKwK",
+    "KKKKKKKK",
+    "KKKKKKKK",
+  ],
+  { solid: true },
+);
+
+/** A rug. Not furniture: a change of GROUND in the middle of a room, which is what a real room
+ *  uses to stop being a rectangle of one colour and what stops a floor plan's interior reading as
+ *  waiting space. It blocks nothing, so it costs no route. */
+export const RUG = tile([
+  "UUUUUUUU",
+  "UUUZUUUU",
+  "UUUUUUUU",
+  "ZUUUUUUZ",
+  "UUUUUUUU",
+  "UUUUZUUU",
+  "UUUUUUUU",
+  "ZUUUUUUZ",
+]);
+
+/** The runner down the centre of the hall, in the house colour. One strip, laid along the spine,
+ *  which is the cheapest possible way to say "this way to the front door". */
+export const RUNNER = tile([
+  "RRRRRRRR",
+  "rrrrrrrr",
+  "rRrrrrRr",
+  "rrrrrrrr",
+  "rrRrrrrr",
+  "rrrrrrrr",
+  "rrrrrRrr",
+  "RRRRRRRR",
+]);
+
+/* ── the wall you can SEE ────────────────────────────────────────────────────────────────────
+   The defect that made this read as a floor plan was that all four of a room's walls were the
+   same one-tile band: a rectangle drawn in a darker colour is a border, not a wall. So the wall a
+   room faces — its back one — is now TWO tiles: the cap you look down on, and beneath it the FACE
+   you look at, with a skirting board where it meets the floor. Everything a real room hangs on a
+   wall hangs here, and the room stops being a rectangle the instant it does. */
+
+export const FACE = tile(
+  [
+    "FFFFFFFF",
+    "FFFFFFFF",
+    "FFFFFFFF",
+    "FFFFFFFF",
+    "FFFFFFFF",
+    "SSSSSSSS",
+    "SSSSSSSS",
+    "kkkkkkkk",
+  ],
+  { solid: true },
+);
+
+const faceProp = (rows: string[]): Tile =>
+  tile([...rows, "SSSSSSSS", "kkkkkkkk"], { solid: true });
+
+/** Daylight. The one thing that tells you which wall is the outside one. */
+export const WIN_FACE = faceProp([
+  "FFFFFFFF",
+  "FeeeeeeF",
+  "FeaaaaeF",
+  "FealaaeF",
+  "FeaaaaeF",
+  "FeeeeeeF",
+]);
+
+/** A whiteboard somebody has actually written on. */
+export const WHITEBOARD = faceProp([
+  "FFFFFFFF",
+  "FeeeeeeF",
+  "FeaaaaeF",
+  "FexxaaeF",
+  "FeaxxaeF",
+  "FeeeeeeF",
+]);
+
+export const CLOCK = faceProp([
+  "FFFFFFFF",
+  "FFxxxxFF",
+  "FxaaaaxF",
+  "FxaxaaxF",
+  "FxaxxaxF",
+  "FFxxxxFF",
+]);
+
+export const PINBOARD = faceProp([
+  "FFFFFFFF",
+  "FooooooF",
+  "FoyybbyF",
+  "FoyybbyF",
+  "FobbyybF",
+  "FooooooF",
+]);
+
+export const PIPES = faceProp([
+  "FFFFFFFF",
+  "FeeeeeeF",
+  "FFFFFFFF",
+  "FeeeeeeF",
+  "FFFFFFFF",
+  "FFFFFFFF",
+]);
+
+export const VENT = faceProp([
+  "FFFFFFFF",
+  "FeeeeeeF",
+  "FeFFFFeF",
+  "FeeeeeeF",
+  "FeFFFFeF",
+  "FeeeeeeF",
+]);
+
+/** A bank of screens, mounted. The room that WATCHES things has a wall of them. */
+export const SCREEN_WALL = faceProp([
+  "FFFFFFFF",
+  "FxxxxxxF",
+  "FxGGGGxF",
+  "FxGGGGxF",
+  "FxxxxxxF",
+  "FFFFFFFF",
+]);
+
+export const POSTER = faceProp([
+  "FFFFFFFF",
+  "FxxxxxxF",
+  "FxssssxF",
+  "FxsaasxF",
+  "FxssssxF",
+  "FxxxxxxF",
+]);
+
+export const LAMP = faceProp([
+  "FFFFFFFF",
+  "FFFeeFFF",
+  "FFeiieFF",
+  "FeiiiieF",
+  "FiiiiiiF",
+  "FFFFFFFF",
+]);
+
+/* ── doorways with DEPTH ─────────────────────────────────────────────────────────────────────
+   A door in a two-tile wall is two tiles: the opening seen from above, and the frame you walk
+   through. Walking a body through those two cells is visibly passing through a wall rather than
+   crossing a coloured line, and it costs nothing but the second tile. */
+
+export const DOOR_CAP = tile([
+  "pppppppp",
+  "pppppppp",
+  "zzzzzzzz",
+  "zzzzzzzz",
+  "zzzzzzzz",
+  "zzzzzzzz",
+  "zzzzzzzz",
+  "zzzzzzzz",
+]);
+
+export const DOOR_WAY = tile([
+  "eFFFFFFe",
+  "e......e",
+  "e......e",
+  "e......e",
+  "e......e",
+  "e......e",
+  "e......e",
+  "ekkkkkke",
+]);
+
+/** The leaf itself, hinged on its left edge. Swung open by the engine when somebody is close, so
+ *  a door is something that HAPPENS rather than a hole that was always there. */
+export const DOOR_LEAF = tile([
+  "oooooo..",
+  "onnnno..",
+  "onnnno..",
+  "onneno..",
+  "onnnno..",
+  "onnnno..",
+  "oooooo..",
+  "........",
+]);
+
+export const MATT = tile([
+  "........",
+  ".mmmmmm.",
+  ".mmmmmm.",
+  ".mmmmmm.",
+  ".mmmmmm.",
+  ".mmmmmm.",
+  ".mmmmmm.",
+  "........",
+]);
+
+/* ── what a department DOES, as furniture ────────────────────────────────────────────────────
+   Every one of these belongs to an archetype in world.ts, and the archetype is chosen from the
+   faculties the department's own people actually declare. A room full of people who run commands
+   is a machine room; a room full of people who only read is the stacks. Nothing is hard-coded to
+   a department name, and no two rooms are furnished from the same list. */
+
+export const STACKS = tile(
+  [
+    "oooooooo",
+    "obbyybbo",
+    "obbyybbo",
+    "oooooooo",
+    "oyybbyyo",
+    "oyybbyyo",
+    "oooooooo",
+    "o......o",
+  ],
+  { solid: true },
+);
+
+export const SCREEN = tile(
+  [
+    "........",
+    ".eeeeee.",
+    ".eGGGGe.",
+    ".eGGGGe.",
+    ".eeeeee.",
+    "...ee...",
+    "..oooo..",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const DISH = tile(
+  [
+    "..eeee..",
+    ".e....e.",
+    "e..ee..e",
+    "e.eeee.e",
+    "e..ee..e",
+    ".e.ee.e.",
+    "...ee...",
+    "..oooo..",
+  ],
+  { solid: true },
+);
+
+export const TABLE_L = tile(
+  [
+    "........",
+    "...ooooo",
+    "..onnnnn",
+    "..onnnnn",
+    "..onnnnn",
+    "...ooooo",
+    "...o....",
+    "...o....",
+  ],
+  { solid: true },
+);
+
+export const TABLE_M = tile(
+  [
+    "........",
+    "oooooooo",
+    "nnnnnnnn",
+    "nnnnnnnn",
+    "nnnnnnnn",
+    "oooooooo",
+    "........",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const TABLE_R = tile(
+  [
+    "........",
+    "ooooo...",
+    "nnnnno..",
+    "nnnnno..",
+    "nnnnno..",
+    "ooooo...",
+    "....o...",
+    "....o...",
+  ],
+  { solid: true },
+);
+
+export const CHAIR = tile(
+  [
+    "........",
+    "..uuuu..",
+    "..uuuu..",
+    ".uuuuuu.",
+    ".uuuuuu.",
+    "..o..o..",
+    "..o..o..",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const COFFEE = tile(
+  [
+    "..eeee..",
+    ".eeeeee.",
+    ".ellale.",
+    ".eeeeee.",
+    ".e.aa.e.",
+    ".eeeeee.",
+    ".oooooo.",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const COOLER = tile(
+  [
+    "..aaaa..",
+    ".aaaaaa.",
+    ".aaaaaa.",
+    "..eeee..",
+    "..eeee..",
+    "..e..e..",
+    ".oooooo.",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const PRINTER = tile(
+  [
+    "........",
+    ".eeeeee.",
+    ".eaaaae.",
+    ".eeeeee.",
+    ".e....e.",
+    ".eeeeee.",
+    ".oooooo.",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const CRATES = tile(
+  [
+    "........",
+    "..oooo..",
+    "..onno..",
+    "..oooo..",
+    ".oooooo.",
+    ".onnnno.",
+    ".oooooo.",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const TANK = tile(
+  [
+    "eeeeeeee",
+    "eaaaaaae",
+    "easaaaae",
+    "eaaaasae",
+    "easaaaae",
+    "eaaaaaae",
+    "eeeeeeee",
+    "o......o",
+  ],
+  { solid: true },
+);
+
+export const VENDING = tile(
+  [
+    "eeeeeeee",
+    "eaaaaeee",
+    "eabbaeee",
+    "eayybeee",
+    "eabbaeee",
+    "eaaaaeee",
+    "eeeeeeee",
+    "e......e",
+  ],
+  { solid: true },
+);
+
+export const CABINET = tile(
+  [
+    "oooooooo",
+    "onnnnnno",
+    "o..ee..o",
+    "onnnnnno",
+    "o..ee..o",
+    "onnnnnno",
+    "o..ee..o",
+    "o......o",
+  ],
+  { solid: true },
+);
+
+export const DRAFTING = tile(
+  [
+    "........",
+    "...ooooo",
+    "..onnnnn",
+    ".onnnnnn",
+    ".ooooooo",
+    "..o...o.",
+    "..o...o.",
+    "........",
+  ],
+  { solid: true },
+);
+
+export const GLOBE = tile(
+  [
+    "..LLLL..",
+    ".LvvvvL.",
+    "LvLvvLvL",
+    "LvvLLvvL",
+    "LvvLLvvL",
+    "LvLvvLvL",
+    ".LvvvvL.",
+    "..oooo..",
+  ],
+  { solid: true },
+);
+
+export const LADDER = tile(
+  [
+    "..o..o..",
+    "..oooo..",
+    "..o..o..",
+    "..oooo..",
+    "..o..o..",
+    "..oooo..",
+    "..o..o..",
+    "........",
+  ],
+  { solid: true },
+);
+
+/** A column, not a wall. The chamber at the head of the building is held up rather than closed
+ *  in, which is what makes it read as the one place in the plan that is not a room. */
+export const PILLAR = tile(
+  [
+    "..pppp..",
+    "..wwww..",
+    "..wwww..",
+    "..wwww..",
+    "..wwww..",
+    "..wwww..",
+    ".pppppp.",
+    ".kkkkkk.",
+  ],
+  { solid: true },
+);
+
+/* ── things that MOVE ────────────────────────────────────────────────────────────────────────
+   Overlays, never part of the prop underneath: a separate node is what lets the stylesheet drive
+   one at a tempo of its own without touching the drawing it sits on. All of them are drawn on
+   cells that are already solid, so none of them costs a route. */
+
+export const SCREEN_GLOW = tile([
+  "........",
+  "..GGGG..",
+  "..GGGG..",
+  "..GGGG..",
+  "........",
+  "........",
+  "........",
+  "........",
+]);
+
+export const WALL_GLOW = tile([
+  "........",
+  ".GGGGGG.",
+  ".GGGGGG.",
+  ".GGGGGG.",
+  "........",
+  "........",
+  "........",
+  "........",
+]);
+
+export const STEAM = tile([
+  "...a....",
+  "..a.a...",
+  "...a....",
+  "..a.....",
+  "...a....",
+  "........",
+  "........",
+  "........",
+]);
+
+export const FAN = tile([
+  "........",
+  "...ee...",
+  ".eeeeee.",
+  "..eeee..",
+  "..eeee..",
+  ".eeeeee.",
+  "...ee...",
+  "........",
+]);
+
+export const LAMP_POOL = tile([
+  "........",
+  "..iiii..",
+  ".iiiiii.",
+  ".iiiiii.",
+  ".iiiiii.",
+  "..iiii..",
+  "........",
+  "........",
+]);
+
 export const TILES = {
   floor: FLOOR,
   carpet: CARPET,
@@ -359,6 +912,47 @@ export const TILES = {
   grass: GRASS,
   path: PATH,
   mast: MAST,
+  lino: LINO,
+  mass: MASS,
+  rug: RUG,
+  runner: RUNNER,
+  face: FACE,
+  winFace: WIN_FACE,
+  whiteboard: WHITEBOARD,
+  clock: CLOCK,
+  pinboard: PINBOARD,
+  pipes: PIPES,
+  vent: VENT,
+  screenWall: SCREEN_WALL,
+  poster: POSTER,
+  lamp: LAMP,
+  doorCap: DOOR_CAP,
+  doorWay: DOOR_WAY,
+  doorLeaf: DOOR_LEAF,
+  matt: MATT,
+  stacks: STACKS,
+  screen: SCREEN,
+  dish: DISH,
+  tableL: TABLE_L,
+  tableM: TABLE_M,
+  tableR: TABLE_R,
+  chair: CHAIR,
+  coffee: COFFEE,
+  cooler: COOLER,
+  printer: PRINTER,
+  crates: CRATES,
+  tank: TANK,
+  vending: VENDING,
+  cabinet: CABINET,
+  drafting: DRAFTING,
+  globe: GLOBE,
+  ladder: LADDER,
+  pillar: PILLAR,
+  screenGlow: SCREEN_GLOW,
+  wallGlow: WALL_GLOW,
+  steam: STEAM,
+  fan: FAN,
+  lampPool: LAMP_POOL,
 } as const;
 
 export type TileId = keyof typeof TILES;

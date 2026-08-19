@@ -596,34 +596,34 @@ export const DOOR: { frames: Grid[]; pal: Palette } = {
  *  this is only how it is drawn. An id with no drawing falls back to its unicode mark.
  */
 export const FACULTY_ART: Record<string, Piece> = {
-  // reads the code — a page with lines on it
+  // reads the code — a page with lines written on it
   reads: {
-    grid: ["MMMMM", "M...M", "MMM.M", "M...M", "MMMMM"],
+    grid: ["MMMMMMM", "M.....M", "M.MMM.M", "M.....M", "M.MMM.M", "M.....M", "MMMMMMM"],
     pal: { M: "var(--mark)" },
   },
   // changes files — a pencil, nib down
   writes: {
-    grid: ["...MM", "..MM.", ".MM..", "MM...", "M...."],
+    grid: [".....MM", "....MMM", "...MMM.", "..MMM..", ".MMM...", "MMM....", "MM....."],
     pal: { M: "var(--mark)" },
   },
-  // runs commands — the prompt caret
+  // runs commands — the prompt caret and its line
   runs: {
-    grid: ["M....", ".MM..", "..MM.", ".MM..", "M...."],
+    grid: ["MM.....", ".MM....", "..MM...", "...MM..", "..MM...", ".MM....", "MM.MMMM"],
     pal: { M: "var(--mark)" },
   },
   // sees the screen — an eye
   sees: {
-    grid: [".MMM.", "M...M", "M.M.M", "M...M", ".MMM."],
+    grid: ["..MMM..", ".M...M.", "M..M..M", "M.MMM.M", "M..M..M", ".M...M.", "..MMM.."],
     pal: { M: "var(--mark)" },
   },
-  // searches the web — a globe with a meridian
+  // searches the web — a globe with its meridians
   searches: {
-    grid: [".MMM.", "MM.MM", "M.M.M", "MM.MM", ".MMM."],
+    grid: ["..MMM..", ".M.M.M.", "M..M..M", "MMMMMMM", "M..M..M", ".M.M.M.", "..MMM.."],
     pal: { M: "var(--mark)" },
   },
-  // puts others to work — one figure branching into two
+  // puts others to work — one that becomes two
   delegates: {
-    grid: ["M....", "M.M.M", "MMMMM", "M.M.M", "M...M"],
+    grid: ["MM...MM", "MM...MM", ".M...M.", "..MMM..", "...M...", "...M...", "..MMM.."],
     pal: { M: "var(--mark)" },
   },
 };

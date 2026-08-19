@@ -1,14 +1,22 @@
-/** The scene: a tile map, and the people standing on it.
+/** The scene: a building, and the people in it, seen through a WINDOW.
  *
- *  Two layers, and the split is the point. The MAP is a pure function of the room table — it does
- *  not change when the team does — so it is rendered once and never re-sent. The ACTORS are the
- *  only thing a snapshot produces, which is a few hundred bytes rather than the whole building,
- *  and is what lets the panel push a new scene several times a second without the floor flickering.
+ *  Three layers, and the split is the point.
+ *
+ *  The MAP is a pure function of the room table — it does not change when the team does — so it is
+ *  rendered once and never re-sent. The ACTORS are the only thing a snapshot produces, a few
+ *  hundred bytes rather than the whole building, which is what lets the panel push a new scene
+ *  several times a second without the floor flickering. The VIEW is a bounded viewport the engine
+ *  moves: the building is deliberately bigger than the panel, and the camera goes to where the
+ *  work is.
+ *
+ *  That last one is not a nicety. The view this replaces scaled the WHOLE building down to fit
+ *  whatever width it was given, so in the side bar it actually ships in it settled at half scale:
+ *  characters eighteen pixels tall, capability marks SIX pixels across, and half the panel empty
+ *  underneath. Fitting everything into the frame is the one thing a game never does.
  *
  *  Nothing here positions a person. An actor carries the SEAT it belongs to and nothing else; the
- *  simulation owns where a body actually is, walks it there, and may have it somewhere else
- *  entirely at the moment this markup lands. A renderer that placed people would be a slideshow
- *  again — that is exactly the bug this whole surface was rebuilt to remove.
+ *  simulation owns where a body actually is and may have it somewhere else entirely at the moment
+ *  this markup lands.
  */
 import { ZONES } from "../../src/team";
 import type { TeamState, Worker, ZoneId } from "../../src/team";
@@ -28,9 +36,9 @@ import {
 import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
 import type { TileId } from "./tiles";
 import { buildWorld } from "./world";
-import type { Dept, Room, Seat, World } from "./world";
+import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
 import { assignAccents, atMillis, faceOf, hash, idleAmount, shortDuration } from "./palette";
-import { STAMPS, WORDS, isHeld, markOf, stampFor, stampHtml } from "./status";
+import { WORDS, isHeld, markOf, stampFor, stampHtml } from "./status";
 import { buildPods, posts, tally } from "./layout";
 import type { Post } from "./layout";
 import { clip, esc } from "./esc";
@@ -43,9 +51,26 @@ export type Cast = Worker & { faculties?: readonly string[] };
 const LABELS = new Map<ZoneId, string>(ZONES.map((z) => [z.id, z.label]));
 const MARK_OF = new Map(FACULTIES.map((f) => [f.id, f]));
 
-/** The departments this team actually has, in a stable order, taken from the workers themselves.
- *  The building is a function of the company file — a department that exists gets a room, one that
- *  does not is not invented, and nobody is placed in a room their definition never named. */
+/** How many marks a character wears at rest. Six at six pixels was the defect; three at fourteen
+ *  is a row you can actually read, and the three chosen are the ones that make THIS agent
+ *  different from the rest of the company rather than the first three in a fixed list. */
+const MARKS_SHOWN = 3;
+
+/* ── who works where, and what that room is for ─────────────────────────────────────────────*/
+
+/** How common each faculty is across the whole company. A capability everybody has says nothing
+ *  about anybody; the rare one is the whole character. */
+function rarity(workers: readonly Cast[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const w of workers) for (const f of w.faculties ?? []) out.set(f, (out.get(f) ?? 0) + 1);
+  return out;
+}
+
+/** The departments this team actually has, in a stable order, taken from the workers themselves —
+ *  each carrying the faculties its people declare, ranked by how much they DISTINGUISH it from the
+ *  rest of the company. That ranking is what furnishes the room: a department whose people run
+ *  commands more than anyone else's gets a machine room, one whose people only read gets the
+ *  stacks. No department name appears anywhere in the plan. */
 export function deptsOf(workers: readonly Cast[]): Dept[] {
   const seen = new Map<string, string>();
   for (const w of workers) {
@@ -53,15 +78,24 @@ export function deptsOf(workers: readonly Cast[]): Dept[] {
     if (!seen.has(w.department)) seen.set(w.department, w.room || w.department);
   }
   const heads = headcounts(workers);
+  const company = rarity(workers);
+  const people = Math.max(1, workers.length);
   return [...seen]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([id, label]) => ({ id, label, heads: heads.get(id) ?? 0 }));
+    .map(([id, label]) => {
+      const mine = workers.filter((w) => w.department === id);
+      const local = rarity(mine);
+      const size = Math.max(1, mine.length);
+      const kit = [...local]
+        .map(([f, n]) => ({ f, lift: n / size / ((company.get(f) ?? 1) / people) }))
+        .sort((a, b) => b.lift - a.lift || a.f.localeCompare(b.f))
+        .map((e) => e.f);
+      return { id, label, heads: heads.get(id) ?? 0, kit };
+    });
 }
 
-/** How many people each room has to hold. Rooms are SIZED from this — a department of six needs a
- *  wider room than a department of one, and a fixed room silently stacks the extra people on top
- *  of each other, which is what a full team looked like before. Counted here, before the building
- *  exists, because the building is a function of it. */
+/** How many people each room has to hold. Rooms are SIZED from this — a fixed room silently
+ *  stacks the extra people on top of each other. */
 function headcounts(workers: readonly Cast[]): Map<string, number> {
   const out = new Map<string, number>();
   const add = (k: string) => out.set(k, (out.get(k) ?? 0) + 1);
@@ -74,52 +108,55 @@ function headcounts(workers: readonly Cast[]): Map<string, number> {
   return out;
 }
 
-/** The building, kept between renders while the departments hold still. The tilemap is most of
- *  the document and none of it changes when a person moves, so rebuilding it per snapshot would
- *  be the single most expensive thing this file does. */
+/** The building, kept between renders while the departments hold still. The map is most of the
+ *  document and none of it changes when a person moves. */
 let cached: { key: string; world: World } | null = null;
 export function worldFor(workers: readonly Cast[]): World {
   const depts = deptsOf(workers);
   const heads = headcounts(workers);
   const core = { brain: heads.get("__brain") ?? 0, lobby: heads.get("") ?? 0 };
   const key =
-    depts.map((d) => d.id + ":" + d.label + ":" + d.heads).join("|") + "|" + core.brain + "/" + core.lobby;
+    depts.map((d) => d.id + ":" + d.label + ":" + d.heads + ":" + (d.kit ?? []).join(",")).join("|") +
+    "|" +
+    core.brain +
+    "/" +
+    core.lobby;
   if (!cached || cached.key !== key) cached = { key, world: buildWorld(depts, core) };
   return cached.world;
 }
 
-/** Where a worker stands. Their DEPARTMENT is their room — that is the domain of work the
- *  company filed them under. The one exception is the web, which is genuinely outside: an agent
- *  fetching from the world walks out of the front gate to do it, and walks back in after. */
+/** Where a worker stands. Their DEPARTMENT is their room. The one exception is the web, which is
+ *  genuinely outside: an agent fetching from the world walks out of the gate to do it. */
 export function placeOf(world: World, w: Cast): Room {
   if (w.zone === "web") return world.yard;
   if (w.brain) return world.brainRoom;
   return (w.department && world.byId.get(w.department)) || world.lobby;
 }
 
-/* ── the map ─────────────────────────────────────────────────────────────────────────────────
-   Ground goes down as PATTERN-filled rectangles — one element per region rather than one per
-   cell, which is the difference between a 50 kB floor and a 2 kB one — and only the things that
-   sit ON it are placed cell by cell. */
+/* ── the map ─────────────────────────────────────────────────────────────────────────────────*/
 
-/** One tile, drawn at a cell. Scale 1 here: the whole map is one SVG whose user units are tile
- *  CELLS, and the pixel size arrives from the stylesheet, so a tile is authored once and the
- *  building can be zoomed without re-rendering anything. */
-function at(id: TileId, x: number, y: number, cls = ""): string {
+/** One tile, drawn at a cell. Scale 1: the whole map is one SVG whose user units are tile CELLS,
+ *  and the pixel size arrives from the camera, so a tile is authored once and the building can be
+ *  zoomed without re-rendering anything. */
+function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
   const t = TILES[id];
   return draw(t.grid, t.pal, {
     scale: 1,
     outline: !!t.rim,
     className: cls || undefined,
-    attrs: `x="${x * TILE_CELLS}" y="${y * TILE_CELLS}"`,
+    attrs: `x="${x * TILE_CELLS}" y="${y * TILE_CELLS}"` + (extra ? " " + extra : ""),
   });
 }
 
-function patch(id: TileId, x: number, y: number, w: number, h: number): string {
+function patch(id: TileId, r: Rect): string {
   return (
-    `<rect x="${x * TILE_CELLS}" y="${y * TILE_CELLS}" ` +
-    `width="${w * TILE_CELLS}" height="${h * TILE_CELLS}" fill="url(#wp-p-${id})"/>`
+    `<rect x="${r.x * TILE_CELLS}" y="${r.y * TILE_CELLS}" ` +
+    `width="${r.w * TILE_CELLS}" height="${r.h * TILE_CELLS}" fill="url(#wp-p-${id})"/>`
   );
+}
+
+function patches(id: TileId, runs: readonly Rect[]): string {
+  return runs.map((r) => patch(id, r)).join("");
 }
 
 function patterns(ids: TileId[]): string {
@@ -136,69 +173,140 @@ function patterns(ids: TileId[]): string {
     .join("");
 }
 
-/** The building, once. Every room is a group carrying its own zone, so the simulation can light
- *  it, stir it and name it without touching a single tile. */
+/** A set of tile runs as ONE path, so a room's light is exactly its floor even when the room is
+ *  an L. A bounding rectangle would spill its glow into the masonry next door. */
+function runPath(runs: readonly Rect[]): string {
+  const c = TILE_CELLS;
+  return runs.map((r) => `M${r.x * c} ${r.y * c}h${r.w * c}v${r.h * c}h-${r.w * c}z`).join("");
+}
+
+/** The overlay that makes a prop move. A separate node every time: the drawing underneath is
+ *  shared through the sheet, and a class on it would animate every copy of it in the building. */
+function liveOf(p: Prop): string {
+  const delay = drift(p.x, p.y);
+  switch (p.live) {
+    case "screen":
+      return at("screenGlow", p.x, p.y, "wp-lv wp-lv-screen", delay);
+    case "steam":
+      return at("steam", p.x, p.y - 1, "wp-lv wp-lv-steam", delay);
+    case "lamp":
+      return at("lampPool", p.x, p.y + 1, "wp-lv wp-lv-lamp", delay);
+    default:
+      return "";
+  }
+}
+
+/** A per-cell head start, so ambient motion shares the beat without sharing the DOWNBEAT. Thirty
+ *  screens flickering on the same frame is not a floor with screens on it, it is one animation
+ *  applied thirty times — which reads instantly, and is the tell this whole surface was rejected
+ *  for. Deterministic in the cell, so the building looks the same on every render. */
+function drift(x: number, y: number): string {
+  return `style="--d:-${(((x * 37 + y * 61) % 480) / 100).toFixed(2)}s"`;
+}
+
+function propHtml(p: Prop): string {
+  const cls =
+    (p.tile === "core" ? "wp-core " : "") + (p.live === "sway" ? "wp-lv-sway " : "") + (p.live === "fan" ? "wp-lv-fan " : "");
+  const own = p.live === "sway" || p.live === "fan" ? drift(p.x, p.y) : "";
+  return at(p.tile, p.x, p.y, cls.trim(), own) + liveOf(p);
+}
+
+/** The building, once. Every room is a group carrying its own id and archetype, so the simulation
+ *  can light it and the stylesheet can tint a machine room colder than a library. */
 function renderMap(world: World): string {
   const w = world.cols * TILE_CELLS;
   const h = world.rows * TILE_CELLS;
   let out =
     `<svg class="wp-map" width="${world.cols * TILE_PX}" height="${world.rows * TILE_PX}" ` +
     `viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true" focusable="false">` +
-    `<defs>${patterns(["floor", "carpet", "dais", "grass", "wall", "path"])}</defs>`;
+    `<defs>${patterns(["floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug"])}</defs>`;
 
-  // The ground: corridors first, then each room's own floor over the top of it.
-  out += patch("floor", 0, 0, world.facadeX, world.rows);
-  out += patch("grass", world.facadeX, 0, world.cols - world.facadeX, world.rows);
+  // The envelope, then everything carved out of it. Mass first: the building is solid until a
+  // room or a passage takes a bite out of it, which is what gives a shallow room something
+  // BEHIND it instead of a blank corridor.
+  out += patch("grass", { x: 0, y: 0, w: world.cols, h: world.rows });
+  out += patch("mass", {
+    x: world.envelope.x,
+    y: world.envelope.y,
+    w: world.facadeX - world.envelope.x + 1,
+    h: world.envelope.h,
+  });
+
+  // The building's own structure, on the parts of it you do not see into. Left as a flat dark
+  // field the mass reads as a void with the rooms floating in it; a column grid on a four-tile
+  // rhythm is what makes it read as the rest of the building.
+  {
+    const cells = new Set<number>();
+    for (const r of world.mass) for (let x = r.x; x < r.x + r.w; x++) cells.add(r.y * world.cols + x);
+    let d = "";
+    const e = world.envelope;
+    for (let y = e.y + 2; y < e.y + e.h - 1; y += 4) {
+      for (let x = e.x + 2; x < world.facadeX; x += 4) {
+        if (!cells.has(y * world.cols + x)) continue;
+        d += `M${x * TILE_CELLS + 1} ${y * TILE_CELLS + 1}h6v6h-6z`;
+      }
+    }
+    if (d) out += `<path class="wp-struct" d="${d}"/>`;
+  }
+
+  // The spine.
+  out += patch("lino", world.hall);
 
   for (const r of world.rooms) {
-    const lit = r.outdoor ? "" : ` data-lit="0"`;
-    out += `<g class="wp-rm${r.brain ? " is-brain" : ""}${r.open ? " is-open" : ""}" ` +
-      `data-room="${esc(r.id)}"${lit}>`;
+    const lit = r.outdoor || r.open ? "" : ` data-lit="0"`;
+    out +=
+      `<g class="wp-rm${r.brain ? " is-brain" : ""}${r.open ? " is-open" : ""}" ` +
+      `data-room="${esc(r.id)}" data-kind="${esc(r.kind)}"${lit}>`;
     if (r.outdoor) {
-      out += patch("path", world.facadeX, world.gateY - 1, 3, 3);
+      out += patch("path", { x: world.facadeX, y: world.gateY - 1, w: 4, h: 3 });
     } else if (r.open) {
-      out += patch(r.floor, r.x, r.y, r.w, r.h);
+      if (r.dais) out += patch("dais", r.dais);
     } else {
-      out += patch(r.floor, r.x + 1, r.y + 1, r.w - 2, r.h - 2);
-      // The brain stands on a raised platform, not on a room-wide pattern: the dais is the thing
-      // that makes the middle of the building read as the middle of it, and a lattice across the
-      // whole floor stopped being a platform and became wallpaper.
-      if (r.brain) out += patch("dais", r.x + 2, r.y + 2, 5, 2);
-      // Walls as four runs, not as tiles: a rectangle filled with the wall pattern is one node.
-      out += patch("wall", r.x, r.y, r.w, 1);
-      out += patch("wall", r.x, r.y + r.h - 1, r.w, 1);
-      out += patch("wall", r.x, r.y + 1, 1, r.h - 2);
-      out += patch("wall", r.x + r.w - 1, r.y + 1, 1, r.h - 2);
-      for (const win of r.windows) out += at("window", win.x, win.y);
-      for (const d of r.doors) out += at(d.dir === "v" ? "doorV" : "doorH", d.x, d.y);
-      // The light a room casts when somebody is in it. One rectangle, switched by a class — the
-      // cheapest possible way to answer "where is everyone" before a single label is read.
-      const bx = (r.x + 1) * TILE_CELLS;
-      const by = (r.y + 1) * TILE_CELLS;
-      const bw = (r.w - 2) * TILE_CELLS;
-      const bh = (r.h - 2) * TILE_CELLS;
-      out +=
-        `<rect class="wp-glow" x="${bx}" y="${by}" width="${bw}" height="${bh}"/>` +
-        `<rect class="wp-shut" x="${bx}" y="${by}" width="${bw}" height="${bh}"/>`;
+      out += patches(r.floor, r.floorRuns);
+      // Ground, before anything is drawn ON the ground — including the room's own light. Drawn
+      // after it, a rug is the one patch of floor the room's light does not reach and reads as a
+      // hole rather than as a rug, which is exactly how it looked in a light theme.
+      if (r.rug) {
+        out += patch("rug", r.rug);
+        out +=
+          `<rect class="wp-rug" x="${r.rug.x * TILE_CELLS + 1}" y="${r.rug.y * TILE_CELLS + 1}" ` +
+          `width="${r.rug.w * TILE_CELLS - 2}" height="${r.rug.h * TILE_CELLS - 2}"/>`;
+      }
+      if (r.dais) out += patch("dais", r.dais);
+      out += patches("wall", r.wallRuns);
+      out += patches("face", r.faceRuns);
+      for (const d of r.doors) {
+        if (d.deep) out += at("doorCap", d.x, d.y) + at("doorWay", d.x, d.y + 1) + at("matt", d.x, d.y + 2);
+        else out += at("doorWay", d.x, d.y) + at("matt", d.x, d.y - 1);
+        out += at("doorLeaf", d.x, d.y + (d.deep ? 1 : 0), "wp-leaf");
+      }
+      if (!r.open) {
+        // The light a room casts when somebody is in it, and the veil over it when nobody is.
+        // Both follow the room's actual floor, so an L-shaped room is lit as an L.
+        const d = runPath(r.floorRuns);
+        out += `<path class="wp-glow" d="${d}"/><path class="wp-shut" d="${d}"/>`;
+      }
     }
-    for (const p of r.props) out += at(p.tile, p.x, p.y, p.tile === "core" ? "wp-core" : "");
+    for (const p of r.props) out += propHtml(p);
     out += `</g>`;
   }
 
-  // The exterior: the map's own border and the facade, with the gate punched through it.
-  out += patch("wall", 0, 0, world.cols, 1);
-  out += patch("wall", 0, world.rows - 1, world.cols, 1);
-  out += patch("wall", 0, 1, 1, world.rows - 2);
-  out += patch("wall", world.cols - 1, 1, 1, world.rows - 2);
-  out += patch("wall", world.facadeX, 1, 1, world.rows - 2);
-  out += at("doorV", world.facadeX, world.gateY, "wp-gate");
+  // Things standing in the passage and out in the grounds. Neither belongs to a room, so neither
+  // is lit by one: a bench in a corridor is not evidence anybody is in a corridor.
+  out += `<g class="wp-loose">`;
+  for (const p of world.hallProps) out += propHtml(p);
+  for (const p of world.scenery) out += propHtml(p);
+  out += `</g>`;
+
+  // Last, over everything: the runner down the spine, from the gate to the dais. Drawn after the
+  // rooms so it visibly crosses the chamber floor rather than stopping at its threshold.
+  out += patch("runner", world.runner);
+  out += at("doorWay", world.facadeX, world.gateY, "wp-gate");
   return out + `</svg>`;
 }
 
 /** Everything the simulation needs about the building, handed over as data rather than measured
- *  out of the DOM. A tile grid IS the geometry — there is nothing to read off a bounding box —
- *  which is most of why the tilemap is worth having: routes are computed, not guessed from a
- *  layout that may have re-flowed since. */
+ *  out of the DOM. A tile grid IS the geometry. */
 function worldData(world: World): string {
   const solid = world.solid.map((s) => (s ? "1" : "0")).join("");
   const rooms = world.rooms.map((r) => ({
@@ -217,67 +325,94 @@ function worldData(world: World): string {
   );
 }
 
-/** The room signs, in HTML rather than in the SVG so they stay crisp text at any zoom. */
+/** The room signs, beside the DOOR rather than in a corner — which is where a building actually
+ *  signs a room, and which makes the door itself legible from down the hall. */
 function plaques(world: World): string {
   return world.rooms
     .filter((r) => !!r.label)
     .map((r) => {
-      const x = r.x + 1;
-      const y = r.outdoor ? 1 : r.y + 1;
+      // Inside the room, on its own wall, clamped to the room's own width. Two signs then cannot
+      // collide however the plan is solved, which the version before this could not promise: it
+      // hung every north room's sign in the hall at the same height and three landed on top of
+      // each other — caught by the label-overlap guard, not by looking.
+      const main = r.rects[0];
+      const x = main.x + 1;
+      const y = r.open ? main.y + 1 : main.y + 1;
       return (
         `<span class="wp-plaque" data-room="${esc(r.id)}" ` +
-        `style="left:${x * TILE_PX}px;top:${y * TILE_PX - 15}px">${esc(r.label)}` +
-        `<b class="wp-head"></b></span>`
+        `style="left:${x * TILE_PX}px;top:${y * TILE_PX - 11}px;` +
+        `max-width:${(main.w - 2) * TILE_PX}px">${esc(r.label)}</span>`
       );
     })
     .join("");
 }
 
-/* ── the people ──────────────────────────────────────────────────────────────────────────────
-   An actor is a small stack: a sprite, a name, what it can do, and a line it may say. Sized so
-   the whole thing is about a tile and a half wide — the moment the text out-masses the character,
-   the map stops being a place and goes back to being a labelled diagram, which is the state this
-   view was rejected in. */
+/** The whole building at a glance, in the corner. The camera takes the overview away, so this
+ *  gives it back in the one form that costs no space: room shapes, and a dot per person in their
+ *  pod's colour. The engine draws the dots and the box showing where you are looking. */
+function minimap(world: World): string {
+  const body = world.rooms
+    .filter((r) => !r.outdoor)
+    .map((r) =>
+      r.floorRuns.length
+        ? `<path class="mm-r" data-room="${esc(r.id)}" d="${runPath(r.floorRuns)}"/>`
+        : `<rect class="mm-r" data-room="${esc(r.id)}" x="${r.x * TILE_CELLS}" y="${r.y * TILE_CELLS}" ` +
+          `width="${r.w * TILE_CELLS}" height="${r.h * TILE_CELLS}"/>`,
+    )
+    .join("");
+  return (
+    `<div class="wp-mini" aria-hidden="true" data-cols="${world.cols}" data-rows="${world.rows}">` +
+    `<svg viewBox="0 0 ${world.cols * TILE_CELLS} ${world.rows * TILE_CELLS}" preserveAspectRatio="none">` +
+    `<rect class="mm-bg" x="0" y="0" width="${world.facadeX * TILE_CELLS}" height="${world.rows * TILE_CELLS}"/>` +
+    body +
+    `<rect class="mm-hall" x="${world.hall.x * TILE_CELLS}" y="${world.hall.y * TILE_CELLS}" ` +
+    `width="${world.hall.w * TILE_CELLS}" height="${world.hall.h * TILE_CELLS}"/>` +
+    `</svg><b class="wp-eye"></b><span class="wp-dots"></span></div>`
+  );
+}
+
+/* ── the people ──────────────────────────────────────────────────────────────────────────────*/
 
 function spriteOf(w: Cast): string {
   const pal = w.status === "foreign" ? GHOST_PAL : SKIN_PAL;
-  // Four frames for anyone who can move: two of standing, two of walking. The simulation picks
-  // which pair is showing, so one drawing serves the desk and the corridor.
   return (
     drawFrames([POSE_REST, POSE_MOVE], pal, { scale: 3, className: "wp-sprite wp-stand" }) +
     drawFrames([POSE_WALK_A, POSE_WALK_B], pal, { scale: 3, className: "wp-sprite wp-walk" })
   );
 }
 
-/** What this one can DO, read off its own definition file. Glyphs, not a tool list: a row of six
- *  marks under a character is readable at a glance and a list of `mcp__interact__*` is not. The
- *  simulation lights the matching mark while the character is doing that thing. */
-function faculties(w: Cast): string {
+/** What this one can DO, read off its own definition file.
+ *
+ *  Two failures were measured here and both are the same failure: six marks at twelve CSS pixels,
+ *  which the whole-building fit then halved again, is not information — it is texture. So the row
+ *  shows the THREE that distinguish this agent from the rest of the company, drawn twice the size,
+ *  and the full set with its words arrives when a reader points at them. Rarity is the ranking
+ *  because a capability everybody has says nothing about anybody. */
+function faculties(w: Cast, rare: Map<string, number>): string {
   const list = (w.faculties ?? []).map((id) => MARK_OF.get(id)).filter(Boolean);
   if (!list.length) return "";
+  const shown = [...list].sort((a, b) => (rare.get(a!.id) ?? 0) - (rare.get(b!.id) ?? 0)).slice(0, MARKS_SHOWN);
+  const glyph = (id: string): string => {
+    const art = FACULTY_ART[id];
+    return art ? draw(art.grid, art.pal, { scale: 2, outline: false }) : "";
+  };
   return (
     `<span class="wp-can">` +
-    list
-      .map((f) => {
-        const art = FACULTY_ART[f!.id];
-        const body = art ? draw(art.grid, art.pal, { scale: 2, outline: false }) : esc(f!.mark);
-        return `<i class="wp-fac" data-fac="${esc(f!.id)}" title="${esc(f!.label)}">${body}</i>`;
-      })
+    shown
+      .map((f) => `<i class="wp-fac" data-fac="${esc(f!.id)}" title="${esc(f!.label)}">${glyph(f!.id)}</i>`)
       .join("") +
+
+    `</span>` +
+    `<span class="wp-kit">` +
+    list.map((f) => `<i>${glyph(f!.id)}${esc(f!.label)}</i>`).join("") +
     `</span>`
   );
 }
 
-function actor(
-  w: Cast,
-  seat: Seat,
-  home: Room,
-  accent: string,
-  brain: boolean,
-): string {
+function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, rare: Map<string, number>): string {
   const stalled = isHeld(w) ? 1 : 0;
   const st = stampFor(w);
-  const say = w.activity ? clip(w.activity, 72) : "";
+  const say = w.activity ? clip(w.activity, 64) : "";
   const label =
     `${w.name} — ${w.status}, ${LABELS.get(w.zone) ?? w.zone}` + (w.activity ? `: ${w.activity}` : "");
   return (
@@ -286,7 +421,10 @@ function actor(
     `data-seat="${seat.x},${seat.y}" data-say="${esc(say)}" data-home="${esc(home.id)}" ` +
     (seat.up ? `data-label="up" ` : "") +
     `data-dept="${esc(w.room || w.department || "")}" ` +
-    `style="--accent:${accent};--idle:${idleAmount(w.idle_seconds)};${faceOf(w.run_id)}" ` +
+    // A head start of their own, so eleven people at their desks are eleven people rather than one
+    // animation played eleven times. Measured: without it every sprite reported the same phase.
+    `style="--accent:${accent};--idle:${idleAmount(w.idle_seconds)};` +
+    `--d:-${((hash(w.run_id) % 240) / 100).toFixed(2)}s;${faceOf(w.run_id)}" ` +
     `tabindex="0" role="button" title="${esc(label)}" aria-label="${esc(label)}">` +
     (st ? `<span class="wp-mark">${stampHtml(st)}</span>` : "") +
     (say ? `<span class="wp-say"><b>${esc(say)}</b></span>` : "") +
@@ -297,7 +435,7 @@ function actor(
     `<span class="wp-tag">${esc(clip(w.name, 16))}` +
     (w.idle_seconds >= 30 ? `<i>${esc(shortDuration(w.idle_seconds))}</i>` : "") +
     `</span>` +
-    faculties(w) +
+    faculties(w, rare) +
     `</div>`
   );
 }
@@ -314,30 +452,22 @@ function seating(world: World, cast: Cast[], brainId: string | null): Map<string
     byRoom.set(room, list);
   }
   for (const [room, list] of byRoom) {
-    // The brain first where it is standing in its own room; otherwise a stable hash order, so
-    // seats do not reshuffle when somebody unrelated joins.
     list.sort((a, b) => {
       if (a.run_id === brainId) return -1;
       if (b.run_id === brainId) return 1;
       return hash(a.run_id) - hash(b.run_id);
     });
     list.forEach((w, i) => {
-      const seat = room.seats[i % room.seats.length];
-      // Past the seat count people stand a tile deeper rather than on top of each other.
-      const wrap = Math.floor(i / room.seats.length);
+      const seat = room.seats[i % Math.max(1, room.seats.length)] ?? { x: room.x + 2, y: room.y + 3 };
+      const wrap = Math.floor(i / Math.max(1, room.seats.length));
       out.set(w.run_id, { x: seat.x, y: seat.y - (wrap % 2), up: seat.up });
     });
   }
   return out;
 }
 
-/** The agent that was asked first: the root of the tree, oldest where the registry knows. It is
- *  the one the whole building is arranged around, so it is worth finding honestly rather than
- *  taking whoever happens to be first in an array. */
+/** The agent that was asked first: the root of the tree, oldest where the registry knows. */
 export function brainOf(workers: readonly Cast[]): string | null {
-  // The roster says so outright where the company file has been read; otherwise fall back to the
-  // shape of the tree — the earliest root — so a team whose records predate the flag still has a
-  // middle rather than none.
   const flagged = workers.find((w) => w.brain);
   if (flagged) return flagged.run_id;
   const roots = workers.filter((w) => !w.parent_run_id);
@@ -357,6 +487,7 @@ export function renderActors(state: TeamState): string {
   const world = worldFor(cast);
   const brain = brainOf(cast);
   const seats = seating(world, cast, brain);
+  const rare = rarity(cast);
   const list: Post[] = posts(state);
   const mailbag = list.map((p) => ({
     f: p.from,
@@ -376,6 +507,7 @@ export function renderActors(state: TeamState): string {
           placeOf(world, w),
           accentOf(w),
           w.run_id === brain,
+          rare,
         ),
       )
       .join("") +
@@ -388,6 +520,11 @@ function money(total: number): string {
   return total >= 1 ? `~$${total.toFixed(2)}` : `~$${total.toFixed(3)}`;
 }
 
+/** The board by the door, reduced to a strip laid OVER the world rather than a band beside it.
+ *  The critic's word for the old one was that the eye is pulled to data rather than to place —
+ *  so the counts that matter stay, the legend of every mark in the building is gone (the marks
+ *  carry their own words on hover, and the stamps are already words), and the whole thing is one
+ *  line thin enough that the floor is the biggest thing on screen at any panel width. */
 function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): string {
   const when = new Date(atMillis(state.at)).toLocaleTimeString();
   const chip = (status: string, n: number, word: string, colour: string) =>
@@ -397,48 +534,25 @@ function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): strin
     `<header class="wp-hud">` +
     `<span class="wp-sign"><span class="wp-sign-name">The team</span>` +
     `<span class="wp-sign-sub">${projects}</span></span>` +
-    `<span class="wp-tally">` +
     chip("running", t.running, WORDS.running, "var(--wp-ok)") +
     chip("error", t.error, WORDS.error, "var(--wp-bad)") +
-    chip("done", t.done, WORDS.done, "var(--wp-dim)") +
-    chip("foreign", t.foreign, WORDS.foreign, "var(--wp-dim)") +
     chip("held", t.idle, WORDS.held, "var(--wp-dim)") +
-    (mail ? `<span class="wp-chip">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b> said</span>` : "") +
-    `<span class="wp-chip">spend <b>${money(t.cost)}</b></span>` +
-    `</span>` +
-    `<span class="wp-clock">as of ${esc(when)}</span>` +
+    (mail ? `<span class="wp-chip">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b></span>` : "") +
+    `<span class="wp-chip wp-spend">${money(t.cost)}</span>` +
+    `<span class="wp-clock">${esc(when)}</span>` +
     `</header>`
   );
 }
 
-function legend(): string {
-  return (
-    `<footer class="wp-legend">` +
-    `<span class="wp-key" style="--mark:var(--wp-ok)">${markOf("running")} ${WORDS.running}</span>` +
-    `<span class="wp-key">${stampHtml(STAMPS.error)}</span>` +
-    `<span class="wp-key">${stampHtml(STAMPS.held)}</span>` +
-    `<span class="wp-key">${stampHtml(STAMPS.done)}</span>` +
-    `<span class="wp-key">${stampHtml(STAMPS.foreign)}</span>` +
-    `<span class="wp-facs">` +
-    FACULTIES.map((f) => {
-      const art = FACULTY_ART[f.id];
-      const body = art ? draw(art.grid, art.pal, { scale: 2, outline: false }) : esc(f.mark);
-      return `<i class="wp-fac">${body}</i>${esc(f.label)}`;
-    }).join("") +
-    `</span>` +
-    `</footer>`
-  );
-}
-
-/** The whole visible thing. The map is inside it so a harness or a first render gets a complete
- *  picture; a live refresh replaces only `.wp-cast`. */
+/** The whole visible thing: a viewport with a building inside it, a strip over the top and the
+ *  plan in the corner. The map is inside so a harness or a first render gets a complete picture;
+ *  a live refresh replaces only `.wp-cast`. */
 export function renderScene(state: TeamState): string {
   openSheet();
   const WORLD = worldFor(state.workers as Cast[]);
   const t = tally(state);
   const list = posts(state);
   const body =
-    hud(state, t, list.length) +
     `<div class="wp-view">` +
     `<div class="wp-stagebox" style="--cols:${WORLD.cols};--rows:${WORLD.rows};` +
     `--tile:${TILE_PX}px;width:${WORLD.cols * TILE_PX}px;height:${WORLD.rows * TILE_PX}px">` +
@@ -446,8 +560,9 @@ export function renderScene(state: TeamState): string {
     plaques(WORLD) +
     worldData(WORLD) +
     renderActors(state) +
-    `</div></div>` +
-    legend();
+    `</div>` +
+    hud(state, t, list.length) +
+    minimap(WORLD) +
+    `</div>`;
   return `<div class="wp">${closeSheet()}${body}</div>`;
 }
-

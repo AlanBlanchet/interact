@@ -1,6 +1,6 @@
 /** The look of the place.
  *
- *  Two rules run through all of it.
+ *  Three rules run through all of it.
  *
  *  COLOUR follows the editor. Walls, floors, light and paper are mixed from `--vscode-*` tokens,
  *  so the building is dim and warm in a dark theme and bright and cool in a light one without a
@@ -8,9 +8,14 @@
  *  editor background stops looking like a person.
  *
  *  MOTION follows one beat. Every ambient animation's duration is an integer ratio of `--beat`,
- *  so a room full of sprites moves as one thing rather than as nine independent loops. The one
- *  exception is walking, and it is deliberate: a walk is driven by the ENGINE, frame by frame off
- *  the distance covered, because a footfall on a CSS clock slides the moment a body speeds up.
+ *  so a floor full of screens, plants and steam moves as one thing rather than as thirty
+ *  independent loops. Two deliberate exceptions: walking, driven by the ENGINE off the distance
+ *  covered (a footfall on a CSS clock slides the moment a body speeds up), and the fan, which is
+ *  the one thing in the building that genuinely turns at a constant rate.
+ *
+ *  The FRAME is a window, not a fit. The building is bigger than the panel on purpose and the
+ *  camera goes to the work. Scaling the whole plan down to fit is what produced eighteen-pixel
+ *  characters and six-pixel capability marks in the side bar this actually ships in.
  */
 
 import { STAMP_CSS } from "./status";
@@ -25,7 +30,7 @@ body {
   background: var(--vscode-editor-background, #1e1e1e);
   font-size: 12px;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 .wp {
@@ -34,9 +39,7 @@ body {
   --wp-bg: var(--vscode-editor-background, #1e1e1e);
   --wp-fg: var(--vscode-editor-foreground, #d4d4d4);
   /* The editor's description colour is tuned for the EDITOR background, not for a small label on
-     a busy floor: it measures 3.95:1 at 10px in a light theme, under the 4.5 floor. Lifted toward
-     the foreground until both themes clear it — the same trap this project has already been bitten
-     by on the side bar's role line. */
+     a busy floor: it measures 3.95:1 at 10px in a light theme, under the 4.5 floor. */
   --wp-dim: color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 68%, var(--wp-fg));
   --wp-ink: #14101c;
   --wp-tint: #e8e4f0;
@@ -52,11 +55,11 @@ body {
   --wp-bad: var(--vscode-errorForeground, #f14c4c);
   --wp-line: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
   /* A room nobody is in. A VEIL rather than an absent glow: in a light theme "no light" left the
-     empty room the BRIGHTEST thing on screen, so occupancy read backwards. Mixing toward ink
-     greys it in a light theme and darkens it in a dark one, which is "off" in both. */
+     empty room the BRIGHTEST thing on screen, so occupancy read backwards. */
   --wp-shut: color-mix(in srgb, var(--wp-ink) 34%, transparent);
   --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
   --wp-paper: color-mix(in srgb, #f3efe4 82%, var(--wp-bg));
+  --wp-chrome: color-mix(in srgb, var(--wp-bg) 92%, var(--wp-fg));
 
   /* ── the tile palette ───────────────────────────────────────────────────────────────────
      Every colour any tile may use, in one place. The art is authored against these names, so a
@@ -71,6 +74,24 @@ body {
   --t-wall: color-mix(in srgb, var(--wp-fg) 24%, var(--wp-bg));
   --t-wall-cap: color-mix(in srgb, var(--wp-fg) 38%, var(--wp-bg));
   --t-wall-foot: color-mix(in srgb, var(--wp-ink) 60%, var(--wp-bg));
+  /* The wall you LOOK AT rather than down on: lighter than the cap, with a skirting under it.
+     One tile band on all four sides is a border; this is what makes it a room. */
+  --t-face: color-mix(in srgb, var(--wp-fg) 31%, var(--wp-bg));
+  --t-skirt: color-mix(in srgb, var(--wp-fg) 17%, var(--wp-bg));
+  --t-shade: color-mix(in srgb, var(--wp-ink) 72%, var(--wp-bg));
+  /* The passage has to look nothing like the places it joins, so the hall is the LIGHTEST ground
+     in the building and the runner down the middle of it is the only warm one. */
+  --t-hall: color-mix(in srgb, var(--wp-fg) 27%, var(--wp-bg));
+  --t-hall-band: color-mix(in srgb, var(--wp-fg) 36%, var(--wp-bg));
+  /* And the building's own mass has to look nothing like a floor: darker than any of them, so a
+     room reads as carved out of a solid block rather than drawn on a sheet. */
+  --t-mass: color-mix(in srgb, var(--wp-ink) 50%, var(--wp-bg));
+  --t-rug: color-mix(in srgb, var(--wp-fg) 15%, var(--wp-bg));
+  --t-rug-hi: color-mix(in srgb, var(--wp-fg) 23%, var(--wp-bg));
+  --t-runner: color-mix(in srgb, var(--wp-h5) 30%, var(--wp-bg));
+  --t-runner-hi: color-mix(in srgb, var(--wp-h5) 44%, var(--wp-bg));
+  --t-screen: color-mix(in srgb, var(--wp-h1) 74%, var(--wp-bg));
+  --t-warm: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
   --t-mat: color-mix(in srgb, var(--wp-h3) 26%, var(--wp-bg));
   --t-wood: color-mix(in srgb, #8a5a2b 74%, var(--wp-bg));
   --t-wood-hi: color-mix(in srgb, #b8834a 74%, var(--wp-bg));
@@ -93,11 +114,11 @@ body {
   --stamp-bg: var(--wp-bg);
   --stamp-shadow: var(--wp-ink);
 
-  padding: 6px 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-height: 100vh;
+  height: 100vh;
+  padding: 3px;
+  gap: 0;
 }
 
 /* A light theme has to flip the tint dark, or every team colour pastels out against cream. */
@@ -107,55 +128,38 @@ body.vscode-high-contrast-light .wp {
   --t-wall-foot: color-mix(in srgb, var(--wp-ink) 32%, var(--wp-bg));
   --t-carpet: color-mix(in srgb, var(--wp-h1) 9%, var(--wp-bg));
   --t-carpet-hi: color-mix(in srgb, var(--wp-h1) 15%, var(--wp-bg));
+  --t-shade: color-mix(in srgb, var(--wp-ink) 46%, var(--wp-bg));
+  --t-mass: color-mix(in srgb, var(--wp-ink) 34%, var(--wp-bg));
 }
 
-/* ── the board by the door ─────────────────────────────────────────────────────────────────── */
-
-.wp-hud {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 11px;
-}
-.wp-sign {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 8px;
-  border: 2px solid var(--wp-line);
-  background: color-mix(in srgb, var(--wp-fg) 8%, var(--wp-bg));
-}
-.wp-sign-name { font-weight: 700; letter-spacing: .13em; text-transform: uppercase; font-size: 11px; }
-.wp-sign-sub { color: var(--wp-dim); font-size: 10px; }
-.wp-tally { display: inline-flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.wp-chip { display: inline-flex; align-items: center; gap: 4px; color: var(--wp-dim); }
-.wp-chip b { color: var(--wp-fg); }
-.wp-clock { margin-left: auto; color: var(--wp-dim); font-size: 10px; }
-
-/* ── the stage ─────────────────────────────────────────────────────────────────────────────
-   The building is laid out ONCE at its true tile size and then scaled as one object. Letting it
-   reflow would be the flexbox mistake in another costume: a floor plan has a shape, and every
-   route the engine computes is in tiles, so the picture must stay in exact proportion at any
-   panel width. */
+/* ── the window ────────────────────────────────────────────────────────────────────────────
+   A bounded viewport with a building inside it that is deliberately bigger. The camera lives in
+   the engine and arrives here as one transform on the stage, so every tile, sprite and route
+   stays in exact proportion and nothing ever reflows. */
 
 .wp-view {
   position: relative;
-  overflow: auto;
-  margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: hidden;
   border: 2px solid var(--wp-line);
   background: color-mix(in srgb, var(--wp-ink) 30%, var(--wp-bg));
+  cursor: grab;
 }
+.wp-view.is-dragging { cursor: grabbing; }
 .wp-stagebox {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
   transform-origin: 0 0;
   image-rendering: pixelated;
+  will-change: transform;
 }
 .wp-map { position: absolute; inset: 0; display: block; }
 .wp-world { display: none; }
 
-/* Daylight crossing the building. One rectangle, one minute, no layout: it is the only thing on
-   screen slower than a person, which is what makes the place feel like it has a time of day. */
+/* Daylight crossing the building, and the dust hanging in it. The two slowest things on screen:
+   a place with a time of day reads as a place even when nobody in it is moving. */
 .wp-view::after {
   content: "";
   position: absolute;
@@ -164,15 +168,103 @@ body.vscode-high-contrast-light .wp {
   z-index: 400;
   background: linear-gradient(105deg,
     transparent 0%,
-    color-mix(in srgb, var(--wp-h3) 7%, transparent) 42%,
+    color-mix(in srgb, var(--wp-h3) 8%, transparent) 42%,
     transparent 74%);
   background-size: 260% 100%;
   animation: wp-daylight calc(var(--beat) * 25) ease-in-out infinite alternate;
 }
 @keyframes wp-daylight { from { background-position: 0% 0; } to { background-position: 100% 0; } }
+.wp-view::before {
+  content: "";
+  position: absolute;
+  inset: -40px;
+  pointer-events: none;
+  z-index: 390;
+  opacity: .5;
+  background-image:
+    radial-gradient(circle, color-mix(in srgb, var(--wp-h3) 55%, transparent) 1px, transparent 1.6px),
+    radial-gradient(circle, color-mix(in srgb, var(--wp-h3) 34%, transparent) 1px, transparent 1.6px);
+  background-size: 140px 110px, 90px 170px;
+  animation: wp-motes calc(var(--beat) * 18) linear infinite;
+}
+@keyframes wp-motes {
+  from { background-position: 0 0, 40px 20px; }
+  to { background-position: 90px -110px, -60px -170px; }
+}
 
-/* A room with somebody in it is LIT. Answering "where is everyone" with the shape of the light
-   costs nothing to read and happens before a single label does. */
+/* ── the board by the door ─────────────────────────────────────────────────────────────────
+   One strip laid OVER the world, not a band beside it. The complaint that this reads as an ops
+   dashboard was mostly volume of chrome: a stats bar above, a ten-item legend below, and a row
+   of marks under every head. The legend is gone (the marks carry their own words when you point
+   at them), and what is left is a line thin enough that the floor is the biggest thing on screen
+   at any panel width. */
+
+.wp-hud {
+  position: absolute;
+  z-index: 500;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  font-size: 10px;
+  background: var(--wp-chrome);
+  border-bottom: 1px solid var(--wp-line);
+  pointer-events: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.wp-sign { display: inline-flex; align-items: baseline; gap: 5px; }
+.wp-sign-name { font-weight: 700; letter-spacing: .12em; text-transform: uppercase; font-size: 10px; }
+.wp-sign-sub { color: var(--wp-dim); font-size: 9px; }
+.wp-chip { display: inline-flex; align-items: center; gap: 3px; color: var(--wp-dim); }
+.wp-chip b { color: var(--wp-fg); }
+.wp-spend { color: var(--wp-dim); }
+.wp-clock { margin-left: auto; color: var(--wp-dim); font-size: 9px; }
+
+/* ── the plan, in the corner ───────────────────────────────────────────────────────────────
+   The camera takes the overview away; this gives it back in the one form that costs no space.
+   Rooms as shapes, a dot per person in their pod's colour, and a box showing where you are
+   looking — which is also how you steer, because clicking it takes the camera there. */
+
+.wp-mini {
+  position: absolute;
+  z-index: 500;
+  right: 5px;
+  bottom: 5px;
+  width: 96px;
+  height: 72px;
+  background: var(--wp-chrome);
+  border: 1px solid var(--wp-line);
+  opacity: .92;
+  cursor: pointer;
+}
+.wp-mini svg { position: absolute; inset: 2px; width: calc(100% - 4px); height: calc(100% - 4px); }
+.wp-mini .mm-bg { fill: color-mix(in srgb, var(--wp-fg) 10%, var(--wp-bg)); }
+.wp-mini .mm-r { fill: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg)); }
+.wp-mini .mm-hall { fill: color-mix(in srgb, var(--wp-h5) 34%, var(--wp-bg)); }
+.wp-mini .mm-r[data-lit="1"] { fill: color-mix(in srgb, var(--wp-h3) 52%, var(--wp-bg)); }
+.wp-eye {
+  position: absolute;
+  border: 1px solid var(--wp-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wp-ink) 60%, transparent);
+  pointer-events: none;
+}
+.wp-dots { position: absolute; inset: 2px; pointer-events: none; }
+.wp-dots i {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  margin: -1px 0 0 -1px;
+  background: var(--accent, var(--wp-h1));
+}
+
+/* ── the rooms ─────────────────────────────────────────────────────────────────────────────*/
+
+/* A room with somebody in it is LIT, in a colour that belongs to what the room is FOR. Answering
+   "where is everyone" with the shape and the hue of the light happens before a label is read. */
 .wp-glow {
   fill: color-mix(in srgb, var(--wp-h3) 15%, transparent);
   opacity: 0;
@@ -185,21 +277,100 @@ body.vscode-high-contrast-light .wp {
 }
 .wp-rm[data-lit="1"] .wp-glow { opacity: 1; }
 .wp-rm[data-lit="1"] .wp-shut { opacity: 0; }
-.wp-rm.is-brain .wp-glow { fill: color-mix(in srgb, var(--wp-h3) 18%, transparent); }
+.wp-rm[data-kind="machine"] .wp-glow { fill: color-mix(in srgb, var(--wp-h1) 10%, transparent); }
+.wp-rm[data-kind="stacks"] .wp-glow { fill: color-mix(in srgb, var(--wp-h2) 10%, transparent); }
+.wp-rm[data-kind="signals"] .wp-glow { fill: color-mix(in srgb, var(--wp-h6) 10%, transparent); }
+.wp-rm[data-kind="gallery"] .wp-glow { fill: color-mix(in srgb, var(--wp-h1) 9%, transparent); }
+.wp-rm[data-kind="boardroom"] .wp-glow { fill: color-mix(in srgb, var(--wp-h5) 10%, transparent); }
+.wp-rm[data-kind="drafting"] .wp-glow { fill: color-mix(in srgb, var(--wp-h4) 9%, transparent); }
+/* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
+   every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */
+.wp-rug { fill: none; stroke: var(--t-rug-hi); stroke-width: 1; }
+.wp-struct { fill: var(--t-wall); }
 .wp-core { animation: wp-core calc(var(--beat) * 1.5) ease-in-out infinite; transform-origin: center; }
 @keyframes wp-core { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
 
+/* ── the building is ALIVE when nobody is working ──────────────────────────────────────────
+   Every one of these is an overlay on a prop that is already there, never a redraw of it, and
+   every duration is a ratio of the one beat. The point is not decoration: a floor where a screen
+   flickers, a kettle steams, a fan turns and the plants move is a place somebody LIVES in, and it
+   is the difference between a still picture of a workplace and a workplace. */
+
+.wp-lv { pointer-events: none; }
+.wp-lv-screen {
+  opacity: .55;
+  animation: wp-flick calc(var(--beat) * 2) steps(1, end) infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes wp-flick {
+  0%, 22% { opacity: .30; }
+  23%, 47% { opacity: .62; }
+  48%, 51% { opacity: .18; }
+  52%, 78% { opacity: .55; }
+  79%, 100% { opacity: .38; }
+}
+.wp-lv-steam {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: wp-steam calc(var(--beat) * 2) ease-out infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes wp-steam {
+  0% { opacity: 0; transform: translateY(2px) scale(.6); }
+  30% { opacity: .7; }
+  100% { opacity: 0; transform: translateY(-9px) scale(1.15); }
+}
+.wp-lv-lamp {
+  opacity: .3;
+  animation: wp-lamp calc(var(--beat) * 4) ease-in-out infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes wp-lamp { 0%, 100% { opacity: .22; } 50% { opacity: .46; } }
+.wp-lv-sway {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: wp-sway calc(var(--beat) * 3) ease-in-out infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes wp-sway {
+  0%, 100% { transform: rotate(-1.6deg); }
+  50% { transform: rotate(1.6deg); }
+}
+.wp-lv-fan {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: wp-fan calc(var(--beat) / 2) linear infinite;
+}
+@keyframes wp-fan { to { transform: rotate(360deg); } }
+
+/* A door is something that HAPPENS. The leaf is shut until the engine sees somebody within a
+   tile and a half of it, which makes walking between rooms legible from across the building. */
+.wp-leaf {
+  transform-box: fill-box;
+  transform-origin: 0% 50%;
+  transition: transform 260ms cubic-bezier(.34, 1.4, .64, 1);
+}
+.wp-leaf.is-open { transform: scaleX(.18); }
+
+/* Labels hold a constant SCREEN size while the world zooms under them — the standard answer for
+   anything that is read rather than looked at, and the reason the same 132px bubble does not turn
+   into a 264px banner the moment the camera moves in. The world scales; the words do not. */
 .wp-plaque {
   position: absolute;
   z-index: 300;
-  font-size: 8px;
-  letter-spacing: .09em;
+  transform: scale(var(--inv, 1));
+  transform-origin: 0 0;
+  font-size: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: .04em;
   text-transform: uppercase;
   font-weight: 700;
   color: var(--wp-bg);
   background: var(--wp-plate);
   padding: 1px 4px;
-  box-shadow: 2px 2px 0 var(--wp-ink);
+  box-shadow: 1px 1px 0 var(--wp-ink);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -207,11 +378,7 @@ body.vscode-high-contrast-light .wp {
 /* ── a character ───────────────────────────────────────────────────────────────────────────
    The element is a POINT — a zero-sized anchor standing on a tile — and everything hangs off it.
    That is what lets the engine move a person with one transform, and what stops the text around
-   somebody from deciding where they are allowed to be.
-
-   The text is deliberately small and deliberately below them. The version this replaced put a
-   paragraph in a grey box over every head: the words out-massed the characters, and a place whose
-   labels are bigger than its people is a diagram, not a place. */
+   somebody from deciding where they are allowed to be. */
 
 .wp-cast { position: absolute; inset: 0; }
 .wp-actor {
@@ -229,7 +396,6 @@ body.vscode-high-contrast-light .wp {
   --c-ghost: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
   --c-ghost-ink: color-mix(in srgb, var(--wp-fg) 52%, var(--wp-bg));
 }
-.wp-actor[data-depth]:not([data-depth="0"]) { --c-shirt: color-mix(in srgb, var(--accent) 60%, var(--wp-tint)); }
 
 .wp-body {
   position: absolute;
@@ -243,8 +409,8 @@ body.vscode-high-contrast-light .wp {
 .wp-body .wp-sprite { position: absolute; left: 0; bottom: 0; }
 .wp-actor.face-left .wp-body .wp-sprite { transform: scaleX(-1); }
 
-/* The head of the company stands taller. It is the cheapest true thing the picture can say about
-   the one agent everybody else reports to, and it needs no label to say it. */
+/* The head of the company stands taller. The cheapest true thing the picture can say about the
+   one agent everybody else reports to, and it needs no label to say it. */
 .wp-actor.is-brain .wp-body { transform: translateX(-50%) scale(1.3) rotate(var(--lean, 0deg)); }
 .wp-actor.is-brain::before {
   content: "";
@@ -255,7 +421,7 @@ body.vscode-high-contrast-light .wp {
   height: 14px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--wp-h3) 76%, transparent);
-  animation: wp-crown calc(var(--beat) * 2) ease-in-out infinite;
+  animation: wp-crown calc(var(--beat) * 2) ease-in-out var(--d, 0s) infinite;
 }
 @keyframes wp-crown {
   0%, 100% { opacity: .35; transform: scale(.9); }
@@ -273,12 +439,11 @@ body.vscode-high-contrast-light .wp {
 }
 
 /* Two poses for standing, two for walking, in one element. Which pair shows is the engine's call:
-   the walk frames are flipped on DISTANCE covered, not on a clock, so a body that accelerates
-   keeps its feet under it. */
+   the walk frames are flipped on DISTANCE covered, not on a clock. */
 .wp-f { opacity: 0; }
 .wp-stand .wp-f0 { opacity: 1; }
-.wp-actor[data-status="running"] .wp-stand .wp-f0 { animation: wp-fa calc(var(--beat) / 2) steps(1, end) infinite; }
-.wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) / 2) steps(1, end) infinite; }
+.wp-actor[data-status="running"] .wp-stand .wp-f0 { animation: wp-fa calc(var(--beat) / 2) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) / 2) steps(1, end) var(--d, 0s) infinite; }
 @keyframes wp-fa { 0%, 62% { opacity: 1; } 63%, 100% { opacity: 0; } }
 @keyframes wp-fb { 0%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
 .wp-walk { visibility: hidden; }
@@ -304,8 +469,7 @@ body.vscode-high-contrast-light .wp {
   white-space: nowrap;
   color: var(--wp-fg);
   /* Opaque, not translucent. Two characters standing a tile apart WILL overlap — that is what a
-     crowd is — so the one in front has to cover the one behind cleanly rather than blending into
-     it. Depth ordering already decides which that is. */
+     crowd is — so the one in front has to cover the one behind cleanly. */
   background: color-mix(in srgb, var(--wp-bg) 92%, var(--wp-fg));
   padding: 0 3px;
   border-bottom: 1px solid var(--accent, var(--wp-h1));
@@ -316,43 +480,72 @@ body.vscode-high-contrast-light .wp {
 .wp-tag i { font-style: normal; color: var(--wp-dim); margin-left: 3px; }
 .wp-actor.is-brain .wp-tag { font-weight: 700; border-bottom-color: var(--wp-h3); }
 
-/* What this one can DO, read off its own definition file. Six glyphs is the whole vocabulary, so
-   a character that can only read is visibly a different character from one that drives a browser
-   and puts others to work — without a word of prose anywhere. */
+/* What this one can DO, read off its own definition file.
+   Six marks at twelve CSS pixels — which the old whole-building fit then HALVED to six — was
+   measured as illegible, and illegible is not ergonomic. So it is the three that make this agent
+   different from everybody else, at fourteen pixels, on a camera that no longer shrinks the world
+   to fit the panel. Hung BESIDE the body rather than under the name: as a row it was half again
+   the character's own width and the loudest thing on them, which is the chrome-crowds-the-sprite
+   complaint in miniature. The full set, with its words, is one hover away. */
 .wp-can {
   position: absolute;
-  left: 0;
-  top: 14px;
-  transform: translateX(-50%);
+  left: -37px;
+  bottom: 4px;
   display: flex;
-  gap: 1px;
+  flex-direction: column;
+  gap: 2px;
   pointer-events: none;
 }
 .wp-fac {
   --mark: var(--wp-bg);
   font-style: normal;
-  font-size: 8px;
-  line-height: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 1px;
-  color: var(--wp-bg);
-  background: color-mix(in srgb, var(--accent, var(--wp-h1)) 86%, var(--wp-bg));
+  background: color-mix(in srgb, var(--accent, var(--wp-h1)) 88%, var(--wp-bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wp-ink) 55%, transparent);
 }
 .wp-fac svg { display: block; }
 .wp-actor[data-status="foreign"] .wp-fac,
 .wp-actor[data-status="done"] .wp-fac { background: color-mix(in srgb, var(--wp-dim) 70%, var(--wp-bg)); }
 
-/* The line above their head. Hidden by default and shown for a few seconds when it CHANGES, or
-   while a reader is pointing at them. Permanently-open speech was the single biggest thing making
-   this read as a labelled diagram. */
+/* The whole kit with its words, for a reader who points at somebody. Display NONE at rest, not
+   opacity zero: an invisible element that still occupies layout is how a label-collision check
+   once reported four collisions nobody could see. */
+.wp-kit { display: none; }
+.wp-actor:hover .wp-kit,
+.wp-actor:focus-visible .wp-kit {
+  display: block;
+  position: absolute;
+  left: 10px;
+  top: 34px;
+  z-index: 950;
+  padding: 3px 5px;
+  background: var(--wp-chrome);
+  border: 1px solid var(--wp-line);
+  box-shadow: 2px 2px 0 var(--wp-ink);
+  font-size: 8px;
+  line-height: 1.5;
+  color: var(--wp-fg);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.wp-kit i { font-style: normal; display: flex; align-items: center; gap: 4px; --mark: var(--wp-fg); }
+
+/* The line above their head.
+   "A lot of transparency" was the ask, and the answer used to be opacity zero until you hovered
+   the exact right character — the richest information in the product, invisible unless you knew
+   where to point. It is on at rest now. What makes that possible is the camera: eight people on
+   screen instead of twenty-five, so the engine can hand out three levels of bubble and drop any
+   that would collide with another bubble or with somebody's name. */
 .wp-say {
   position: absolute;
   left: 0;
   bottom: 66px;
-  transform: translate(-50%, 4px);
-  max-width: 190px;
+  transform: translate(-50%, 3px) scale(var(--inv, 1));
+  transform-origin: 50% 100%;
+  width: 132px;
   padding: 2px 5px;
   font-size: 9px;
   line-height: 1.3;
@@ -361,7 +554,7 @@ body.vscode-high-contrast-light .wp {
   box-shadow: 2px 2px 0 var(--wp-ink);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 180ms ease, transform 180ms ease;
+  transition: opacity 220ms ease, transform 220ms ease;
   z-index: 5;
 }
 .wp-say b { font-weight: 400; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -375,26 +568,22 @@ body.vscode-high-contrast-light .wp {
   margin-left: -2px;
   background: var(--wp-paper);
 }
-.wp-actor.is-saying .wp-say,
-.wp-actor:hover .wp-say,
-.wp-actor:focus-visible .wp-say { opacity: 1; transform: translate(-50%, 0); }
-.wp-actor:hover .wp-say b,
-.wp-actor:focus-visible .wp-say b { white-space: normal; }
+.wp-actor.is-saying .wp-say { opacity: 1; transform: translate(-50%, 0) scale(var(--inv, 1)); }
 .wp-actor:hover, .wp-actor:focus-visible { z-index: 900 !important; }
 
-/* The back rank wears its name over its head. See Seat.up in world.ts: three tiles is room for two
-   people and not enough for two people plus their labels, and the front body would otherwise be
-   drawn over the back body's name — the wrong person hiding the right person's identity. */
+/* The back rank wears its name over its head: three tiles is room for two people and not enough
+   for two people plus their labels, and the front body would otherwise be drawn over the back
+   body's name. */
 .wp-actor[data-label="up"] .wp-tag { top: auto; bottom: 58px; }
-.wp-actor[data-label="up"] .wp-can { top: auto; bottom: 70px; }
 .wp-actor[data-label="up"] .wp-say { bottom: 96px; }
 .wp-actor[data-label="up"] .wp-mark { bottom: 84px; }
+.wp-actor[data-label="up"] .wp-kit { top: auto; bottom: 100px; }
 
 .wp-mark {
   position: absolute;
   left: 0;
   bottom: 54px;
-  transform: translateX(-50%) scale(.55);
+  transform: translateX(-50%) scale(.5);
   transform-origin: 50% 100%;
   pointer-events: none;
 }
@@ -414,40 +603,31 @@ body.vscode-high-contrast-light .wp {
 .wp-actor[data-status="foreign"] .wp-body { opacity: calc(1 - var(--idle, 0) * .38); }
 .wp-actor[data-status="error"] .wp-body { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--wp-bad) 70%, transparent)); }
 
-/* ── the key ───────────────────────────────────────────────────────────────────────────────── */
-
-.wp-legend {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 10px;
-  color: var(--wp-dim);
-}
-.wp-key { display: inline-flex; align-items: center; gap: 4px; }
-.wp-facs { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.wp-facs .wp-fac {
-  margin-left: 6px;
-  background: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
-  color: var(--wp-bg);
-}
 .wp-proto { position: absolute; visibility: hidden; pointer-events: none; }
 
 ${STAMP_CSS}
 
 /* ── reduced motion ────────────────────────────────────────────────────────────────────────
-   Everything above degrades to a still floor plan with everybody standing at their own desk. The
-   engine never starts its clock, so nothing walks, nothing pulses and the picture is exactly the
-   one a reader would get if they paused it. */
+   Everything above degrades to a still building with everybody standing at their own desk. The
+   engine never starts its clock, so nothing walks and nothing pulses; the camera holds where it
+   was put, and the speech stays ON, because a reader who has turned motion off still needs to
+   know what the team is doing. */
 @media (prefers-reduced-motion: reduce) {
   .wp-view::after,
+  .wp-view::before,
   .wp-core,
+  .wp-lv-screen,
+  .wp-lv-steam,
+  .wp-lv-lamp,
+  .wp-lv-sway,
+  .wp-lv-fan,
   .wp-actor.is-brain::before,
   .wp-actor .wp-stand .wp-f0,
   .wp-actor .wp-stand .wp-f1,
   .wp-actor.is-talking .wp-body { animation: none !important; }
-  .wp-glow, .wp-shut { transition: none; }
+  .wp-glow, .wp-shut, .wp-leaf { transition: none; }
   .wp-stand .wp-f0 { opacity: 1; }
   .wp-stand .wp-f1 { opacity: 0; }
+  .wp-lv-steam { opacity: 0; }
 }
 `;
