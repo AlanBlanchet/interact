@@ -110,6 +110,18 @@ def main() -> None:
 
     entry.bind("<KeyRelease>", on_type)
 
+    # A real Ctrl-chord, recorded by the app itself. #115 reports that a chord dispatched through
+    # the sandbox arrives UNMODIFIED — the app sees a bare keystroke — and every attempt to settle
+    # that has been reasoning about evdev frames rather than evidence. A toolkit binding either
+    # fires or it does not.
+    def on_chord(_event: "tk.Event") -> str:
+        state["chord"] = "ctrl+p"
+        status.config(text="chord: ctrl+p")
+        persist()
+        return "break"  # so the keystroke does not also fall through to the entry
+
+    root.bind_all("<Control-Key-p>", on_chord)
+
     persist()
     root.mainloop()
 

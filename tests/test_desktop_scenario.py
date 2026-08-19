@@ -199,6 +199,52 @@ def test_panel_interactions_nested(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")
+def test_a_ctrl_chord_reaches_the_app_through_the_nested_path(tmp_path: Path) -> None:
+    """A Ctrl-chord and a shifted character reach a real toolkit — through the XDOTOOL path.
+
+    **This does not settle #115, and it is worth being exact about why.** The nested backend sends
+    keys with `xdotool key`; #115 reports the UINPUT backend, which synthesises evdev events on a
+    virtual device. Those are different code paths, so a pass here says nothing about the reported
+    failure — it says the sandbox's own path is sound, which is worth pinning but was never the
+    question.
+
+    The uinput path cannot be exercised from a test: it is a SYSTEM-WIDE virtual keyboard, so its
+    keystrokes land in whichever window holds focus at that instant — including the one running
+    the agent that launched the test. Settling #115 needs a machine whose real desktop is
+    disposable, not this one.
+
+    What it does cover: a toolkit binding either fires or it does not, so this pins the nested
+    path against regression, and the shifted character pins the single-frame write that falsified
+    the atomic-SYN-frame theory of the chord bug.
+    """
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+    backend = NestedBackend(display=97, size="700x600")
+    try:
+        backend.spawn([_tk_python(), str(PANEL), str(state_path), "360x420+120+90"])
+        state = _wait_for_state(state_path, lambda s: "widgets" in s)
+        wx, wy, ww, wh = state["widgets"]["Enter text"]
+        backend.click(wx + ww // 2, wy + wh // 2)  # focus, so the toplevel has the keyboard
+
+        backend.type_text("Hi!")
+        typed = _wait_for_state(state_path, lambda s: s.get("typed")).get("typed", "")
+        assert typed == "Hi!", (
+            f"a shifted character did not survive the sandbox: {typed!r}. type_text writes "
+            "shift-down, key, shift-up in ONE evdev frame, so this failing would mean the "
+            "atomic-frame theory of #115 is right after all"
+        )
+
+        backend.key("ctrl+p")
+        got = _wait_for_state(state_path, lambda s: s.get("chord"), timeout=6).get("chord")
+        assert got == "ctrl+p", (
+            "the chord arrived without its modifier — #115 reproduced in the sandbox, which is "
+            "the evidence needed to go looking at the udev settle race rather than the framing"
+        )
+    finally:
+        backend.close()
+
+
+@pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")
 def test_window_id_prefers_the_largest_same_titled_window(tmp_path):
     """A toolkit can map several windows with one title — Flutter spawns a hidden ~10x10 GL helper
     alongside the real window. _window_id must pick the largest, or capture/input hit the phantom:
