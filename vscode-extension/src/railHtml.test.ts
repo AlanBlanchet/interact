@@ -8,6 +8,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { buildRail } from "./rail.ts";
 import { railHtml, headerLine } from "./railHtml.ts";
+import { voiceOf } from "./statusLanguage.ts";
 import { actionsFor } from "./agentActions.ts";
 
 const run = (over: Record<string, unknown> = {}) => ({
@@ -16,7 +17,7 @@ const run = (over: Record<string, unknown> = {}) => ({
 }) as never;
 
 const html = (runs: unknown[] = [run()], scope = "interact") =>
-  railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE", (r) => actionsFor(r as never));
+  railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE", voiceOf, (r) => actionsFor(r as never));
 
 test("every destination is in the document at rest, with its word", () => {
   // The defect this replaces: VS Code renders a view's title actions only while the pointer is in
@@ -138,4 +139,30 @@ test("every action carries a title, since a bare glyph is a guess", () => {
   for (const m of doc.matchAll(/<button class="act"[^>]*>/g)) {
     assert.match(m[0], /title="/, `an action button with no title: ${m[0]}`);
   }
+});
+
+test("a row renders the SAME word the world stamps, in the shared accent", () => {
+  /* The defect: the rail said a green tick and lowercase "finished" while the workplace stamped a
+     tilted uppercase "DONE" on paper — same five states, two visual languages, which visual-critic
+     called out twice and tied to Alan's "the environment is weird". Rendered output is the only
+     place that split is visible, so it is pinned here rather than at the source level alone. */
+  const doc = html([run({ status: "completed" })]);
+  const voice = voiceOf("finished");
+  assert.ok(
+    doc.includes(`>${voice.word}<`),
+    `the row does not render "${voice.word}" — the world stamps it and the rail must say it too`,
+  );
+  assert.ok(
+    doc.includes(`var(${voice.accent})`),
+    "the row is not tinted from the shared accent token",
+  );
+  assert.ok(doc.includes(voice.mark), "the shape-first mark is missing from the row");
+});
+
+test("each state carries its own accent, so colour still separates them", () => {
+  const finished = html([run({ status: "completed" })]);
+  const failed = html([run({ status: "failed" })]);
+  assert.ok(finished.includes(`var(${voiceOf("finished").accent})`));
+  assert.ok(failed.includes(`var(${voiceOf("error").accent})`));
+  assert.notEqual(voiceOf("finished").accent, voiceOf("error").accent);
 });

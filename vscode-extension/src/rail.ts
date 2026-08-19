@@ -21,6 +21,14 @@ import type { AgentRun } from "./agents";
 /** How long a running agent may say nothing before it is worth your attention. The same threshold
  *  the workplace uses for a stalled worker — one number, or the two surfaces disagree about the
  *  word "stuck". */
+/** Mirrors `HELD_AFTER_SECONDS` in `statusLanguage.ts`, which is the rule's home.
+ *
+ *  It is duplicated rather than imported for one mechanical reason: this module is loaded DIRECTLY
+ *  by `node --test`, which cannot resolve an extensionless sibling import, and tsc will not emit
+ *  the `.ts` specifier that loader needs. So the value is mirrored and the EQUALITY is enforced by
+ *  a test — the divergence is what actually hurts (the roster calling someone stuck while the
+ *  world still shows them working), not the second `const`.
+ */
 export const HELD_SECONDS = 120;
 
 /** Why a run wants attention, worst first. The ORDER of this list IS the sort. */

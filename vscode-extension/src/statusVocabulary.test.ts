@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { STATUS } from "./statusLanguage.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (...p: string[]) => readFileSync(join(here, "..", ...p), "utf8");
@@ -59,7 +60,15 @@ test("every stamped state has a mark of its OWN — shape carries status before 
   const marks = Object.values(wp.STAMPS).map((s: any) => s.mark);
   assert.equal(new Set(marks).size, marks.length, `two states share one silhouette: ${marks}`);
   // HELD used to be drawn with the open square, which is the mark for NOT OURS.
-  assert.notEqual(wp.STAMPS.held.mark, wp.STAMPS.foreign.mark);
+  assert.notEqual(wp.STAMPS.held.mark, wp.STAMPS["not-ours"].mark);
+  // The KEYS are the rail's own `Attention` values, not a private four-state enum beside a
+  // six-state one. A world that spells the state `foreign` while the rail spells it `not-ours` is
+  // the same two-vocabularies defect one level down from the words.
+  for (const kind of Object.keys(wp.STAMPS)) {
+    assert.ok(kind in STATUS, `${kind} is not a state the rail knows`);
+    assert.equal(wp.STAMPS[kind].word, (STATUS as any)[kind].word, `${kind} spells its own word`);
+    assert.equal(wp.STAMPS[kind].accent, (STATUS as any)[kind].accent, `${kind} picks its own colour`);
+  }
   for (const kind of Object.keys(wp.STAMPS)) {
     const html = wp.stampHtml(wp.STAMPS[kind]);
     assert.match(html, /<svg/, `${kind} draws no mark`);

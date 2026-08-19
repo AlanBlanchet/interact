@@ -10,6 +10,7 @@
  *  This file is the glue: the provider, the filesystem reads, and the routing of untrusted
  *  messages — which is itself split out as `railRoute` so it can be tested without a host.
  */
+import { voiceOf } from "./statusLanguage";
 import * as vscode from "vscode";
 
 import { readAgentActivity, readAgentRuns } from "./agents";
@@ -77,6 +78,8 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       // A fresh nonce per render: the CSP admits only scripts carrying it, so nothing arriving in
       // an agent's output can execute even if the escaping were ever wrong.
       Math.random().toString(36).slice(2) + Date.now().toString(36),
+      // The one vocabulary both surfaces speak — the rail prints the word the world stamps.
+      voiceOf,
       // What each row offers, filtered to what would actually work on that agent — so no control
       // drawn here is ever dead.
       (run) => actionsFor(run as never),

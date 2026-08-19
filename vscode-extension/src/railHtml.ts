@@ -42,20 +42,24 @@ function esc(text: string): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-/** A mark per attention band. Shape first, colour second — colour alone is unreadable to a good
- *  share of people and invisible in a screenshot taken at a glance. */
-const MARK: Record<string, string> = {
-  error: "✕",
-  asked: "✉",
-  held: "⏸",
-  finished: "✓",
-  working: "●",
-  "not-ours": "○",
-};
+/** How a status is spoken. Shape first, colour second — colour alone is unreadable to a good share
+ *  of people and invisible in a screenshot taken at a glance.
+ *
+ *  This used to be a local table, and that was the defect: the world stamped "DONE" on tilted paper
+ *  while this row said a green tick and lowercase "finished". Same five states, two products —
+ *  which visual-critic called out twice and tied to "the environment is weird". The vocabulary now
+ *  lives in `statusLanguage.ts` and is PASSED IN rather than imported, because this module must stay
+ *  free of runtime imports for the test loader. Required, not optional: a default here would let a
+ *  caller quietly reintroduce a second source of truth, and the compiler is a better guard than a
+ *  comment asking nicely.
+ */
+export type Voice = { mark: string; word: string; phrase: string; accent: string; tinted: boolean };
 
 export function railHtml(
   rail: Rail,
   nonce: string,
+  /** How each status is spoken — the SAME vocabulary the workplace stamps. See `statusLanguage.ts`. */
+  voiceOf: (attention: string) => Voice,
   /** What each row can be asked to do. Passed in rather than imported so this module keeps no
    *  runtime import — the test loader demands ".ts" specifiers that tsc refuses to emit. */
   actionsFor: (run: Rail["runs"][number]["run"]) => AgentAction[] = () => [],
@@ -64,17 +68,22 @@ export function railHtml(
     .map((c) => `<button class="chip" data-command="${esc(c.command)}">${esc(c.label)}</button>`)
     .join("");
 
-  const rows = rail.runs.map((r) => `
+  const rows = rail.runs.map((r) => {
+    const voice = voiceOf(r.attention);
+    return `
       <li class="row" data-run="${esc(r.run.run_id)}" data-attention="${esc(r.attention)}"${
-        r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}>
-        <span class="mark">${MARK[r.attention] ?? "●"}</span>
+        r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}
+        style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
+        <span class="mark">${esc(voice.mark)}</span>
         <span class="who">${esc(r.run.name || r.run.run_id.slice(0, 8))}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
+        <span class="stamp">${esc(voice.word)}</span>
         <span class="note">${esc(r.note)}</span>
         <span class="acts">${actionsFor(r.run).map((a) =>
           `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
           ` title="${esc(a.label)}">${a.mark}</button>`).join("")}</span>
-      </li>`).join("");
+      </li>`;
+  }).join("");
 
   const empty = rail.runs.length
     ? ""
@@ -118,9 +127,18 @@ body {
 ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 .row {
   display: grid;
-  grid-template-columns: 16px minmax(0, auto) minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, auto) auto minmax(0, 1fr);
   gap: 6px; align-items: baseline;
   padding: 3px 10px; cursor: pointer;
+}
+/* The same word the world stamps on paper, in the same accent — a list row cannot tilt a ribbon
+   without looking silly, so it borrows the vocabulary and leaves the idiom alone. */
+.stamp {
+  font-size: .78em; font-weight: 700; letter-spacing: .06em;
+  padding: 0 5px; border-radius: 3px; white-space: nowrap;
+  color: var(--accent, var(--vscode-foreground));
+  border: 1px solid color-mix(in srgb, var(--accent, var(--vscode-panel-border)) 45%, transparent);
+  background: color-mix(in srgb, var(--accent, transparent) 12%, transparent);
 }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 /* Actions sit on the row itself. They are filtered to the ones that would WORK, so nothing here
@@ -148,13 +166,9 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
   border: 1px solid var(--vscode-panel-border, var(--vscode-descriptionForeground));
 }
 .note { color: ${DIM}; overflow-wrap: break-word; }
-/* Attention reads by SHAPE first; colour only reinforces it. */
-.row[data-attention="error"] .mark { color: var(--vscode-charts-red); }
-.row[data-attention="asked"] .mark { color: var(--vscode-charts-blue); }
-.row[data-attention="held"] .mark { color: var(--vscode-charts-yellow); }
-.row[data-attention="finished"] .mark { color: var(--vscode-charts-green); }
-.row[data-attention="working"] .mark { color: var(--vscode-charts-blue); }
-.row[data-attention="not-ours"] .mark { color: var(--vscode-charts-purple); }
+/* Attention reads by SHAPE first; colour only reinforces it. One accent per row, supplied by the
+   shared vocabulary — six near-identical rules here were how the two surfaces drifted apart. */
+.mark { color: var(--accent, var(--vscode-foreground)); }
 .empty { color: ${DIM}; padding: 10px; }
 </style>
 </head>
