@@ -12,6 +12,8 @@ import type { TeamState, Worker } from "./team";
  *  `npm run build:workplace` and required at runtime rather than imported: it lives outside
  *  tsc's rootDir on purpose, so the visual can be reworked without recompiling the data layer. */
 let art: ((state: TeamState, nonce: string) => string) | null | undefined;
+/** Just the scene, for pushing an update into a document that is already live. */
+let scene: ((state: TeamState) => string) | null | undefined;
 
 export function renderWorkplace(
   state: TeamState,
@@ -99,4 +101,33 @@ document.addEventListener("click", (event) => {
 });
 </script>
 </body></html>`;
+}
+
+
+/** The scene's markup ALONE — no document, no script — for updating a webview in place.
+ *
+ *  Replacing `webview.html` destroys the document: every sprite becomes a new element and every
+ *  running animation dies, which is why a worker teleported between rooms instead of walking
+ *  there. The panel builds the shell once and then posts this, so the engine inside can keep each
+ *  body's position and finish a walk across an update.
+ */
+export function renderScene(
+  state: TeamState,
+  log?: { appendLine(line: string): void },
+): string | null {
+  if (scene === undefined) {
+    try {
+      scene = require("./workplace.js").renderScene ?? null;
+    } catch (err) {
+      log?.appendLine(`workplace scene unavailable: ${err}`);
+      scene = null;
+    }
+  }
+  if (!scene) return null;
+  try {
+    return scene(state);
+  } catch (err) {
+    log?.appendLine(`workplace scene failed to render: ${err}`);
+    return null;
+  }
 }

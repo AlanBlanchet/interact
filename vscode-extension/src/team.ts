@@ -56,11 +56,19 @@ export interface Worker {
   input_tokens: number | null;
   /** Seconds since this worker last did anything — how the view fades the ones who have stopped. */
   idle_seconds: number;
+  /** The registry's own clock, carried so no view has to invent one. Optional because a fixture
+   *  or an older record may not have it — a view must not assume a clock exists. */
+  started_at?: number | null;
+  finished_at?: number | null;
 }
 
 /** One agent addressing another — the thing that makes a set of workers a TEAM rather than a
  *  set of processes. Drawn between the rooms the two ends are standing in. */
 export interface Link {
+  /** When this exchange happened. Without it a view cannot tell "they just spoke" from "they
+   *  spoke an hour ago", so on a cold open it can only stay silent — which is half of "no agents
+   *  talk to each other". Optional: absent on messages recorded before it was stamped. */
+  at?: number | null;
   from_run_id: string;
   to_run_id: string;
   /** What was said, clipped — enough to read the exchange, not the whole message. */

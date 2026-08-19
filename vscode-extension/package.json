@@ -237,6 +237,11 @@
         "command": "interact.agents.spawn",
         "title": "Interact: Start an Agent",
         "icon": "$(add)"
+      },
+      {
+        "command": "interact.agents.workspace",
+        "title": "Interact: Show Agents From Workspace\u2026",
+        "icon": "$(folder-library)"
       }
     ],
     "viewsContainers": {
@@ -270,6 +275,11 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "interact.agents.workspace",
+          "when": "view == interactAgents.board",
+          "group": "navigation@0"
+        },
         {
           "command": "interact.agents.spawn",
           "when": "view == interactAgents.board",

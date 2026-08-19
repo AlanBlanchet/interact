@@ -63,3 +63,19 @@ test("an empty team renders a building, not a blank page", () => {
   assert.match(html, /Entry/);
   assert.match(html, /<html/);
 });
+
+// --- the document must stop being rebuilt ---
+//
+// Assigning `webview.html` destroys the document: every sprite becomes a new element and every
+// running animation dies. That is WHY a worker teleported between rooms instead of walking there —
+// the walk was a one-shot replay reconstructed from persisted state on the next load, not motion.
+// The panel builds the shell once and then pushes scenes into it.
+
+test("the scene can be rendered on its own, for pushing into a live document", () => {
+  // Compiled output, for the same reason as plainRoom above.
+  const { renderScene } = createRequire(import.meta.url)("../out/workplaceView.js");
+  const html = renderScene({ workers: [], links: [], zones: [] });
+
+  if (html === null) return; // no bundle in this checkout; the panel falls back to rebuilding
+  assert.ok(!/<html|<body|<script/i.test(html), "a fragment, not a document");
+});

@@ -180,16 +180,41 @@ export interface RunLike {
  * `latestStep` is passed in rather than read here so this stays pure: the view can be driven from
  * a fixture, and the test above does not need a registry on disk to place a researcher at the web.
  */
+/** When this agent was last SEEN doing something, if the events carry a time at all.
+ *
+ *  interact observes the vendor's stream, so it can stamp when it first saw a line even though
+ *  the vendor writes no timestamp of its own. That observation time is exactly the right clock
+ *  for a watched workplace: not when the agent acted (unknowable), but when we noticed.
+ */
+function lastObservedAt(steps: Step[]): number | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const at = (steps[i] as { at?: number }).at;
+    if (typeof at === "number" && at > 0) return at;
+  }
+  return null;
+}
+
+
 export function buildTeam(
   runs: RunLike[],
   recentSteps: (runId: string) => Step[],
   now: number = Date.now() / 1000,
-  messages: { from_run: string; to_run: string; text?: string }[] = [],
+  messages: { from_run: string; to_run: string; text?: string; at?: number | null }[] = [],
 ): TeamState {
   const workers: Worker[] = runs.map((run) => {
     const steps = recentSteps(run.run_id);
     const step = latestMeaningful(steps);
-    const since = run.finished_at ?? run.started_at ?? now;
+    // Idleness is time since the last thing this agent was OBSERVED doing — not time since it
+    // started, which is what this used to measure. For a running agent `finished_at` is null, so
+    // the old expression returned total elapsed, and the view stamps HELD at two minutes and cuts
+    // the ambient animation: every agent working longer than that was drawn asleep, and the
+    // harder it worked the deader the building looked.
+    const lastSeen = lastObservedAt(steps);
+    const since = run.status === "running"
+      // No observation time (a record written before stamping existed) means unknown, and a false
+      // "held" is worse than none — it puts a sleeping stamp on somebody who is working.
+      ? lastSeen ?? now
+      : run.finished_at ?? run.started_at ?? now;
     return {
       run_id: run.run_id,
       name: run.name || run.run_id.slice(0, 8),
@@ -205,6 +230,8 @@ export function buildTeam(
       cost_usd: run.cost_usd ?? null,
       input_tokens: run.input_tokens ?? null,
       idle_seconds: Math.max(0, now - since),
+      started_at: run.started_at ?? null,
+      finished_at: run.finished_at ?? null,
     };
   });
   // Only exchanges between people actually in the room: a link to someone who has been forgotten
@@ -212,6 +239,11 @@ export function buildTeam(
   const present = new Set(workers.map((w) => w.run_id));
   const links: Link[] = messages
     .filter((m) => present.has(m.from_run) && present.has(m.to_run) && m.from_run !== m.to_run)
-    .map((m) => ({ from_run_id: m.from_run, to_run_id: m.to_run, text: (m.text ?? "").slice(0, 80) }));
+    .map((m) => ({
+      from_run_id: m.from_run,
+      to_run_id: m.to_run,
+      text: (m.text ?? "").slice(0, 80),
+      at: m.at ?? null,
+    }));
   return { workers, links, at: now };
 }

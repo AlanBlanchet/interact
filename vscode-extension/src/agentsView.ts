@@ -21,6 +21,8 @@ import * as vscode from "vscode";
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
 import { GroupBy, formatCost, groupKeyFor, orderGroups, rowDescription } from "./agentsFormat";
 import { agentsDir } from "./paths";
+import { orgTree, readOrg } from "./org";
+import type { ScopeStore } from "./scopeStore";
 
 export type { GroupBy };
 
@@ -56,6 +58,10 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** Ticks while anything runs, so elapsed times advance even with no registry write. */
   private ticker: ReturnType<typeof setInterval> | undefined;
+
+  /** Which workspace to show. Set once at activation; the panels share ONE store so the tree and
+   *  the workplace can never disagree about which team you are looking at. */
+  scopeStore: ScopeStore | undefined;
 
   constructor(private readonly memento: vscode.Memento) {
     this.watch();
@@ -111,18 +117,77 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
     if (node.kind === "run" && node.run) {
       return [...this.reportsFor(node.run), ...this.activityFor(node.run)];
     }
+    if (node.contextValue === "interactCompany" || node.contextValue === "interactDepartment") {
+      return this.companyChildren(String(node.label));
+    }
     return [];
   }
 
+  /** The company as the prompt repo declares it: departments, and who sits in each.
+   *
+   *  Read from `~/.claude/org.json`, which the prompt repo generates from its own yaml. Absent for
+   *  anyone without that repo, in which case there is simply no company node — interact is
+   *  perfectly usable as a bare agent runner.
+   */
+  private companyNode(): Node | undefined {
+    const org = readOrg();
+    if (!org || org.agents.length === 0) return undefined;
+    const node = new Node("Company", vscode.TreeItemCollapsibleState.Collapsed, "group");
+    const wired = new Set(
+      org.agents.flatMap((a) => a.providers ?? []).filter((p) => org.providers[p]?.env),
+    );
+    node.description = `${org.agents.length} agents · ${orgTree(org).length} departments` +
+      (wired.size ? ` · ${[...wired].join(", ")}` : "");
+    node.iconPath = new vscode.ThemeIcon("organization");
+    node.contextValue = "interactCompany";
+    return node;
+  }
+
+  /** A department, or the people in one. */
+  private companyChildren(label: string): Node[] {
+    const org = readOrg();
+    if (!org) return [];
+    const tree = orgTree(org);
+    if (label === "Company") {
+      return tree.map((dept) => {
+        const n = new Node(dept.id, vscode.TreeItemCollapsibleState.Collapsed, "group");
+        n.description = `${dept.agents.length} · ${dept.mission ?? ""}`.trim();
+        n.iconPath = new vscode.ThemeIcon("folder-library");
+        n.contextValue = "interactDepartment";
+        return n;
+      });
+    }
+    const dept = tree.find((d) => d.id === label);
+    return (dept?.agents ?? []).map((seat) => {
+      const n = new Node(seat.name, vscode.TreeItemCollapsibleState.None, "event");
+      // Where it can actually RUN, not merely where it is designed to: an agent shared across
+      // providers but wired into none of them is part of the company with nowhere to work.
+      const live = seat.providers.filter((p) => p.env).map((p) => p.id);
+      const designed = seat.providers.filter((p) => !p.env).map((p) => p.id);
+      n.description = [seat.title, live.length ? live.join("+") : "not wired anywhere",
+                       designed.length ? `(${designed.join(",")} designed)` : ""]
+        .filter(Boolean).join(" · ");
+      n.tooltip = seat.description ?? seat.title ?? seat.name;
+      n.iconPath = new vscode.ThemeIcon(live.length ? "person" : "person-add");
+      n.contextValue = "interactSeat";
+      return n;
+    });
+  }
+
   private roots(): Node[] {
-    const runs = readAgentRuns();
+    const runs = this.scopeStore ? this.scopeStore.runs() : readAgentRuns();
+    // The COMPANY comes first, and is there whether or not anybody is running: a roster you can
+    // only see while its members happen to be working is not a roster. It is where "we have way
+    // more agents than are in the env" becomes visible — each one shows where it can actually run.
+    const company = this.companyNode();
     if (runs.length === 0) {
-      const empty = new Node("No agents yet", vscode.TreeItemCollapsibleState.None, "event");
+      const empty = new Node("No agents running", vscode.TreeItemCollapsibleState.None, "event");
       empty.description = 'interact agents run "<task>"';
       empty.iconPath = new vscode.ThemeIcon("info");
-      return [empty];
+      return company ? [company, empty] : [empty];
     }
-    if (this.groupBy === "flat") return runs.map((r) => this.runNode(r));
+    const head = company ? [company] : [];
+    if (this.groupBy === "flat") return [...head, ...runs.map((r) => this.runNode(r))];
 
     const groups = new Map<string, AgentRun[]>();
     for (const run of runs) {
@@ -131,7 +196,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       if (bucket) bucket.push(run);
       else groups.set(key, [run]);
     }
-    return orderGroups([...groups.entries()]).map(([label, rs]) => {
+    return [...head, ...orderGroups([...groups.entries()]).map(([label, rs]) => {
       const node = new Node(label, vscode.TreeItemCollapsibleState.Expanded, "group");
       const live = rs.filter((r) => r.status === "running").length;
       const cost = rs.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
@@ -142,7 +207,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       node.iconPath = new vscode.ThemeIcon(live ? "folder-active" : "folder");
       node.contextValue = "interactGroup";
       return node;
-    });
+    })];
   }
 
   private runsFor(label: string): Node[] {

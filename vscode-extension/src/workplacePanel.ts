@@ -14,8 +14,9 @@ import { readAgentActivity, readAgentMessages, readAgentRuns } from "./agents";
 import { agentsDir } from "./paths";
 import { buildTeam } from "./teamState";
 import { selectedRunId } from "./workplaceMessage";
-import { renderWorkplace } from "./workplaceView";
+import { renderScene, renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
+import { scopeStore } from "./scopeStore";
 
 export class WorkplacePanel {
   private static current: WorkplacePanel | undefined;
@@ -58,7 +59,7 @@ export class WorkplacePanel {
   /** Everyone in the building right now, placed by what they are doing. */
   private state(): TeamState {
     return buildTeam(
-      readAgentRuns() as never,
+      (scopeStore()?.runs() ?? readAgentRuns()) as never,
       // The whole recent window, not one event: the vendor emits housekeeping constantly, and a
       // finished worker's room is found by walking back to the last thing it actually did.
       (runId) => readAgentActivity(runId, STEP_WINDOW),
@@ -67,12 +68,41 @@ export class WorkplacePanel {
     );
   }
 
+  /** Re-draw if the building is on screen — the workspace switcher has to reach it too, or the
+   *  tree changes workspace and the building carries on showing the old team. */
+  public static refreshIfOpen(): void {
+    WorkplacePanel.current?.render();
+  }
+
+  /** Whether the document exists yet. Assigning `webview.html` REBUILDS it — every sprite becomes
+   *  a new element, every running animation dies, and there is no clock — so it happens once. */
+  private mounted = false;
+
   private render(): void {
+    const state = this.state();
+    // Once the document is up, push the new scene into it instead of replacing it. This is the
+    // difference between a slideshow and something you can watch: the engine keeps each body's
+    // position and facing across the update, so a worker whose room changed WALKS there rather
+    // than appearing in it.
+    if (this.mounted) {
+      const html = renderScene(state, this.log);
+      if (html !== null) {
+        void this.panel.webview.postMessage({ type: "team", html, state });
+        return;
+      }
+      // No scene renderer (an old or broken bundle): fall back to rebuilding rather than freezing.
+      this.mounted = false;
+    }
     try {
-      this.panel.webview.html = renderWorkplace(this.state(), nonce(), this.log);
+      this.panel.webview.html = renderWorkplace(state, nonce(), this.log);
+      this.mounted = true;
+      // Straight after a rebuild, or the engine sits on the shell's snapshot until the next
+      // registry write — which on a quiet team is minutes of a still picture.
+      void this.panel.webview.postMessage({ type: "team", html: renderScene(state, this.log), state });
     } catch (err) {
       this.log.appendLine(`workplace render failed: ${err}`);
       this.panel.webview.html = `<!DOCTYPE html><body>${String(err)}</body>`;
+      this.mounted = false;
     }
   }
 

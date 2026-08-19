@@ -52,6 +52,11 @@ class AgentEvent(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     raw_type: str = ""
+    #: When interact FIRST OBSERVED this line, not when the agent produced it — the vendor writes
+    #: no timestamp, but we watch the stream, so this is the one clock that is honestly available.
+    #: It is what lets a view tell an agent that is working from one that has stopped, order a
+    #: conversation, and fire a message animation once at the right moment instead of guessing.
+    at: float | None = None
 
     def summary(self, viewer: str | None = None) -> str:
         """One line for a supervisor row — what this agent is doing right now."""

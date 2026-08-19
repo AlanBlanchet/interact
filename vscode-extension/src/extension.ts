@@ -5,6 +5,7 @@ import { ChatViewProvider } from "./chatView";
 import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
+import { ScopeStore, setScopeStore } from "./scopeStore";
 import {
   KeyManager,
   formatLabel,
@@ -370,7 +371,12 @@ export async function activate(
   // Code / Codex / Gemini, where a chat panel belongs. `viewsContainers.secondarySidebar` is what
   // puts it there; the manifest's `engines.vscode` floor is past the build that added it.
 
+  // One workspace scope, shared by every view, so the tree and the building can never disagree
+  // about which team you are looking at. Defaults to the folder you have open.
+  const scope = new ScopeStore(context.globalState);
   const agentsProvider = new AgentsProvider(context.globalState);
+  agentsProvider.scopeStore = scope;
+  setScopeStore(scope);
   // The chat surface, under the agent list in the same side-bar container: the list says what is
   // running, this is where you talk to it.
   const chatProvider = new ChatViewProvider(log);
@@ -390,6 +396,15 @@ export async function activate(
       },
     }),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),
+    // "i have agents in the 'sheets' folder elsewhere, and i can't change and see how they work"
+    vscode.commands.registerCommand("interact.agents.workspace", async () => {
+      if (await scope.pick()) {
+        agentsProvider.refresh();
+        const { WorkplacePanel } = await import("./workplacePanel");
+        WorkplacePanel.refreshIfOpen();
+      }
+    }),
+    scope.onDidChange(() => agentsProvider.refresh()),
     // Starting an agent from the panel. Without this the panel could only WATCH — you had to
     // leave it for a terminal to put anyone to work, which is not a team you manage.
     vscode.commands.registerCommand("interact.agents.spawn", async () => {

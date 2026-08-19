@@ -151,6 +151,11 @@ export interface AgentActivity {
    *  another agent — which is the difference between you talking to it and a TEAM talking. */
   from_run?: string | null;
   to_run?: string | null;
+  /** When interact FIRST OBSERVED this line — the vendor writes no timestamp, but interact
+   *  watches the stream, so this is the honest clock. It is what tells a view that an agent is
+   *  working rather than stopped, and what lets a message fire once at the right moment. Absent
+   *  on records written before stamping existed. */
+  at?: number | null;
 }
 
 /** A run's recent activity, oldest last. Bounded by `limit` because a long run's transcript is
@@ -194,6 +199,8 @@ export interface AgentMessage {
   from_run: string;
   to_run: string;
   text: string;
+  /** When the exchange was recorded. Absent on messages written before it was stamped. */
+  at?: number | null;
 }
 
 /** Every recorded exchange, in file order. These are the edges a sequence view draws; without

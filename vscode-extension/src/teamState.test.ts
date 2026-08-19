@@ -171,7 +171,7 @@ test("your own session says what it is, not that it is waiting", () => {
 test("an exchange between two present workers becomes a link", () => {
   const team = buildTeam(RUNS, (id) => (STEPS[id] ? [STEPS[id]] : []), 2000,
     [{ from_run: "lead", to_run: "sub", text: "check the docs too" }]);
-  assert.deepEqual(team.links, [{ from_run_id: "lead", to_run_id: "sub", text: "check the docs too" }]);
+  assert.deepEqual(team.links, [{ from_run_id: "lead", to_run_id: "sub", text: "check the docs too", at: null }]);
 });
 
 test("a link to someone who has been forgotten is dropped, not drawn at nobody", () => {
@@ -292,4 +292,73 @@ test("a running worker is still placed by what it is doing right now", () => {
 
 test("your own session still stands at the entrance", () => {
   assert.equal(zoneOfSteps([{ kind: "tool", tool: "Read" }], "foreign", null), "entry");
+});
+
+
+// --- idle_seconds was measuring the wrong thing entirely ---
+//
+// It was `now - (finished_at ?? started_at)`. For a RUNNING agent finished_at is null, so it
+// returned TOTAL ELAPSED SINCE START — and the view stamps HELD at 120s and cuts the ambient
+// animation. So every agent that had been working for more than two minutes was drawn asleep,
+// and the harder it worked the deader the building looked. Idleness is time since the last thing
+// the agent was OBSERVED doing, which is a different clock.
+
+test("an agent working steadily is not idle, however long it has been at it", () => {
+  const runs = [{ run_id: "busy", name: "busy", status: "running", started_at: 1000 }] as never;
+  const steps = () => [{ kind: "tool", tool: "Read", tool_input: "a.py", at: 4990 }] as never;
+
+  const team = buildTeam(runs, steps, 5000);
+
+  assert.ok(
+    team.workers[0].idle_seconds < 30,
+    `busy for an hour, last seen 10s ago, reported idle for ${team.workers[0].idle_seconds}s`,
+  );
+});
+
+test("an agent that has genuinely gone quiet IS idle", () => {
+  const runs = [{ run_id: "quiet", name: "quiet", status: "running", started_at: 1000 }] as never;
+  const steps = () => [{ kind: "tool", tool: "Read", tool_input: "a.py", at: 2000 }] as never;
+
+  const team = buildTeam(runs, steps, 5000);
+
+  assert.equal(team.workers[0].idle_seconds, 3000);
+});
+
+test("with no observation time at all, a running agent is not accused of being idle", () => {
+  // Records written before observation stamping existed. A false "held" is worse than no held:
+  // it puts a sleeping stamp on someone who is working.
+  const runs = [{ run_id: "old", name: "old", status: "running", started_at: 1000 }] as never;
+  const steps = () => [{ kind: "tool", tool: "Read", tool_input: "a.py" }] as never;
+
+  assert.equal(buildTeam(runs, steps, 9999).workers[0].idle_seconds, 0);
+});
+
+test("a finished agent's clock still stops when it finished", () => {
+  const runs = [
+    { run_id: "done", name: "done", status: "done", started_at: 1000, finished_at: 4000 },
+  ] as never;
+
+  assert.equal(buildTeam(runs, () => [] as never, 5000).workers[0].idle_seconds, 1000);
+});
+
+test("a worker carries its own clock, so no view has to invent one", () => {
+  const runs = [
+    { run_id: "r", name: "r", status: "done", started_at: 1000, finished_at: 4000 },
+  ] as never;
+  const w = buildTeam(runs, () => [] as never, 5000).workers[0];
+
+  assert.equal(w.started_at, 1000);
+  assert.equal(w.finished_at, 4000);
+});
+
+test("an exchange carries when it happened, so it can be shown as it happens", () => {
+  const runs = [
+    { run_id: "a", name: "a", status: "running" },
+    { run_id: "b", name: "b", status: "running" },
+  ] as never;
+  const team = buildTeam(runs, () => [] as never, 5000, [
+    { from_run: "a", to_run: "b", text: "take a look", at: 4990 },
+  ] as never);
+
+  assert.equal(team.links[0].at, 4990);
 });

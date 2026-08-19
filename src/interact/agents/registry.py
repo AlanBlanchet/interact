@@ -261,8 +261,12 @@ def record_message(*, from_run: str, to_run: str, text: str) -> bool:
     for side in (from_run, to_run):
         # Anchored to THIS side's raw stream: the message belongs before whatever that agent
         # writes next, and the two sides are at different points in their own streams.
+        # Stamped here rather than by the mirror: an exchange is recorded as it happens, so this
+        # clock is exact rather than "when we next noticed". It is what lets the workplace animate
+        # a conversation once, at the right moment — and on a cold open, replay the last minute of
+        # traffic honestly instead of guessing from what a previous render happened to remember.
         event = AgentEvent(kind="message", text=text, from_run=from_run, to_run=to_run,
-                           raw_index=_raw_line_count(side))
+                           at=time.time(), raw_index=_raw_line_count(side))
         path = messages_path(side)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
@@ -384,6 +388,28 @@ def read_events(run_id: str) -> list[AgentEvent]:
     return out + _read_messages(run_id)
 
 
+def _carry_observed_at(path: Path, events: list[AgentEvent]) -> None:
+    """Stamp when each event was first seen, keeping the stamps already on record.
+
+    The mirror is rebuilt wholesale from a re-parse on every pass, so stamping the clock of the
+    moment would march every event's time forward and mean nothing. The stream is append-only, so
+    an event keeps whatever time position ``i`` already carried and only genuinely new lines take
+    the current clock. Carrying them forward is also what keeps the content comparison below
+    stable — otherwise every pass would differ and a settled run would be rewritten forever.
+    """
+    seen: list[float | None] = []
+    try:
+        for line in path.read_text().splitlines():
+            if line.strip():
+                seen.append(json.loads(line).get("at"))
+    except (OSError, ValueError):
+        seen = []
+    now = time.time()
+    for i, event in enumerate(events):
+        prior = seen[i] if i < len(seen) else None
+        event.at = prior if isinstance(prior, (int, float)) else now
+
+
 def _mirror_normalised(run_id: str, events: list[AgentEvent]) -> None:
     """Keep a provider-AGNOSTIC copy of the stream beside the raw one.
 
@@ -395,6 +421,7 @@ def _mirror_normalised(run_id: str, events: list[AgentEvent]) -> None:
     shape forever and the only symptom was the UI quietly disagreeing with the CLI.
     """
     path = events_path(run_id)
+    _carry_observed_at(path, events)
     payload = "".join(e.model_dump_json() + "\n" for e in events)
     try:
         if path.read_text() == payload:
