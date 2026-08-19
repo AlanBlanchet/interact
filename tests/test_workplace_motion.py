@@ -120,6 +120,10 @@ def test_saying_something_makes_the_sender_walk(page):
           // spontaneous trip is exactly how the last movement bug stayed invisible.
           for (let t = 0; t < 40; t++) wp.step(performance.now() + t * 120);
           const after = {x: wp.bodies[from].x, y: wp.bodies[from].y};
+          // Hand the clock back RUNNING. The page fixture is shared, and a test that freezes the
+          // engine and walks away leaves every later test sampling a still photograph — which is
+          // how an overlap check passed alone and failed in the suite.
+          wp.tick.on = true;
           return {from, to, before, after,
                   travelled: Math.abs(after.x - before.x) + Math.abs(after.y - before.y)};
         }"""
@@ -372,6 +376,11 @@ def test_nobody_stands_on_top_of_anybody(page):
     So this samples over time and fails only on a PAIR that persists, never on the instantaneous
     count. A test that failed on any overlap at all would fail on a corridor.
     """
+    # Never assume the engine is running: a shared page fixture means an earlier test may have
+    # frozen it, and sampling a still scene would measure a photograph rather than a workplace.
+    page.evaluate("() => { if (window.__wp && window.__wp.tick) window.__wp.tick.on = true; }")
+    page.wait_for_timeout(400)
+
     samples, seen = 14, {}
     for _ in range(samples):
         for pair in page.evaluate(
