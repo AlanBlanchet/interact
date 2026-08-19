@@ -353,3 +353,64 @@ def test_definitions_command_is_silent_when_there_are_none(capsys, tmp_path, mon
     cli = importlib.import_module("interact.cli.app")
     cli.agents_definitions()
     assert capsys.readouterr().out.strip() == ""
+
+
+# --- How much autonomy an agent is given ----------------------------------------------------
+#
+# Supervising a team means deciding what each member may do on its own. The panel could spawn
+# agents but had no way to say "this one may not write" or "let this one plan first, don't touch
+# anything" — every run got whatever the vendor defaults to. The modes below are read off the
+# INSTALLED binary's own `--help`, never recalled: `claude --permission-mode` accepts
+# acceptEdits/auto/bypassPermissions/manual/dontAsk/plan, which is not the set an older memory of
+# the docs would produce.
+
+
+def test_a_provider_offers_no_permission_modes_unless_its_flags_are_verified():
+    """A provider whose real flag we have not checked offers nothing, rather than an invented one.
+
+    Passing a guessed flag to someone's CLI is worse than offering no control: the spawn fails, or
+    worse, silently runs with permissions nobody chose.
+    """
+    assert CodexProvider().permission_modes() == []
+
+
+def test_claude_offers_the_modes_its_binary_actually_accepts():
+    modes = {m.id for m in ClaudeCodeProvider().permission_modes()}
+    assert modes == {"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}
+
+
+def test_every_offered_mode_says_what_it_lets_the_agent_do():
+    for mode in ClaudeCodeProvider().permission_modes():
+        assert mode.label and mode.detail, f"{mode.id} is offered with no explanation"
+
+
+def test_the_dangerous_mode_is_marked_as_such():
+    """bypassPermissions is the one that can act without asking. It is offered — refusing to
+    expose it would just push people to the terminal — but never as an unremarkable choice."""
+    modes = {m.id: m for m in ClaudeCodeProvider().permission_modes()}
+    assert modes["bypassPermissions"].unrestricted is True
+    assert not any(m.unrestricted for i, m in modes.items() if i != "bypassPermissions")
+
+
+def test_a_chosen_mode_reaches_the_argv():
+    argv = ClaudeCodeProvider().command(
+        "t", cwd="/tmp", model=None, mcp_config=None, run_id="r", permission_mode="plan")
+    assert "--permission-mode" in argv
+    assert argv[argv.index("--permission-mode") + 1] == "plan"
+
+
+def test_no_mode_means_no_flag():
+    """The vendor's own default must stay reachable; passing a mode nobody asked for would
+    override a setting the person configured in their own CLI."""
+    argv = ClaudeCodeProvider().command(
+        "t", cwd="/tmp", model=None, mcp_config=None, run_id="r")
+    assert "--permission-mode" not in argv
+
+
+def test_an_unknown_mode_is_refused_at_the_edge():
+    """The value arrives from a tool caller and lands on a command line. An unknown one is a
+    typo or an injection attempt, not a mode the CLI will helpfully ignore."""
+    with pytest.raises(ValueError, match="permission mode"):
+        ClaudeCodeProvider().command(
+            "t", cwd="/tmp", model=None, mcp_config=None, run_id="r",
+            permission_mode="--dangerously-skip-everything")

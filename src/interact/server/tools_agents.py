@@ -35,6 +35,7 @@ async def agent_spawn(
     name: str | None = None,
     model: str | None = None,
     cwd: str | None = None,
+    permission_mode: str | None = None,
 ) -> str:
     """Start another agent to work alongside you, and return its run id immediately.
 
@@ -54,6 +55,11 @@ async def agent_spawn(
         the provider — so several runs are not all just called "claude".
     model: provider-specific model name/alias; omit for that CLI's default.
     cwd: directory to work in; defaults to interact's own working directory.
+    permission_mode: how much the agent may do on its own. Provider-specific and validated —
+        agent_providers lists what each CLI accepts. Claude Code: "plan" (works out an approach,
+        touches nothing), "manual", "auto", "acceptEdits", "dontAsk". Omit to leave the CLI's own
+        configured default alone. Modes that act WITHOUT ASKING cannot be set from here — a person
+        chooses those for themselves, from the CLI or the panel.
     """
     try:
         prov = provider_for(provider)
@@ -70,14 +76,29 @@ async def agent_spawn(
         known = ", ".join(prov.agent_definitions()) or "none"
         return (f"ERROR: {provider} has no agent definition {agent!r}. "
                 f"Available definitions: {known}.")
+    # A tool caller is a MODEL, and a model's context routinely holds text it did not write — a
+    # fetched page, a file, an issue body. So this parameter is reachable by indirect injection,
+    # and an unrestricted mode reached that way stands up an agent that acts without asking, with
+    # nobody watching and nothing on screen before it runs. Refused HERE rather than deeper down:
+    # the CLI and the panel's picker still offer the full set, because a person choosing it for
+    # themselves is the point of the control. Widening your own privileges is not.
+    unrestricted = {m.id for m in prov.permission_modes() if m.unrestricted}
+    if permission_mode in unrestricted:
+        allowed = ", ".join(m.id for m in prov.permission_modes() if not m.unrestricted)
+        return (f"ERROR: {permission_mode!r} lets an agent act without asking, and cannot be set "
+                f"from a tool call. Choose one of: {allowed}. To run an agent unrestricted, start "
+                f"it yourself — `interact agents spawn ... --permission-mode {permission_mode}` — "
+                "so the choice has a person behind it.")
     if not prov.verified:
         # Never let an unexercised adapter look as trustworthy as a tested one.
         pass
     try:
         handle = await run_agent(
             prov, task, name=name or agent or prov.name, cwd=cwd or os.getcwd(),
-            agent=agent, model=model,
+            agent=agent, model=model, permission_mode=permission_mode,
         )
+    except ValueError as e:  # an unknown permission mode, refused before it reaches a shell
+        return f"ERROR: {e}"
     except (OSError, RuntimeError) as e:
         return f"ERROR: could not start the {provider} agent — {e}"
     caveat = f"\nNOTE: the {provider} adapter is {prov.caveat}" if not prov.verified else ""

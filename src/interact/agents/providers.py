@@ -18,6 +18,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import ClassVar
 
 from interact.agents.events import AgentEvent
@@ -46,6 +47,24 @@ def _summarise_input(value) -> str:
     return _clip(" ".join(f"{k}={value[k]!r}" for k in keys[:4]), 300)
 
 
+@dataclass(frozen=True)
+class PermissionMode:
+    """One answer to "how much may this agent do on its own?".
+
+    Supervising a team is largely this decision, made per member: the researcher may read, the
+    one refactoring may write, the one you have not watched yet plans and touches nothing. It is
+    a per-run choice rather than a global setting because a team is heterogeneous by design.
+    """
+
+    id: str
+    label: str
+    detail: str
+    #: True for a mode that acts without asking. Offered — refusing to expose it only pushes
+    #: people to a terminal where the choice is invisible to the panel — but never rendered as an
+    #: unremarkable option beside the others.
+    unrestricted: bool = False
+
+
 class AgentProvider(ABC):
     """How to launch one vendor's agent CLI and read what it emits."""
 
@@ -66,9 +85,35 @@ class AgentProvider(ABC):
 
     @abstractmethod
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
-                run_id: str, agent: str | None = None) -> list[str]:
+                run_id: str, agent: str | None = None,
+                permission_mode: str | None = None) -> list[str]:
         """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
         (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
+
+    def permission_modes(self) -> list[PermissionMode]:
+        """How much autonomy this CLI can be told to grant, or empty when we have not VERIFIED
+        its flag against a real binary.
+
+        Empty is the honest default. A guessed flag either fails the spawn or — the bad case —
+        is accepted with a meaning we assumed, so the agent runs with permissions nobody chose.
+        """
+        return []
+
+    def _permission_flag(self, mode: str | None) -> list[str]:
+        """``--permission-mode <mode>`` when one was chosen, after checking it is one of ours.
+
+        The value arrives from a tool caller and ends up on a command line, so an unknown one is
+        refused at the edge rather than passed through: a caller could otherwise smuggle a second
+        flag in through this field. No mode means no flag at all — the person's own CLI default
+        must stay reachable, and overriding it silently would be its own defect.
+        """
+        if mode is None:
+            return []
+        if mode not in {m.id for m in self.permission_modes()}:
+            known = ", ".join(m.id for m in self.permission_modes()) or "none"
+            raise ValueError(
+                f"{mode!r} is not a permission mode {self.name!r} accepts (known: {known})")
+        return ["--permission-mode", mode]
 
     def definition_path(self, agent: str) -> Path | None:
         """The file holding a definition's system prompt, or None when this CLI has no such
@@ -145,8 +190,30 @@ class ClaudeCodeProvider(AgentProvider):
     binary = "claude"
     can_resume = True
 
+    #: Read off `claude --help` on the INSTALLED binary (2.1.233), not from memory of the docs —
+    #: which would have produced "default" and missed auto/manual/dontAsk entirely.
+    _MODES: ClassVar[tuple[PermissionMode, ...]] = (
+        PermissionMode("plan", "Plan only",
+                       "works out an approach and touches nothing"),
+        PermissionMode("manual", "Ask every time",
+                       "you approve each action before it happens"),
+        PermissionMode("auto", "Ask when it matters",
+                       "handles the routine, asks about the rest"),
+        PermissionMode("acceptEdits", "May edit files",
+                       "file changes go through, other actions still ask"),
+        PermissionMode("dontAsk", "Stop asking",
+                       "no prompts; declines what it is not allowed to do"),
+        PermissionMode("bypassPermissions", "No restrictions",
+                       "acts without asking, including outside the workspace",
+                       unrestricted=True),
+    )
+
+    def permission_modes(self) -> list[PermissionMode]:
+        return list(self._MODES)
+
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
-                run_id: str, agent: str | None = None) -> list[str]:
+                run_id: str, agent: str | None = None,
+                permission_mode: str | None = None) -> list[str]:
         argv = [
             self.binary, "-p", task,
             "--output-format", "stream-json",
@@ -161,6 +228,7 @@ class ClaudeCodeProvider(AgentProvider):
             argv += ["--agent", agent]
         if mcp_config:
             argv += ["--mcp-config", mcp_config]
+        argv += self._permission_flag(permission_mode)
         return argv
 
     def definition_path(self, agent: str) -> Path | None:
@@ -308,7 +376,11 @@ class CodexProvider(AgentProvider):
               "clarified how consumer-subscription terms apply to scripted use")
 
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
-                run_id: str, agent: str | None = None) -> list[str]:
+                run_id: str, agent: str | None = None,
+                permission_mode: str | None = None) -> list[str]:
+        # No permission_modes() here: Codex has sandbox and approval flags, but this adapter's
+        # own `verified = False` says these flags were never exercised against a real binary, and
+        # a guessed autonomy setting is the last thing to ship on an unverified adapter.
         argv = [self.binary, "exec", task, "--json"]
         if model:
             argv += ["--model", model]

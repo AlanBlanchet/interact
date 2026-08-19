@@ -153,3 +153,52 @@ async def test_an_explicit_name_still_wins_over_the_definition(monkeypatch):
     monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
     await srv.agent_spawn("do it", agent="code-reviewer", name="second-opinion")
     assert seen["name"] == "second-opinion"
+
+
+# --- A model must not be able to widen its own agents' privileges -----------------------------
+#
+# `agent_spawn` is called BY A MODEL, and a model's context routinely holds text it did not write:
+# a fetched page, a file, an issue body. Exposing the autonomy setting there means an indirect
+# injection can stand up an unrestricted agent with nobody watching — the tool docstring even
+# advertises the ids. The human-driven paths (the CLI, the panel's picker) keep offering it,
+# because a person choosing "no restrictions" for themselves is the whole point of the control.
+
+
+@pytest.mark.asyncio
+async def test_a_tool_caller_cannot_spawn_an_unrestricted_agent(monkeypatch):
+    from interact.server import tools_agents
+
+    spawned = []
+
+    async def _never(*a, **k):
+        spawned.append(k)
+        raise AssertionError("the spawn must be refused before it starts")
+
+    monkeypatch.setattr(tools_agents, "run_agent", _never)
+    fn = getattr(tools_agents.agent_spawn, "fn", tools_agents.agent_spawn)
+    out = await fn(task="t", permission_mode="bypassPermissions")
+    assert out.startswith("ERROR:"), out
+    assert "bypassPermissions" in out
+    assert not spawned, "an unrestricted agent was started by a tool call"
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_mode_still_goes_through(monkeypatch):
+    """The control is not disabled for models — only its unrestricted end is. Handing an agent
+    'plan' is exactly the safe delegation this feature exists for."""
+    from interact.server import tools_agents
+
+    got = {}
+
+    class _Handle:
+        run_id = "r-1"
+
+    async def _spawn(prov, task, **k):
+        got.update(k)
+        return _Handle()
+
+    monkeypatch.setattr(tools_agents, "run_agent", _spawn)
+    fn = getattr(tools_agents.agent_spawn, "fn", tools_agents.agent_spawn)
+    out = await fn(task="t", permission_mode="plan")
+    assert not out.startswith("ERROR:"), out
+    assert got["permission_mode"] == "plan"

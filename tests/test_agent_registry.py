@@ -560,3 +560,76 @@ def test_a_run_that_stopped_MID_STREAM_is_still_a_crash(tmp_path, monkeypatch):
         "message": {"role": "assistant", "content": [{"type": "text", "text": "half way"}]},
     }) + "\n")
     assert [r for r in reg.list_runs() if r.run_id == "r1"][0].status == "crashed"
+
+
+# --- Someone else's sessions belong to a project too ------------------------------------------
+#
+# "i have agents in the 'sheets' folder elsewhere, and i can't change and see how they work."
+# Foreign runs — the user's own editor windows — were built straight from the discovery payload
+# with a cwd and NO project, while every registered run gets one at registration. So the panel's
+# workspace switcher, which groups by project, could never offer the folder those sessions were
+# actually working in: they were visible in the flat list and unreachable by workspace.
+
+
+def test_a_foreign_session_is_filed_under_the_project_it_is_working_in(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sheets = tmp_path / "dev" / "xp" / "sheets"
+    (sheets / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(reg, "_discover_foreign", lambda: [
+        {"sessionId": "s-1", "name": "sheets-ab", "cwd": str(sheets), "kind": "interactive"},
+    ])
+    found = [r for r in reg.list_runs(include_foreign=True) if r.run_id == "s-1"]
+    assert found, "the foreign session vanished"
+    assert found[0].project == "sheets", (
+        f"filed under {found[0].project!r} — the workspace switcher groups by project, so an "
+        "unfiled session cannot be reached by folder")
+
+
+def test_a_foreign_session_with_no_cwd_claims_no_project(monkeypatch, tmp_path):
+    """An unknown directory must not be guessed into a project: a wrong grouping silently merges
+    unrelated work, which is worse than an ungrouped row.
+
+    Asserted against a sibling that DOES have a cwd, in the same call. `project` defaults to "",
+    so checking the empty case alone passed identically with the stamping reverted — it proved the
+    default, not the behaviour.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    somewhere = tmp_path / "dev" / "thing"
+    (somewhere / ".git").mkdir(parents=True)
+    monkeypatch.setattr(reg, "_discover_foreign", lambda: [
+        {"sessionId": "s-2", "name": "nowhere", "cwd": "", "kind": "interactive"},
+        {"sessionId": "s-3", "name": "somewhere", "cwd": str(somewhere), "kind": "interactive"},
+    ])
+    runs = {r.run_id: r for r in reg.list_runs(include_foreign=True)}
+    assert runs["s-3"].project == "thing", "the stamping is not happening at all"
+    assert runs["s-2"].project == "", "an unknown directory was guessed into a project"
+
+
+def test_one_shape_for_a_discovered_session(monkeypatch, tmp_path):
+    """The record was built twice — once in `list_runs`, once in the CLI's `agents discovered` —
+    with the same nine fields, the same `sid[:8]` fallback and the same millisecond division. Add a
+    field to AgentRun and the CLI's JSON silently lacks it, and the panel reading that JSON never
+    notices. Both paths go through `AgentRun.from_foreign` now; this pins that they agree.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    where = tmp_path / "dev" / "thing"
+    (where / ".git").mkdir(parents=True)
+    raw = {"sessionId": "s-9", "name": "win", "cwd": str(where), "kind": "interactive",
+           "pid": 77, "startedAt": 1_700_000_000_000}
+
+    built = reg.AgentRun.from_foreign(raw)
+    assert built is not None
+    assert (built.run_id, built.name, built.project, built.pid) == ("s-9", "win", "thing", 77)
+    assert built.foreign is True and built.status == "foreign"
+    assert built.started_at == 1_700_000_000.0, "milliseconds must become seconds exactly once"
+
+    monkeypatch.setattr(reg, "_discover_foreign", lambda: [raw])
+    listed = [r for r in reg.list_runs(include_foreign=True) if r.run_id == "s-9"]
+    assert listed and listed[0].model_dump() == built.model_dump(), (
+        "the listing builds a different record than from_foreign does")
+
+
+def test_a_discovered_session_with_no_id_is_not_a_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert reg.AgentRun.from_foreign({"name": "nameless"}) is None

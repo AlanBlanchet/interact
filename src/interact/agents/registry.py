@@ -49,6 +49,11 @@ class AgentRun(BaseModel):
     #: the panel reads these records straight off disk, so a name it cannot resolve is a link it
     #: cannot offer. Recorded, not derived on read, so it also survives the file being moved later.
     definition_path: str | None = None
+    #: How much autonomy this run was GIVEN, when the choice was made explicitly. Recorded because
+    #: it is the answer to "why did that one stop to ask" and "why did that one just do it" — a
+    #: question about a run you are watching that nothing else on the record can answer. None
+    #: means nobody chose, so the CLI's own configured default applied.
+    permission_mode: str | None = None
     parent_run_id: str | None = None
     started_at: float = 0.0
     finished_at: float | None = None
@@ -66,6 +71,40 @@ class AgentRun(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     last: str = ""
+
+    @classmethod
+    def from_foreign(cls, raw: dict) -> "AgentRun | None":
+        """One of the user's OWN sessions, as reported by a provider's discovery.
+
+        The class owns its own construction because this shape was being built in two places —
+        the listing and the CLI's `agents discovered`, which the VS Code panel parses — with the
+        same nine fields, the same id fallback and the same millisecond division duplicated. A
+        field added here would have reached one and not the other, and the panel would never have
+        noticed the difference.
+
+        None when the payload carries no session id: there is nothing to address it by, so it is
+        not a run we can show, resume or stop.
+        """
+        sid = raw.get("sessionId") or raw.get("id")
+        if not sid:
+            return None
+        cwd = raw.get("cwd") or ""
+        return cls(
+            run_id=sid,
+            provider="claude",
+            name=raw.get("name") or sid[:8],
+            cwd=cwd,
+            # Filed like every registered run is. Without this a foreign session had a working
+            # directory and no project — visible in the flat list, invisible to the workspace
+            # switcher, which groups by project. That is exactly "i have agents in the sheets
+            # folder elsewhere, and i can't change and see how they work".
+            project=project_for(cwd),
+            pid=raw.get("pid"),
+            started_at=(raw.get("startedAt") or 0) / 1000.0,
+            last=raw.get("kind") or "",
+            status="foreign",
+            foreign=True,
+        )
 
 
 #: Markers that make a directory the root of a PROJECT. Grouping on the working directory's own
@@ -148,13 +187,13 @@ def _terminate(pid: int) -> bool:
 
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
-             agent: str | None = None) -> AgentRun:
+             agent: str | None = None, permission_mode: str | None = None) -> AgentRun:
     provider_impl = PROVIDERS.get(provider)
     definition = provider_impl.definition_path(agent) if (provider_impl and agent) else None
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
                    agent=agent, definition_path=str(definition) if definition else None,
-                   started_at=time.time())
+                   permission_mode=permission_mode, started_at=time.time())
     d = agents_dir()
     d.mkdir(parents=True, exist_ok=True)
     _record_path(run_id).write_text(run.model_dump_json())
@@ -525,16 +564,11 @@ def list_runs(*, include_foreign: bool = False) -> list[AgentRun]:
     if include_foreign:
         known = {r.run_id for r in runs}
         for raw in _discover_foreign():
-            sid = raw.get("sessionId") or raw.get("id")
-            if not sid or sid in known:
+            found = AgentRun.from_foreign(raw)
+            if found is None or found.run_id in known:
                 continue
-            known.add(sid)
-            runs.append(AgentRun(
-                run_id=sid, provider="claude", foreign=True, status="foreign",
-                name=raw.get("name") or sid[:8], cwd=raw.get("cwd") or "",
-                pid=raw.get("pid"), started_at=(raw.get("startedAt") or 0) / 1000.0,
-                last=raw.get("kind") or "",
-            ))
+            known.add(found.run_id)
+            runs.append(found)
     return sorted(runs, key=lambda r: r.started_at)
 
 

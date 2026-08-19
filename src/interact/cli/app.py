@@ -673,6 +673,8 @@ def agents_providers() -> None:
         print(f"  {p.name:8} {state}{note}")
         if definitions := p.agent_definitions():
             print(f"           agents: {', '.join(definitions)}")
+        if modes := p.permission_modes():
+            print(f"           permission modes: {', '.join(m.id for m in modes)}")
 
 
 async def _run_agent_for_cli(provider, task, **kwargs):
@@ -696,10 +698,63 @@ def agents_definitions(provider: str = "claude") -> None:
         print(name)
 
 
+@agents_app.command(name="discovered")
+def agents_discovered() -> None:
+    """Print the agent sessions interact did NOT start, one JSON object per line.
+
+    Your own editor windows. They have no record on disk — they are found by asking each provider
+    at list time — so a front end that reads the registry directory (the VS Code panel does)
+    cannot see them at all, however many icons it has for them.
+
+    One object per line rather than one array: a front end can parse incrementally, and a
+    truncated write costs one session rather than the whole list. Nothing is printed when there
+    are none, and a provider that cannot look is skipped rather than taking the caller down with
+    it — a failed discovery must never blank a panel that was otherwise fine.
+    """
+    import sys
+
+    from interact.agents import registry as reg
+
+    try:
+        found = reg._discover_foreign()
+    except Exception as e:
+        # Loud, on stderr, non-zero — never a silent empty answer. Each provider already swallows
+        # its own failure, so reaching here means a real bug, and printing nothing would make that
+        # indistinguishable from "you have no other sessions": the panel would cache the empty
+        # answer and re-cache it every refresh with no line anywhere saying why.
+        print(f"ERROR: could not ask the providers what is running — {e}", file=sys.stderr)
+        raise SystemExit(1) from None
+    for raw in found:
+        # The RECORD builds itself. This used to re-declare the same nine fields, and a field
+        # added to AgentRun would have reached the listing and not this JSON — which the VS Code
+        # panel parses, so the panel would silently lack it with nothing to notice.
+        run = reg.AgentRun.from_foreign(raw)
+        if run is not None:
+            print(run.model_dump_json())
+
+
+@agents_app.command(name="modes")
+def agents_modes(provider: str = "claude") -> None:
+    """Print the permission modes this CLI accepts, one tab-separated row per mode.
+
+    ``id<TAB>label<TAB>what it lets the agent do<TAB>yes|no`` — the last column being whether the
+    mode acts without asking, so a front end can mark it without inferring danger from wording.
+    Machine-readable for the same reason `agents definitions` is: the panel used to scrape the
+    human table, and a rewording emptied it silently.
+
+    Nothing is printed for a provider whose flags we have not verified against a real binary —
+    prose here would be parsed as a mode called "no modes found".
+    """
+    from interact.agents.providers import provider_for
+
+    for mode in provider_for(provider).permission_modes():
+        print(f"{mode.id}\t{mode.label}\t{mode.detail}\t{'yes' if mode.unrestricted else 'no'}")
+
+
 @agents_app.command(name="spawn")
 def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
                  name: str | None = None, model: str | None = None,
-                 cwd: str | None = None) -> None:
+                 cwd: str | None = None, permission_mode: str | None = None) -> None:
     """Start an agent and return its id immediately, without waiting for it to finish.
 
     `agents run` streams until the agent is done, which is right at a terminal and useless to a
@@ -708,6 +763,7 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
     """
     import asyncio
     import os
+    import sys
 
     from interact.agents.providers import provider_for
 
@@ -715,17 +771,25 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
         handle = await _run_agent_for_cli(
             provider_for(provider), task, name=name or agent or provider,
             cwd=cwd or os.getcwd(), agent=agent, model=model,
+            permission_mode=permission_mode,
         )
         # Give the child a moment to be alive before this process exits out from under it.
         await asyncio.sleep(0.2)
         return handle.run_id
 
-    print(asyncio.run(_go()))
+    try:
+        print(asyncio.run(_go()))
+    except ValueError as e:
+        # The argv builder validates the permission mode, four frames down. Without this the CLI
+        # printed its traceback where every other interact failure prints one actionable line.
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 @agents_app.command(name="run")
 def agents_run(task: str, provider: str = "claude", agent: str | None = None,
-               name: str | None = None, model: str | None = None, cwd: str | None = None) -> None:
+               name: str | None = None, model: str | None = None, cwd: str | None = None,
+               permission_mode: str | None = None) -> None:
     """Spawn an agent and stream its events until it finishes.
 
     ``--agent`` names a definition the CLI resolves itself (Claude Code reads
@@ -733,6 +797,7 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
     """
     import asyncio
     import os
+    import sys
 
     from interact.agents import registry as reg
     from interact.agents.providers import provider_for
@@ -741,7 +806,8 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
     async def _go() -> int:
         prov = provider_for(provider)
         handle = await run_agent(prov, task, name=name or agent or prov.name,
-                                 cwd=cwd or os.getcwd(), agent=agent, model=model)
+                                 cwd=cwd or os.getcwd(), agent=agent, model=model,
+                                 permission_mode=permission_mode)
         print(f"run_id {handle.run_id}")
         seen = 0
         while True:
@@ -754,4 +820,10 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
             await asyncio.sleep(0.4)
         return await handle.wait()
 
-    raise SystemExit(asyncio.run(_go()))
+    try:
+        raise SystemExit(asyncio.run(_go()))
+    except ValueError as e:
+        # The argv builder validates the mode; without this the CLI printed its traceback while
+        # every other interact failure prints one line an agent (or a person) can act on.
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2) from None

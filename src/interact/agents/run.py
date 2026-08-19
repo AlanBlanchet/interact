@@ -132,6 +132,7 @@ async def run_agent(
     agent: str | None = None,
     model: str | None = None,
     parent_run_id: str | None = None,
+    permission_mode: str | None = None,
     mesh: bool = True,
 ) -> RunHandle:
     """Spawn an agent run and register it, returning as soon as it is alive.
@@ -157,7 +158,7 @@ async def run_agent(
     argv = provider.command(
         task, cwd=cwd, model=model,
         mcp_config=mesh_config(run_id=run_id) if mesh else None,
-        run_id=run_id, agent=agent,
+        run_id=run_id, agent=agent, permission_mode=permission_mode,
     )
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
     # otherwise a grandchild would inherit its grandparent's id and the tree would be wrong.
@@ -178,7 +179,8 @@ async def run_agent(
     finally:
         sink.close()  # the child holds its own dup of the fd
     reg.register(run_id=run_id, pid=process.pid, provider=provider.name, name=label,
-                 task=task, cwd=cwd, model=model, parent_run_id=parent, agent=agent)
+                 task=task, cwd=cwd, model=model, parent_run_id=parent, agent=agent,
+                 permission_mode=permission_mode)
     pump = asyncio.create_task(_reap(run_id, process))
     # Keep the panel's copy of the stream current WHILE it works, so a running agent can be
     # watched rather than only read afterwards.
