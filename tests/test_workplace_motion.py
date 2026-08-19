@@ -246,3 +246,91 @@ def test_a_streaming_update_does_not_wipe_what_you_are_typing(chat_page):
         }"""
     )
     assert got == "half-typed thought"
+
+
+# --- The world's text stays readable, measured on what actually paints ------------------------
+#
+# A CSS-parsing guard for this already existed and stopped protecting anything the moment the
+# tile rewrite renamed the element it watched: it now ERRORS with "no rule '.wp-plate {'" rather
+# than failing, and a real light-theme regression walked straight through the gap — character
+# names at 1.9:1 against a 4.5:1 floor.
+#
+# So this measures the RENDERED result instead. It cannot be dodged by a rename, it sees through
+# color-mix() and inherited backgrounds that a text parse cannot resolve, and it fails rather than
+# errors when a selector disappears.
+
+#: WCAG AA for body text; large text (>=18px, or >=14px bold) may sit at 3.0.
+AA_SMALL = 4.5
+AA_LARGE = 3.0
+
+_CONTRAST_JS = """() => {
+  const px = (c) => {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 1;
+    const x = cv.getContext('2d'); x.fillStyle = c; x.fillRect(0, 0, 1, 1);
+    return [...x.getImageData(0, 0, 1, 1).data].slice(0, 3);
+  };
+  const out = [];
+  const seen = new Set();
+  for (const el of document.querySelectorAll('[class^="wp-"], [class*=" wp-"]')) {
+    if (!el.textContent || !el.textContent.trim()) continue;
+    if (el.children.length) continue;                 // only leaves actually paint text
+    const cls = el.className.toString().trim().split(/\\s+/)[0];
+    if (!cls || seen.has(cls)) continue;
+    const s = getComputedStyle(el);
+    if (s.visibility === 'hidden' || s.display === 'none' || Number(s.opacity) === 0) continue;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    seen.add(cls);
+    // Walk up for the first non-transparent backdrop — the colour the text is really read on.
+    let node = el, bg = 'rgba(0, 0, 0, 0)';
+    while (node && (bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent')) {
+      bg = getComputedStyle(node).backgroundColor; node = node.parentElement;
+    }
+    out.push({cls, size: parseFloat(s.fontSize), weight: s.fontWeight,
+              fg: px(s.color), bg: px(bg)});
+  }
+  return out;
+}"""
+
+
+def _ratio(fg, bg) -> float:
+    def channel(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    def lum(c):
+        return 0.2126 * channel(c[0]) + 0.7152 * channel(c[1]) + 0.0722 * channel(c[2])
+
+    a, b = lum(fg), lum(bg)
+    hi, lo = max(a, b), min(a, b)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+@pytest.mark.parametrize("theme", ["live", "live-light"])
+def test_every_word_in_the_world_is_readable(scene, theme):
+    """Both themes, every text role the scene actually paints.
+
+    The light theme is where this breaks: dark backdrops flatter almost any ink, so a guard that
+    only ever ran against the dark build passes while the light one is unreadable.
+    """
+    playwright = pytest.importorskip("playwright.sync_api")
+    page_file = scene / f"{theme}.html"
+    if not page_file.exists():
+        pytest.skip(f"{theme}.html was not built")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        pg = browser.new_page(viewport={"width": 1400, "height": 900})
+        pg.goto(page_file.as_uri())
+        pg.wait_for_timeout(800)
+        measured = pg.evaluate(_CONTRAST_JS)
+        browser.close()
+
+    assert measured, "no text found in the scene at all — the selectors have moved"
+    failures = []
+    for item in measured:
+        big = item["size"] >= 18 or (item["size"] >= 14 and int(item["weight"] or 400) >= 700)
+        floor = AA_LARGE if big else AA_SMALL
+        ratio = _ratio(item["fg"], item["bg"])
+        if ratio < floor:
+            failures.append(f"{item['cls']} at {item['size']:.0f}px: {ratio:.1f}:1 < {floor}")
+    assert not failures, f"{theme} text below the readable floor:\n  " + "\n  ".join(failures)
