@@ -64,9 +64,11 @@ export function railHtml(
    *  `conversation.ts`, which names a conversation by what it is DOING — the old rule fell back to
    *  the provider, so twenty unrelated engagements all rendered as "claude". */
   titleOf: (run: Rail["runs"][number]["run"]) => string,
-  /** Which AGENT held a conversation. An agent is a role you can hold many conversations with, so
-   *  it is a place you can go, not a label. From `roster.ts`; passed in, never imported. */
-  roleOf: (run: Rail["runs"][number]["run"]) => string,
+  /** Which AGENT held a conversation — its stable `id` (what the filter matches on) and its
+   *  `label` (what a person reads). Two fields, because the coordinator's id is "main" while its
+   *  label is its title: posting the label as the filter key would match nothing. From
+   *  `roster.ts`; passed in, never imported. */
+  roleOf: (run: Rail["runs"][number]["run"]) => { id: string; label: string },
   /** What each row can be asked to do. Passed in rather than imported so this module keeps no
    *  runtime import — the test loader demands ".ts" specifiers that tsc refuses to emit. */
   actionsFor: (run: Rail["runs"][number]["run"]) => AgentAction[] = () => [],
@@ -85,8 +87,8 @@ export function railHtml(
         <span class="who">${esc(titleOf(r.run))}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         <span class="stamp">${esc(voice.word)}</span>
-        <button class="role" data-agent="${esc(roleOf(r.run))}"
-          title="Show every conversation with ${esc(roleOf(r.run))}">${esc(roleOf(r.run))}</button>
+        <button class="role" data-agent="${esc(roleOf(r.run).id)}"
+          title="Show every conversation with ${esc(roleOf(r.run).label)}">${esc(roleOf(r.run).label)}</button>
         <span class="note">${esc(r.note)}</span>
         <span class="acts">${actionsFor(r.run).map((a) =>
           `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +

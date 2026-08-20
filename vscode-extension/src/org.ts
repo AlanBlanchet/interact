@@ -18,6 +18,10 @@ import * as path from "path";
 
 export interface OrgProvider {
   label: string;
+  /** The CLI token a definition-less run of this provider gets RECORDED under (`claude`, `codex`).
+   *  Present only where it is actually confirmed — a guessed binary would silently mis-resolve a
+   *  run onto the coordinator. */
+  binary?: string | null;
   /** True when a consumer sync target exists NOW. False = shared design, nowhere to run yet. */
   env: boolean;
 }
@@ -172,6 +176,27 @@ export function spawnChoices(definitions: readonly string[], org: Org | null): S
  *  — it says "do not override" — but would be nonsense passed to `--model`. Translating it to null
  *  here keeps that decision in one place rather than in every caller that reads the field.
  */
+/** The company facts the roster needs to name a definition-less run.
+ *
+ *  The prompt repo's finding: a bare session is not file-less — the main thread's system prompt IS
+ *  `instructions.md`, so the coordinator is its definition, and the org marks that case
+ *  `matches: "definition-less"`. This turns the org into the two things the panel needs: who
+ *  coordinates, and which recorded names are merely a vendor's binary.
+ *
+ *  Null when there is no company file — interact must work with no prompt repo at all, and then
+ *  the provider genuinely is all anyone knows.
+ */
+export function companyOf(org: Org | null): { coordinator: { id: string; title: string }; binaries: string[] } | null {
+  if (!org) return null;
+  const binaries = Object.entries(org.providers)
+    .map(([id, p]) => (p.binary ?? "").trim() || id)
+    .filter(Boolean);
+  return {
+    coordinator: { id: org.coordinator.id, title: (org.coordinator.title ?? "").trim() || org.coordinator.id },
+    binaries,
+  };
+}
+
 export function modelFor(agent: string, org: Org | null): string | null {
   const model = org?.agents.find((a) => a.name === agent)?.model;
   if (!model || model === "inherit" || model === "default") return null;

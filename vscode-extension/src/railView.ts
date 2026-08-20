@@ -11,7 +11,8 @@
  *  messages — which is itself split out as `railRoute` so it can be tested without a host.
  */
 import { voiceOf } from "./statusLanguage";
-import { conversationTitle, roleOf } from "./roster";
+import { agentLabel, conversationTitle, roleOf } from "./roster";
+import { companyOf, readOrg } from "./org";
 import * as vscode from "vscode";
 
 import { readAgentActivity, readAgentRuns } from "./agents";
@@ -69,6 +70,9 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (!this.view?.visible) return;
+    // Who coordinates, and which names are just a CLI token — so a definition-less run reads as
+    // the coordinator (a real file) instead of as "claude" repeated down the roster.
+    const company = companyOf(readOrg()) ?? undefined;
     const store = scopeStore();
     const runs = store?.runs() ?? readAgentRuns();
     const now = Date.now() / 1000;
@@ -79,7 +83,7 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       // which would mark every long-running agent as stalled the moment it got going.
       (run) => Math.max(0, now - (lastObservedAt(readAgentActivity(run.run_id, 40)) ?? now)),
       undefined,
-      this.inside ? { agent: this.inside, roleOf: (r) => roleOf(r as never).id } : undefined,
+      this.inside ? { agent: this.inside, roleOf: (r) => roleOf(r as never, company).id } : undefined,
     );
     this.view.webview.html = railHtml(
       rail,
@@ -90,7 +94,7 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       voiceOf,
       // A conversation is what it is DOING; the role is a tooltip, not the headline.
       (run) => conversationTitle(run as never),
-      (run) => roleOf(run as never).id,
+      (run) => ({ id: roleOf(run as never, company).id, label: agentLabel(run as never, company) }),
       // What each row offers, filtered to what would actually work on that agent — so no control
       // drawn here is ever dead.
       (run) => actionsFor(run as never),

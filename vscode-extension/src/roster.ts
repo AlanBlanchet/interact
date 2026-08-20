@@ -64,11 +64,43 @@ export function conversationTitle(run: Run): string {
   return `untitled · ${run.run_id.slice(0, 6)}`;
 }
 
-/** The role a run was held with. Falls back to the provider so a plain CLI session still groups. */
-export function roleOf(run: Run): { id: string; plain: boolean } {
+/** What the company knows: who coordinates, and which names are just a vendor's binary.
+ *
+ *  Read from `org.json`, which the prompt repo generates. Optional throughout — interact must work
+ *  for someone with no prompt repo at all, and then the provider is genuinely all we know. */
+export type Company = {
+  coordinator: { id: string; title: string };
+  /** The CLI tokens a definition-less run gets recorded under (`claude`, `codex`, …). */
+  binaries: string[];
+};
+
+/** The role a run was held with.
+ *
+ *  A run with no `agent` used to fall back to the provider, so a screen of unrelated work all read
+ *  "claude" — the vendor's binary standing in for a colleague. The company file now says that the
+ *  definition-less case IS the coordinator (its system prompt is `instructions.md`, a real file),
+ *  so when the recorded name is merely the CLI's own token, this resolves it there instead.
+ *
+ *  Only a KNOWN binary is treated that way: a run someone named themselves keeps its name.
+ */
+export function roleOf(run: Run, company?: Company): { id: string; plain: boolean } {
   const role = (run.agent ?? "").trim();
   if (role) return { id: role, plain: false };
-  return { id: (run.provider ?? run.name ?? "agent").trim() || "agent", plain: true };
+  const named = (run.name ?? run.provider ?? "").trim();
+  if (company && named && company.binaries.includes(named)) {
+    return { id: company.coordinator.id, plain: false };
+  }
+  // A name someone CHOSE outranks the vendor's; only a bare repeat of the provider is uninformative.
+  const provider = (run.provider ?? "").trim();
+  const own = named && named !== provider ? named : provider;
+  return { id: own || "agent", plain: true };
+}
+
+/** What to CALL that role on screen — the coordinator's own title when it is the coordinator. */
+export function agentLabel(run: Run, company?: Company): string {
+  const { id } = roleOf(run, company);
+  if (company && id === company.coordinator.id) return company.coordinator.title;
+  return id;
 }
 
 /** Group runs into the agents that held them, most-recently-seen first within each agent.

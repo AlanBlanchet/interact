@@ -45,10 +45,13 @@ test("a run that asked you something outranks one merely sitting quiet", () => {
   assert.deepEqual(built.runs.map((r) => r.run.run_id), ["asked", "quiet"]);
 });
 
-test("your own editor sessions sort last, never above an agent that stopped", () => {
-  // You cannot act on them from here, so they must not compete with work that needs you.
+test("your own editor sessions are not listed here at all", () => {
+  /* They used to sort last, because you cannot act on them from here. Alan's answer was that they
+     should not compete for the column in the first place — "i still don't have only the
+     conversations or things i interact with", and "we have agents that are greyed out". A window
+     he is already looking at is not a conversation this panel needs to hold. */
   const built = rail([run({ run_id: "mine", status: "foreign" }), run({ run_id: "bad", status: "failed" })]);
-  assert.deepEqual(built.runs.map((r) => r.run.run_id), ["bad", "mine"]);
+  assert.deepEqual(built.runs.map((r) => r.run.run_id), ["bad"]);
 });
 
 test("within one band the most recently started leads", () => {
@@ -278,4 +281,31 @@ test("the panel can take you into an agent and back out again", () => {
   railRoute({ type: "agent", id: "visual-critic" }, handlers);
   railRoute({ type: "agent", id: "" }, handlers);
   assert.deepEqual(seen, ["visual-critic", null], "an empty id means: back to the whole team");
+});
+
+test("the panel shows the conversations you have, not your own editor windows", () => {
+  /* "From the side panel, i still don't have only the conversations or things i interact with."
+
+     A `foreign` run is one of Alan's OWN VS Code sessions — interact did not spawn it, cannot send
+     to it, cannot stop it. They rendered as greyed, unactionable rows he also called out ("we have
+     agents that are greyed out"). A window he is already looking at is not a conversation the
+     panel needs to list. */
+  const runs = [
+    { run_id: "1", provider: "claude", name: "tester", agent: "tester", status: "running" },
+    { run_id: "2", provider: "claude", name: "claude", status: "foreign" },
+    { run_id: "3", provider: "claude", name: "claude", status: "foreign" },
+  ];
+  const rail = buildRail(runs as never[], "s", () => 0);
+  assert.deepEqual(rail.runs.map((r) => r.run.run_id), ["1"]);
+  assert.ok(!rail.runs.some((r) => r.attention === "not-ours"), "no greyed rows remain");
+});
+
+test("the destinations are the panel's own, not a launcher for everything", () => {
+  /* "The sidepanel is there to view info about who we click on, and view the conversation... That's
+     all." Surfaces that live elsewhere (the dashboard, the sequence view) stay reachable from the
+     palette; they do not take space in a 299px column whose job is the roster and the reply. */
+  assert.ok(CHIPS.length <= 2, `${CHIPS.length} destinations is a launcher, not a panel`);
+  for (const c of CHIPS) {
+    assert.ok(c.label && c.command, "a destination needs a word and something to do");
+  }
 });

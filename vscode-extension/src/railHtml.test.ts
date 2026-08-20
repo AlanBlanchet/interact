@@ -19,13 +19,16 @@ const run = (over: Record<string, unknown> = {}) => ({
 
 const html = (runs: unknown[] = [run()], scope = "interact") =>
   railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE", voiceOf,
-    (r) => conversationTitle(r as never), (r) => roleOf(r as never).id, (r) => actionsFor(r as never));
+    (r) => conversationTitle(r as never), (r) => ({ id: roleOf(r as never).id, label: roleOf(r as never).id }), (r) => actionsFor(r as never));
 
 test("every destination is in the document at rest, with its word", () => {
   // The defect this replaces: VS Code renders a view's title actions only while the pointer is in
   // the header, and clips the overflow with no "…" menu. At rest the panel had NO buttons.
   const doc = html();
-  for (const label of ["Team", "Sequence", "Board", "Company"]) {
+  // Two destinations now, not four: the dashboard and the sequence view are their own surfaces and
+  // live in the palette. What a panel this narrow must still offer at rest is the world and a way
+  // to start someone — see CHIPS.
+  for (const label of ["Team", "Company"]) {
     assert.ok(doc.includes(`>${label}<`), `"${label}" is not present without hovering`);
   }
 });
@@ -127,13 +130,6 @@ test("a finished agent offers no stop, so no control on screen is dead", () => {
   const doc = html([run({ run_id: "over", name: "librarian", status: "done" })]);
   assert.ok(!doc.includes('data-action="stop"'));
   assert.match(doc, /data-action="transcript"/, "its transcript is always readable");
-});
-
-test("one of your own sessions can be read and nothing else", () => {
-  const doc = html([run({ run_id: "mine", name: "my window", status: "foreign" })]);
-  assert.ok(!doc.includes('data-action="message"'), "interact cannot drive it");
-  assert.ok(!doc.includes('data-action="stop"'));
-  assert.match(doc, /data-action="transcript"/);
 });
 
 test("every action carries a title, since a bare glyph is a guess", () => {

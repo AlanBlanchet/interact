@@ -78,10 +78,16 @@ export interface RailChip {
  *  Deliberately few. The old title bar carried seven actions and clipped the seventh at every
  *  width; the fix is not a smaller icon, it is fewer destinations with words on them.
  */
+/** Where this panel can send you.
+ *
+ *  Two, not four. "The sidepanel is there to view info about who we click on, and view the
+ *  conversation... That's all." The dashboard and the sequence view are their own surfaces and stay
+ *  in the command palette; a 299px column whose job is the roster and the reply should not spend a
+ *  fifth of its header being a launcher for them. What survives is the world you watch and the way
+ *  to start someone new — the two things you cannot do anywhere else.
+ */
 export const CHIPS: RailChip[] = [
   { id: "team", label: "Team", command: "interact.agents.team" },
-  { id: "sequence", label: "Sequence", command: "interact.agents.sequence" },
-  { id: "board", label: "Board", command: "interact.openDashboard" },
   { id: "company", label: "Company", command: "interact.agents.spawn" },
 ];
 
@@ -145,7 +151,11 @@ export function buildRail(
    *  the thing you are actually looking at rather than the team behind it. */
   filter?: { agent: string; roleOf: (run: AgentRun) => string },
 ): Rail {
-  const inScope = filter ? runs.filter((r) => filter.roleOf(r) === filter.agent) : runs;
+  // Your own editor windows are not conversations this panel holds: interact did not start them,
+  // cannot send to them and cannot stop them, so they rendered as greyed unactionable rows in a
+  // column whose whole job is what you can act on. You are already looking at those windows.
+  const held = runs.filter((r) => r.status !== "foreign");
+  const inScope = filter ? held.filter((r) => filter.roleOf(r) === filter.agent) : held;
   const rows: RailRun[] = inScope.map((run) => {
     const attention = attentionOf(run, idleOf(run), awaitingReply(run));
     return { run, attention, depth: 0, brain: false, note: NOTES[attention] };

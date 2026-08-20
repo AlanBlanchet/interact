@@ -53,27 +53,109 @@ export function renderInline(escaped: string): string {
     .replace(CODE, "<code>$1</code>");
 }
 
-/** Prose: bullet lists and paragraphs. Input must already be escaped. */
-function renderProse(escaped: string): string {
+/** Prose: the block constructs an agent actually writes. Input must already be escaped.
+ *
+ *  It used to know paragraphs and bullets, so everything else arrived as literal punctuation — a
+ *  verdict headed "## Verdict" printed its hashes, a numbered plan printed its numbers, a results
+ *  table printed its pipes. Agents write Markdown by habit; a chat that renders four of its
+ *  constructs is a chat that renders none of the interesting ones.
+ *
+ *  Line-based and deliberately small: no nesting, no reference links, no HTML passthrough (the
+ *  input is escaped and MUST stay that way — every byte here came out of a file or a web page).
+ *  Note the escaping when matching: a blockquote marker arrives as `&gt;`, not `>`.
+ */
+function renderProseBlocks(escaped: string): string[] {
   const out: string[] = [];
+  const lines = escaped.split("\n");
+
+  /** A run of list items, closed when anything else appears. */
   let list: string[] = [];
-  const flush = () => {
+  let ordered = false;
+  const flushList = () => {
     if (list.length) {
-      out.push(`<ul>${list.map((li) => `<li>${renderInline(li)}</li>`).join("")}</ul>`);
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${list.map((li) => `<li>${renderInline(li)}</li>`).join("")}</${tag}>`);
     }
     list = [];
   };
-  for (const line of escaped.split("\n")) {
+
+  /** A run of quoted lines, kept together so a multi-line quote is ONE block. */
+  let quote: string[] = [];
+  const flushQuote = () => {
+    if (quote.length) {
+      out.push(`<blockquote>${quote.map((q) => `<p>${renderInline(q)}</p>`).join("")}</blockquote>`);
+    }
+    quote = [];
+  };
+
+  const flush = () => { flushList(); flushQuote(); };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // A table is the one construct that needs lookahead: a header row is only a header because the
+    // NEXT line is a separator. Without that check a prose line containing a pipe becomes a table.
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? "")) {
+      flush();
+      const cells = (row: string) =>
+        row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      const head = cells(line);
+      const body: string[][] = [];
+      let j = i + 2;
+      for (; j < lines.length && /^\s*\|.*\|\s*$/.test(lines[j]); j++) body.push(cells(lines[j]));
+      out.push(
+        `<table><thead><tr>${head.map((c) => `<th>${renderInline(c)}</th>`).join("")}</tr></thead>` +
+        `<tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${renderInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
+      );
+      i = j - 1;
+      continue;
+    }
+
+    const heading = /^\s*(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      flush();
+      const level = heading[1].length;
+      out.push(`<h${level} class="md">${renderInline(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flush();
+      out.push("<hr>");
+      continue;
+    }
+
+    // `&gt;` because the input is already escaped.
+    const quoted = /^\s*&gt;\s?(.*)$/.exec(line);
+    if (quoted) {
+      flushList();
+      quote.push(quoted[1]);
+      continue;
+    }
+
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (numbered) {
+      flushQuote();
+      if (!ordered) flushList();
+      ordered = true;
+      list.push(numbered[1]);
+      continue;
+    }
+
     const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
     if (bullet) {
+      flushQuote();
+      if (ordered) flushList();
+      ordered = false;
       list.push(bullet[1]);
       continue;
     }
+
     flush();
     out.push(line.trim() ? `<p>${renderInline(line)}</p>` : "");
   }
   flush();
-  return out.filter(Boolean).join("");
+  return out.filter(Boolean);
 }
 
 /** A whole message body: fenced blocks, then prose. Input must already be escaped.
@@ -84,14 +166,23 @@ function renderProse(escaped: string): string {
  *  compiler, passes every test, and quietly makes the whole source file BINARY to grep and to
  *  anything else that asks what type it is. `split` on a capturing regex gives alternating prose
  *  and code with nothing to smuggle. */
-export function renderMarkdown(escaped: string): string {
-  // Even indices are prose, odd indices are the captured contents of a fence.
+/** A message body as its top-level BLOCKS: fenced code and rendered prose, in order.
+ *
+ *  Exposed as blocks because folding a long message has to happen HERE, on parsed output, not on
+ *  the raw text. Cutting the source at a line count and escaping the tail meant everything past the
+ *  cut was never parsed at all — a table printed its pipes, which is precisely the defect the
+ *  parser exists to prevent. Blocks are the unit that can be hidden without destroying meaning.
+ */
+export function renderMarkdownBlocks(escaped: string): string[] {
   return escaped
     .split(FENCE)
-    .map((seg, i) =>
-      i % 2 ? `<pre class="code">${seg.replace(/\n$/, "")}</pre>` : renderProse(seg),
-    )
-    .join("");
+    .flatMap((seg, i) =>
+      i % 2 ? [`<pre class="code">${seg.replace(/\n$/, "")}</pre>`] : renderProseBlocks(seg),
+    );
+}
+
+export function renderMarkdown(escaped: string): string {
+  return renderMarkdownBlocks(escaped).join("");
 }
 
 export function escapeHtml(value: string): string {
@@ -148,6 +239,30 @@ function foldLongOutput(text: string): string {
   return escapeHtml(text);
 }
 
+/** How many rendered BLOCKS a message shows before the rest collapses. Blocks, not source lines:
+ *  a table is one block whether it has three rows or thirty, and hiding half of it would be worse
+ *  than hiding all of it. */
+const FOLD_AFTER_BLOCKS = 12;
+
+/** Collapse the tail of a long message, on ALREADY-RENDERED blocks.
+ *
+ *  The bug this replaces cut the RAW markdown at a line count, escaped both halves and only then
+ *  handed the result to the parser — so the tail was literal text wrapped in a stray `<details>`
+ *  that opened inside a paragraph. Any message over fourteen lines lost its tables, headings and
+ *  lists, which is most of what an agent writes.
+ */
+function foldBlocks(blocks: string[]): string {
+  const text = blocks.join("");
+  if (blocks.length <= FOLD_AFTER_BLOCKS && text.length <= FOLD_AFTER_CHARS) return text;
+  const head = blocks.slice(0, FOLD_AFTER_BLOCKS);
+  const rest = blocks.slice(FOLD_AFTER_BLOCKS);
+  if (!rest.length) return text;
+  const n = rest.length;
+  return head.join("") +
+    `<details class="more"><summary>${n} more block${n > 1 ? "s" : ""}</summary>` +
+    `${rest.join("")}</details>`;
+}
+
 const LABEL: Record<string, string> = {
   text: "assistant",
   thinking: "thinking",
@@ -186,8 +301,11 @@ export function renderTurn(turn: Turn): string {
   // Agents write Markdown by habit, and the chat printed it literally — a verdict arrived as a
   // wall of asterisks. Rendered only for what an agent SAYS; a tool result is machine output and
   // stays verbatim in its pre.
-  const escaped = foldLongOutput(raw);
-  const body = turn.kind === "tool_result" ? escaped : renderMarkdown(escaped);
+  // Machine output folds on its raw text and stays verbatim inside a <pre>; what an agent SAYS is
+  // parsed first and folded on the rendered blocks, so nothing past the fold loses its markup.
+  const body = turn.kind === "tool_result"
+    ? foldLongOutput(raw)
+    : foldBlocks(renderMarkdownBlocks(escapeHtml(raw)));
   const tag = turn.kind === "tool_result" ? "pre" : "div";
   // `result-of` marks the result as belonging to the call above it, so the two read as one unit
   // rather than as two unrelated blocks.
@@ -608,6 +726,53 @@ const STYLE = `
   .turn .body p:last-child { margin-bottom: 0; }
   .turn .body ul { margin: .2em 0 .5em; padding-left: 1.1em; }
   .turn .body li { margin: .1em 0; }
+  /* The block constructs an agent actually writes. Unstyled, a rendered heading is barely
+     distinguishable from the paragraph under it, which is the "not parsed very well" complaint
+     surviving the parser. Colour comes from the editor's own foreground, never the raw
+     description token — Light ships that at 4.28:1, under AA before we touch it. */
+  .turn .body h1.md, .turn .body h2.md, .turn .body h3.md,
+  .turn .body h4.md, .turn .body h5.md, .turn .body h6.md {
+    margin: .8em 0 .35em; line-height: 1.25; font-weight: 600;
+    color: var(--vscode-editor-foreground);
+  }
+  .turn .body h1.md { font-size: 1.28em; }
+  .turn .body h2.md { font-size: 1.16em; }
+  .turn .body h3.md { font-size: 1.06em; }
+  .turn .body h4.md, .turn .body h5.md, .turn .body h6.md { font-size: 1em; }
+  /* A heading that opens a message should not push itself off the top. */
+  .turn .body > :first-child { margin-top: 0; }
+  .turn .body ol { margin: .35em 0; padding-left: 1.5em; }
+  .turn .body ul { margin: .35em 0; padding-left: 1.35em; }
+  .turn .body li { margin: .15em 0; }
+  .turn .body blockquote {
+    margin: .5em 0; padding: .1em 0 .1em .8em;
+    border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border));
+    background: var(--vscode-textBlockQuote-background, transparent);
+    color: var(--wp-dim);
+  }
+  .turn .body blockquote p { margin: .25em 0; }
+  /* A divider nobody can see is not a divider. One pixel of panel-border was, measured, "barely a
+     discernible line" in both themes — so it gets the dim foreground and a little more air, which
+     is what makes it read as a deliberate break rather than a rendering artifact. */
+  .turn .body hr {
+    border: 0; border-top: 1px solid var(--wp-dim); opacity: .6;
+    margin: 1.1em 0;
+  }
+  /* A table must be able to overflow SIDEWAYS on its own rather than widening the panel —
+     a 299px sidebar cannot hold a four-column results table, and the document must never
+     scroll horizontally. */
+  .turn .body table {
+    display: block; overflow-x: auto; max-width: 100%;
+    border-collapse: collapse; margin: .5em 0; font-size: .95em;
+  }
+  .turn .body th, .turn .body td {
+    border: 1px solid var(--vscode-panel-border, var(--wp-dim));
+    padding: .22em .5em; text-align: left; vertical-align: top;
+  }
+  .turn .body th {
+    font-weight: 600; color: var(--vscode-editor-foreground);
+    background: var(--vscode-editorWidget-background, transparent);
+  }
   .turn .body code { font-family: var(--vscode-editor-font-family); font-size: .92em;
                      background: var(--wp-wall); border: 1px solid var(--wp-line);
                      padding: 0 .25em; }

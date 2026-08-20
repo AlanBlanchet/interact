@@ -5,7 +5,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
-  agentsFrom, ancestry, childrenOf, conversationTitle, roleOf, type Run,
+  agentLabel, agentsFrom, ancestry, childrenOf, conversationTitle, roleOf, type Run,
 } from "./roster.ts";
 
 const run = (o: Partial<Run> & { run_id: string }): Run => ({ provider: "claude", ...o });
@@ -82,4 +82,39 @@ test("a conversation knows what it spawned", () => {
     run({ run_id: "other", task: "unrelated" }),
   ];
   assert.deepEqual(childrenOf("lead", runs).map((r) => r.run_id), ["k1", "k2"]);
+});
+
+test("a definition-less run resolves to the coordinator, not to the binary name", () => {
+  /* His words: "We also have some agents called 'claude' instead of having their agent name."
+
+     The librarian's finding is that the bare session is NOT file-less — the main thread's system
+     prompt IS `instructions.md`, so the coordinator is its definition. The org file now says so
+     explicitly (`matches: "definition-less"`, and a `binary` token per provider), and this is the
+     consumer half: a run with no agent whose recorded name is just the CLI's binary is the
+     coordinator, and should say so. */
+  const company = {
+    coordinator: { id: "main", title: "Main thread — session coordinator" },
+    binaries: ["claude", "codex"],
+  };
+  const bare = { run_id: "a", provider: "claude", name: "claude", agent: null };
+  assert.deepEqual(roleOf(bare, company), { id: "main", plain: false });
+  assert.equal(agentLabel(bare, company), "Main thread — session coordinator");
+});
+
+test("a real definition still wins over the coordinator fallback", () => {
+  const company = { coordinator: { id: "main", title: "Main" }, binaries: ["claude"] };
+  const run = { run_id: "b", provider: "claude", name: "claude", agent: "visual-critic" };
+  assert.deepEqual(roleOf(run, company), { id: "visual-critic", plain: false });
+});
+
+test("without a company file nothing is invented", () => {
+  /* interact must work for someone with no prompt repo at all — then the provider IS all we know. */
+  const bare = { run_id: "c", provider: "claude", name: "claude", agent: null };
+  assert.deepEqual(roleOf(bare), { id: "claude", plain: true });
+});
+
+test("a name that is not a known binary is left alone", () => {
+  const company = { coordinator: { id: "main", title: "Main" }, binaries: ["claude"] };
+  const run = { run_id: "d", provider: "claude", name: "my-own-thing", agent: null };
+  assert.equal(roleOf(run, company).id, "my-own-thing", "only a BINARY name means 'the CLI itself'");
 });
