@@ -226,6 +226,29 @@ export function draw(grid: Grid, pal: Palette, opts: DrawOptions = {}): string {
   return `${open(body.w, body.h, size, opts)}${useOrInline(grid, pal, rim, body)}</svg>`;
 }
 
+/** One grid PLACED at a coordinate inside an enclosing SVG, as one node instead of two.
+ *
+ *  `draw` has to wrap its body in an `<svg>` because a caller may be putting it anywhere in an
+ *  HTML document, at any scale, and needs a box. Inside the map that box is redundant: the map's
+ *  own user units ARE tile cells, a tile is authored 8x8 and drawn at scale 1, so the wrapper is
+ *  exactly `<svg x y width="8" height="8" viewBox="0 0 8 8">` — which is what a bare `<use x y>`
+ *  already means. The wrapper was therefore one element per prop and one per prop SHADOW, for no
+ *  geometry at all.
+ *
+ *  Measured on the landscaped site: four hundred and thirty-six plants plus their silhouettes is
+ *  about nine hundred wrapper nodes the browser lays out, styles and paints for nothing. Falls
+ *  back to `draw` with no sheet open, so a caller outside a scene render is unaffected.
+ */
+export function place(grid: Grid, pal: Palette, x: number, y: number, opts: DrawOptions = {}): string {
+  const { outline: rim = false, className = "", attrs = "" } = opts;
+  if (!sheet) return draw(grid, pal, { ...opts, attrs: `x="${x}" y="${y}"` + (attrs ? " " + attrs : "") });
+  const ref = useOrInline(grid, pal, rim, bodyOf(grid, pal, rim));
+  return ref.replace(
+    "<use ",
+    `<use ${className ? `class="${className}" ` : ""}x="${x}" y="${y}"${attrs ? " " + attrs : ""} `,
+  );
+}
+
 /** Two poses in ONE `<svg>`, stacked as groups the stylesheet flips between. A frame animation
  *  needs both frames present and identically placed; drawing them as separate elements is how the
  *  sprite ends up jittering by a pixel when one grid is a row taller than the other. */

@@ -76,19 +76,36 @@ export const SKIN_PAL: Palette = {
   m: "var(--c-mouth)",
 };
 
-/** Someone else's session: we can see them, we do not drive them. Flat, one tone, no face — the
- *  difference reads instantly at sprite size, which colour alone never does. */
-export const GHOST_PAL: Palette = {
-  k: "var(--c-ghost)",
-  h: "var(--c-ghost)",
-  s: "var(--c-ghost)",
-  a: "var(--c-ghost)",
-  t: "var(--c-ghost)",
-  b: "var(--c-ghost)",
-  e: "var(--c-ghost)",
-  m: "var(--c-ghost)",
-  "#": "var(--c-ghost-ink)",
+/** Someone else's session: we can see them, we do not drive them.
+ *
+ *  This used to map EVERY key to one tone. That is not a category, it is a HOLE — Alan read the
+ *  result as broken, and correctly: a human silhouette with no hair, no face and no clothes is
+ *  what a renderer draws when it has failed to find a sprite, so a flat fill will always say
+ *  "missing asset" before it says "another project". Colour alone was never going to fix it,
+ *  because the information the eye is missing is not hue, it is VALUE STRUCTURE — the five steps
+ *  that make a shape a person.
+ *
+ *  So a visitor keeps every one of those steps and gives up only the HUE: one ramp, mixed from
+ *  the `not-ours` accent the rail already prints that state in, so the two surfaces agree about
+ *  who this is. A monochrome person in a colour photograph — somebody from another floor, in for
+ *  the afternoon. They keep their eyes. What they do not get is our BADGE: the one mark that says
+ *  a body belongs to this company is the one thing a guest cannot wear.
+ */
+export const VISITOR_PAL: Palette = {
+  k: "var(--c-guest-skin)",
+  h: "var(--c-guest-hair)",
+  s: "var(--c-guest-coat)",
+  a: "var(--c-guest-coat)",
+  t: "var(--c-guest-leg)",
+  b: "var(--c-guest-boot)",
+  e: "var(--c-guest-eye)",
+  m: "var(--c-guest-eye)",
+  "#": "var(--c-guest-ink)",
 };
+
+/** The old name, kept pointing at the new palette so nothing imports a tone that no longer
+ *  exists. */
+export const GHOST_PAL = VISITOR_PAL;
 
 /* ── Rooms ───────────────────────────────────────────────────────────────────────────────────
  *
@@ -520,6 +537,112 @@ export const POSE_WALK_B: Grid = [
   "..tt..ttt.",
   ".tt....tt.",
   "bb......bb",
+  "bb......bb",
+];
+
+/* ── Sitting down ────────────────────────────────────────────────────────────────────────────
+ *
+ *  The state of a run used to be a WORD on a placard over a standing body: DONE, HELD, NOT OURS,
+ *  stamped on everybody, all the time. "All the agents say finished whereas we don't care —
+ *  instead they could have a seat or rest in their room."
+ *
+ *  So the body carries the ordinary states and the placard is kept for the two that actually want
+ *  a person: ERROR and ASKED. Which means the sprite sheet needs postures, and a posture is worth
+ *  authoring only if it reads at 30x42 across a room:
+ *
+ *    SIT     forward, elbows out to the desk, knees toward you. Working.
+ *    SLUMP   the same seat with the head sunk into the shoulders and the eyes shut. Stopped.
+ *    LOUNGE  leaned back, arms along the back of the bench, legs stretched. Done, and at ease.
+ *
+ *  All three are 14 rows against the standing figure's 16, and every sprite is anchored at the
+ *  boots — so sitting down literally lowers the head six pixels and the difference is visible
+ *  before any of the detail is.
+ */
+
+/** At the desk. The arms reach OUT to where the desk is, which is the whole tell: a seated figure
+ *  with its arms at its sides is a person on a chair, not a person working. */
+export const POSE_SIT_A: Grid = [
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kekkek..",
+  "..kkkkkk..",
+  "..kkmmkk..",
+  "...kkkk...",
+  ".ssssssss.",
+  ".sssaasss.",
+  "kssssssssk",
+  ".tttttttt.",
+  ".bb....bb.",
+];
+
+/** The same seat, leaned one pixel into the screen. Played on the beat this is somebody typing;
+ *  it is the same trick the standing pair uses and it costs one row of difference. */
+export const POSE_SIT_B: Grid = [
+  "..........",
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kekkek..",
+  "..kkkkkk..",
+  "..kkmmkk..",
+  "...kkkk...",
+  ".ssssssss.",
+  "kssssssssk",
+  ".tttttttt.",
+  ".bb....bb.",
+];
+
+/** Stopped. Head down into the shoulders, eyes shut, arms hanging — and NOT played as a pair, so
+ *  the one body on the floor that is genuinely not moving is genuinely not moving. */
+export const POSE_SLUMP: Grid = [
+  "..........",
+  "..........",
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kmkkmk..",
+  "..kkkkkk..",
+  ".ssssssss.",
+  ".sssaasss.",
+  ".kssssssk.",
+  ".tttttttt.",
+  ".bb....bb.",
+];
+
+/** At ease. Shoulders up around the neck, arms spread along the back of the bench, legs pushed
+ *  out — the posture nobody holds at a desk, which is why it says "finished" without a word. */
+export const POSE_REST_A: Grid = [
+  "..........",
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kekkek..",
+  "..kkkkkk..",
+  "..kkmmkk..",
+  "..skkkks..",
+  "kssssssssk",
+  ".sssaasss.",
+  ".tttttttt.",
+  "ttt....ttt",
+  "bb......bb",
+];
+
+/** The breath. One row of chest, which at this size is the whole difference between a person
+ *  resting and a prop of a person. */
+export const POSE_REST_B: Grid = [
+  "..hhhhhh..",
+  "..hhhhhh..",
+  "..kkkkkk..",
+  "..kekkek..",
+  "..kkkkkk..",
+  "..kkmmkk..",
+  "..skkkks..",
+  "kssssssssk",
+  ".sssaasss.",
+  ".ssssssss.",
+  ".tttttttt.",
+  "ttt....ttt",
   "bb......bb",
 ];
 

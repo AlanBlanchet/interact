@@ -38,7 +38,8 @@ export const SCRIPT =
      that motion is PERCEPTIBLE; the numbers are what say it is correct. */
   window.__wp = {
     walks: 0, notes: 0, walking: 0, mode: "cold", bodies: null, world: null,
-    tick: null, step: null, send: null, note: null, clearNotes: null, cam: null, still: still
+    tick: null, step: null, send: null, note: null, clearNotes: null, cam: null, view: null,
+    still: still
   };
 ` +
   SIM +
@@ -63,6 +64,9 @@ export const SCRIPT =
     window.__wp.bodies = BODIES;
     window.__wp.world = W;
     window.__wp.cam = CAM;
+    /* The PAINTED camera, so motion can be measured rather than eyeballed: a glide is only
+       observable as the gap between where the camera is and what is on screen. */
+    window.__wp.view = VIEW;
     camFit();
     lighting();
     speechLayout(TICK.t + 9999);
@@ -206,12 +210,31 @@ export const SCRIPT =
     /* Zoom about the pointer. passive:false is required or the browser refuses the
        preventDefault and the whole webview scrolls instead of the map zooming. A trackpad's
        pinch arrives here as ctrlKey + wheel, which is the same verb. */
+    /* ONE RUNG PER NOTCH OF TRAVEL, not one per EVENT.
+       A mouse wheel fires one event per detent and a trackpad fires a dozen tiny ones per flick,
+       so stepping a rung per event meant the same gesture moved the scale by one on a mouse and
+       ran the entire nine-rung ladder on a trackpad — nine cuts in a quarter of a second, which
+       is most of what "the zoom could be smoother" was. Accumulating DISTANCE makes both devices
+       mean the same thing, and the glide does the rest: consecutive notches chain into one
+       continuous move because the painted camera is always chasing wherever the rung is now. */
+    var wheel = { at: 0, acc: 0 };
+    var NOTCH = 110;
     view.addEventListener("wheel", function (e) {
       if (e.target.closest && e.target.closest(".wp-plan")) return;
       e.preventDefault();
-      var dir = e.deltaY < 0 ? 1 : -1;
+      var now = e.timeStamp || Date.now();
+      // A new gesture starts from zero: leftover travel from ten seconds ago is not this flick.
+      if (now - wheel.at > 240) wheel.acc = 0;
+      wheel.at = now;
+      // deltaMode 1 is LINES and 2 is PAGES. Left unnormalised, a browser reporting lines moves
+      // the ladder by three hundredths of a notch and the wheel appears dead.
+      var travel = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      wheel.acc -= travel;
+      var rungs = 0;
+      while (wheel.acc >= NOTCH) { wheel.acc -= NOTCH; rungs++; }
+      while (wheel.acc <= -NOTCH) { wheel.acc += NOTCH; rungs--; }
       camHold();
-      camSetStep(CAM.step + dir, e.clientX, e.clientY);
+      if (rungs) camSetStep(CAM.step + rungs, e.clientX, e.clientY);
     }, { passive: false });
 
     var drag = null;
@@ -228,6 +251,9 @@ export const SCRIPT =
       CAM.x = drag.cx - dx / CAM.zoom;
       CAM.y = drag.cy - dy / CAM.zoom;
       camClamp();
+      /* A DRAG IS ONE-TO-ONE. Everything else in this camera is eased, and easing a drag is what
+         makes a map feel like it is on ice: the floor has to stay under the finger. */
+      camSync();
       camApply();
     });
     var release = function () {
@@ -370,6 +396,10 @@ export const SCRIPT =
     }
     pumpErrands(ts);
     camStep(dt);
+    /* The camera's GLIDE is part of a step, not part of the rAF chain — otherwise a probe that
+       drives the engine by hand measures a camera that never moves, which is precisely how a
+       transition gets called smooth on evidence that could not have shown it either way. */
+    if (camGlide(dt)) camApply();
     lighting();
     doors();
   };

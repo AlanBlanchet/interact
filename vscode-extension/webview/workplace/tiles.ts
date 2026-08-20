@@ -25,6 +25,13 @@ export interface Tile {
   /** Drawn with a derived ink rim. Off for anything that tessellates — a rim on a floor tile
    *  paints a grid of black lines across the whole building. */
   rim?: boolean;
+  /** FOLIAGE, so its shadow is DAPPLED rather than solid.
+   *  A canopy is not an opaque object and its shadow is not a slab. It mattered here for a
+   *  concrete reason rather than a botanical one: a tree's shadow rakes several cells, a copse is
+   *  trees in touching cells, so solid shadows MERGE — three trees in a row cast one continuous
+   *  dark bar that reads as a foreign feature lying on the ground rather than as shade. Two
+   *  dappled shadows overlapping are still dapple. */
+  leafy?: boolean;
 }
 
 /** Every colour a tile may use. Named against the room rather than against the theme, so a light
@@ -68,6 +75,20 @@ const T: Palette = {
   K: "var(--t-mass)",
   U: "var(--t-rug)",
   Z: "var(--t-rug-hi)",
+  /* Outdoors. The grounds used to be furnished out of the INDOOR kit — a potted houseplant and a
+     monitor-on-a-stand, scattered on a lawn — which is exactly what "floating trees" was: a wide
+     canopy balanced on a two-pixel pot, with its silhouette translated up and to the right of it
+     so the shadow floated too. A tree needs bark, three greens and its own trunk down to the
+     bottom row of its tile, or it is a shrub hovering over grass. */
+  t: "var(--t-bark)",
+  T: "var(--t-bark-hi)",
+  M: "var(--t-leaf-hi)",
+  N: "var(--t-leaf-lo)",
+  q: "var(--t-stone)",
+  W: "var(--t-stone-hi)",
+  j: "var(--t-bloom)",
+  Y: "var(--t-water)",
+  C: "var(--t-water-hi)",
 };
 
 const tile = (grid: Grid, extra: Partial<Tile> = {}): Tile => ({ grid, pal: T, rim: false, ...extra });
@@ -324,6 +345,32 @@ export const GRASS = tile([
   "vvvvvvvv",
 ]);
 
+/** MEADOW: the same ground left unmown. The single cheapest thing that gives a site structure —
+ *  at this pitch a change of GROUND does more than any number of props, because it is the only
+ *  mark big enough to be read as a shape rather than as an object. */
+export const MEADOW = tile([
+  "VvVvvVvV",
+  "vVLVvVVv",
+  "VvVvLVvV",
+  "vVVvVvVL",
+  "LVvVVvVv",
+  "vVvLvVLV",
+  "VVvVLvVv",
+  "vVLvVVvV",
+]);
+
+/** Bare earth, where the ground is walked or a bed has been turned over. */
+export const EARTH = tile([
+  "PPPQPPPP",
+  "PPPPPPQP",
+  "PQPPPPPP",
+  "PPPPQPPP",
+  "PPPPPPPP",
+  "PPQPPPQP",
+  "PPPPPPPP",
+  "PQPPPPPP",
+]);
+
 export const PATH = tile([
   "PPPPPPPP",
   "PPPPQPPP",
@@ -334,6 +381,158 @@ export const PATH = tile([
   "PPPPPPPP",
   "PQPPPPPP",
 ]);
+
+/* ── the grounds ─────────────────────────────────────────────────────────────────────────────
+   Everything out here used to be drawn from the indoor kit, which is the whole of the
+   "floating trees" defect: `PLANT` is a houseplant — five rows of canopy balanced on a
+   three-pixel pot — and `URN` is a screen on a stand. Neither has a base wide enough to sit on
+   grass, and neither has a trunk.
+
+   Three rules the outdoor pieces all keep, because breaking any one of them is what makes a
+   sprite hover:
+     1. THE BASE TOUCHES ROW SEVEN. A thing standing on the ground is drawn down to the bottom of
+        its own tile; a gap under it is the picture saying it is in the air.
+     2. THE BASE IS WIDER THAN NOTHING. A canopy needs a trunk and the trunk needs a foot: a
+        one-pixel stem under a six-pixel crown reads as a balloon on a string.
+     3. THE MASS IS OFF-CENTRE AND THE TONES RUN NORTH-WEST TO SOUTH-EAST, so every plant is lit
+        by the same sun as the building it stands beside. */
+
+/** A broadleaf. The crown is three greens — lit on the north-west shoulder, mid through the body,
+ *  shade under the south-east — so it turns rather than reading as a flat blob. */
+export const TREE = tile(
+  [
+    "..MMMM..",
+    ".MMMMLM.",
+    "MMLLLLLM",
+    "MLLLLLLN",
+    ".LLLLNN.",
+    "..LNNL..",
+    "...Tt...",
+    "..ttTt..",
+  ],
+  { solid: true, leafy: true },
+);
+
+/** The same tree, older and heavier, so a wood is not one drawing repeated. */
+export const TREE_BIG = tile(
+  [
+    ".MMMMM..",
+    "MMMLLLM.",
+    "MLLLLLLM",
+    "MLLLLLLN",
+    "MLLLLNNN",
+    ".LLNNNL.",
+    "...TtT..",
+    "..tttTt.",
+  ],
+  { solid: true, leafy: true },
+);
+
+/** A conifer. Stepped rather than smooth: three tiers with a hard shelf under each is what an
+ *  8x8 pine can actually say, and it silhouettes against the broadleaves beside it. */
+export const PINE = tile(
+  [
+    "...MM...",
+    "..MLLM..",
+    "..LLLN..",
+    ".MLLLLN.",
+    ".LLLLNN.",
+    "MLLLLLNN",
+    "...Tt...",
+    "..ttTt..",
+  ],
+  { solid: true, leafy: true },
+);
+
+/** A shrub: mass with no trunk, low to the ground, which is what keeps a copse from being a row
+ *  of lollipops. */
+export const BUSH = tile(
+  [
+    "........",
+    "........",
+    "...MM...",
+    "..MLLM..",
+    ".MLLLLN.",
+    ".LLLLNN.",
+    "LLLLNNNL",
+    ".LNNLNN.",
+  ],
+  { solid: true, leafy: true },
+);
+
+/** A boulder. The one thing out here that is neither green nor built, so it is what stops the
+ *  grounds reading as a nursery. */
+export const ROCK = tile(
+  [
+    "........",
+    "........",
+    "...WW...",
+    "..WWqq..",
+    ".WWqqqq.",
+    ".Wqqqqq.",
+    "qqqqqqq.",
+    ".qqqqq..",
+  ],
+  { solid: true },
+);
+
+/** A flowerbed. Low, so it never blocks a sightline, and the one warm colour in the grounds. */
+export const BLOOMS = tile(
+  [
+    "........",
+    "........",
+    "........",
+    "..j..j..",
+    ".LjLLjL.",
+    "LLLjLLLL",
+    ".LLLLLL.",
+    "..LLLL..",
+  ],
+);
+
+/** A tuft of longer grass. Not solid and barely there: it exists so the lawn has a texture the
+ *  ground pattern alone cannot give it at this pitch. */
+export const TUFT = tile([
+  "........",
+  "........",
+  "........",
+  "........",
+  "..L..L..",
+  ".LLL.LL.",
+  "..LLLLL.",
+  "...LL...",
+]);
+
+/** Standing water. It TESSELLATES — flat, with a few glints — because a pond is a cluster of
+ *  these and a tile with its own rounded rim tiles into a grid of blue circles, which is exactly
+ *  what the first attempt drew. The BANK is a ring of earth laid by the caller, and that is what
+ *  gives the water an edge. */
+export const POND = tile([
+  "YYYYYYYY",
+  "YYYCYYYY",
+  "YYYYYYYY",
+  "YYYYYYCY",
+  "YCYYYYYY",
+  "YYYYYYYY",
+  "YYYYYCYY",
+  "YYYYYYYY",
+]);
+
+/** A lamp on a post, along the path out of the gate. The only fixture outside the building, and
+ *  the reason the way out reads as a way out rather than as a gap in a wall. */
+export const LAMPPOST = tile(
+  [
+    "..llll..",
+    ".liiiil.",
+    ".liiiil.",
+    "..eeee..",
+    "...ee...",
+    "...ee...",
+    "...ee...",
+    "..eeee..",
+  ],
+  { solid: true },
+);
 
 export const MAST = tile(
   [
@@ -910,8 +1109,19 @@ export const TILES = {
   urn: URN,
   core: CORE,
   grass: GRASS,
+  meadow: MEADOW,
+  earth: EARTH,
   path: PATH,
   mast: MAST,
+  tree: TREE,
+  treeBig: TREE_BIG,
+  pine: PINE,
+  bush: BUSH,
+  rock: ROCK,
+  blooms: BLOOMS,
+  tuft: TUFT,
+  pond: POND,
+  lamppost: LAMPPOST,
   lino: LINO,
   mass: MASS,
   rug: RUG,

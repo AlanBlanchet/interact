@@ -118,16 +118,25 @@ function looseCell(room, id, n) {
     var dx = 1 + Math.floor(rnd(id, n * 13 + tries) * (room.w - 2));
     var dy = 1 + Math.floor(rnd(id, n * 29 + tries + 7) * (room.h - 2));
     var x = room.x + dx, y = room.y + dy;
-    if (room.o) { x = room.x + dx; y = 1 + Math.floor(rnd(id, n * 31 + tries) * (W.rows - 3)); }
+    /* An open room is still a ROOM. This let an outdoor body pick any row in the entire world,
+       so an agent working the web wandered the full height of the site and stood in a field — the
+       outdoor half of "sprites are very weirdly placed". Its own rectangle, like everybody. */
+    if (room.o) { y = room.y + 1 + Math.floor(rnd(id, n * 31 + tries) * Math.max(1, room.h - 2)); }
     if (walkable(x, y)) return { x: x, y: y };
   }
   return null;
 }
 
-/* A cell beside somebody — where you stand when you have come over to say something. */
+/* A cell beside somebody — where you stand when you have come over to say something.
+   TWO TILES OUT FIRST, not one. A sprite is thirty-six pixels wide on a twenty-four pixel tile,
+   so "adjacent" means the two of them overlap by twelve and one is drawn through the other —
+   which is the same crowding complaint the seat pitch exists to prevent, arriving through the
+   errand system instead of through the floor plan. Two tiles is clear of it and still plainly a
+   conversation. The closer ring stays as a fallback for somebody cornered against furniture. */
 function besideOf(x, y) {
-  var around = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1],
-                [2, 0], [-2, 0], [0, 2], [0, -2]];
+  var around = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, 1], [2, -1], [-2, -1],
+                [1, 2], [-1, 2], [1, -2], [-1, -2],
+                [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
   for (var i = 0; i < around.length; i++) {
     var nx = x + around[i][0], ny = y + around[i][1];
     if (walkable(nx, ny)) return { x: nx, y: ny };
@@ -149,7 +158,7 @@ function bodyFor(el) {
   if (!b) {
     b = BODIES[id] = {
       id: id, x: sx, y: sy, seatX: sx, seatY: sy,
-      face: 1, path: null, step: 0, walked: 0, speed: 0,
+      face: 1, path: null, step: 0, walked: 0, speed: 0, sx: 0, tx: 0, tagW: 0,
       mode: "settled", nextAt: 0, home: "", talkUntil: 0, errand: null,
       saidAt: 0, phase: phaseOf(id)
     };
@@ -157,8 +166,16 @@ function bodyFor(el) {
        single loudest tell that a scene is driven by a stylesheet rather than by people. */
     b.nextAt = 2000 + b.phase * 9000;
   }
+  /* A REFRESH REPLACES THE ELEMENT AND KEEPS THE BODY, so every value memoised on the body about
+     what is WRITTEN on the element is stale the instant the two are re-paired. The --sx custom
+     property is an inline style on the bubble: the new bubble arrives without it while b.sx still
+     remembers the old number, so the clamp compares equal to itself and writes nothing — a line
+     correctly shifted before the swap comes back unshifted after it and hangs off the panel.
+     Anything cached about the DOM is dropped when the DOM changes under it. */
+  if (b.el !== el) { b.sx = 0; b.tx = 0; b.tagW = 0; }
   b.el = el;
   b.home = el.getAttribute("data-home") || "";
+  if (!b.path && Math.abs(b.x - sx) < 0.5 && Math.abs(b.y - sy) < 0.5) settleFace(b);
   /* A seat that moved means the roster moved them — a new department, or out to the web. They do
      not appear there; they get up and walk. */
   if (b.seatX !== sx || b.seatY !== sy) {
@@ -169,6 +186,17 @@ function bodyFor(el) {
 }
 
 function roomOf(b) { return W.byId[b.home] || null; }
+
+/* Which way a body looks once it has stopped.
+   Walking sets the facing from the direction of travel, which is right while the feet are moving
+   and meaningless the moment they stop — so a body kept whichever way it happened to arrive, and
+   two people sharing one bench ended up looking the same way like a queue. The SEAT declares it,
+   because the seat is the thing that knows what is beside it. */
+function settleFace(b) {
+  if (!b.el) return;
+  var want = Number(b.el.getAttribute("data-face"));
+  if (want === 1 || want === -1) b.face = want;
+}
 
 /** Put a body on the road. Everything that moves anybody goes through here, so there is exactly
  *  one place where a journey can start and exactly one shape a journey has. */
@@ -252,6 +280,9 @@ function arrived(b) {
     return;
   }
   b.mode = "settled";
+  /* Home, and facing the way the place faces — but only at the place itself. Turning to face a
+     bench you are merely walking past is worse than not turning at all. */
+  if (Math.abs(b.x - b.seatX) < 0.5 && Math.abs(b.y - b.seatY) < 0.5) settleFace(b);
   b.nextAt = TICK.t + DWELL[0] + rnd(b.id, Math.floor(TICK.t / 1000)) * (DWELL[1] - DWELL[0]);
 }
 
@@ -278,6 +309,15 @@ function decide(b, t) {
   var away = Math.abs(b.x - b.seatX) > 0.5 || Math.abs(b.y - b.seatY) > 0.5;
   var n = Math.floor(t / 1000);
   if (away && rnd(b.id, n) < 0.6) { if (sendTo(b, b.seatX, b.seatY, "return")) return; }
+  /* SOMEBODY WHO HAS SAT DOWN STAYS SAT. "They could have a seat or rest in their room" is a
+     statement about where a finished agent IS, and the errand loop was undoing it: everybody got
+     up on their own schedule, so a run that had finished spent most of its life standing in the
+     middle of the floor near a couch rather than on it. Seated postures still get up — a floor
+     where nothing ever moves is the other failure — but rarely, and they always come back. */
+  if (b.el && b.el.getAttribute("data-posture") !== "stand" && rnd(b.id, n * 7 + 3) > 0.18) {
+    b.nextAt = t + 4200;
+    return;
+  }
   var cell = looseCell(roomOf(b), b.id, n);
   if (cell && sendTo(b, cell.x, cell.y, "roam")) return;
   b.nextAt = t + 1800;
@@ -317,9 +357,111 @@ function place(b, t) {
   }
   el.style.transform = "translate3d(" + px.toFixed(1) + "px," + (py + bob).toFixed(1) + "px,0)";
   el.style.zIndex = String(100 + Math.round(b.y * 4));
+  sayEdge(b, py);
   el.classList.toggle("face-left", b.face < 0);
   if (lean) el.style.setProperty("--lean", lean.toFixed(2) + "deg");
   else el.style.removeProperty("--lean");
+}
+
+/** A BUBBLE MAY NOT FALL OFF THE FRAME.
+ *
+ *  A line is centred on its body and held at a constant SCREEN size, so a body within half a
+ *  bubble of an edge has its sentence cut in half by the viewport — and in the width this
+ *  actually ships in, a VS Code side bar, most of the floor is within half a bubble of an edge.
+ *
+ *  It has to be done HERE, per frame, and that is the whole lesson: the first attempt clamped in
+ *  the speech LAYOUT, which runs every 420ms, so the shift was computed against a camera position
+ *  up to a quarter of a second old while the body walked and the camera followed. It applied a
+ *  real, measurable, wrong offset — a bubble still off the frame having visibly moved, which is
+ *  worse than not moving at all. A correction to a moving quantity belongs on the same clock as
+ *  the quantity.
+ *
+ *  Only for a body actually ON screen: dragging an off-frame character's line to the edge shows a
+ *  sentence belonging to somebody nobody can see.
+ */
+/** Where a body is ON SCREEN, in screen pixels, against the camera that is actually PAINTED.
+ *  ONE predicate, used by both the thing that decides who speaks and the thing that decides where
+ *  the line goes — they disagreed by an eighteen-pixel pad, so the layout kept re-granting a
+ *  bubble to a body the per-frame check had just taken it from, and the two of them handed it back
+ *  and forth while the sentence hung eighty pixels outside the panel. */
+function screenAt(b, py) {
+  var seen = VIEW.ready ? VIEW : CAM;
+  return { x: (b.px - seen.x) * seen.zoom, y: ((py === undefined ? b.py : py) - seen.y) * seen.zoom };
+}
+
+function onScreenAt(at) {
+  return at.x >= 0 && at.x <= CAM.vw && at.y >= 0 && at.y <= CAM.vh;
+}
+
+function onScreen(b, py) {
+  return onScreenAt(screenAt(b, py));
+}
+
+/** How far a label must move, in SCREEN pixels, to sit inside the frame. Zero when it already
+ *  does. The half argument is half the label's own width, on screen. */
+function edgeShift(sx, half) {
+  if (sx - half < SAY_EDGE) return SAY_EDGE - (sx - half);
+  if (sx + half > CAM.vw - SAY_EDGE) return CAM.vw - SAY_EDGE - (sx + half);
+  return 0;
+}
+
+/** THE NAMEPLATE IS THE BUBBLE'S SIBLING AND NEEDS THE SAME CLAMP.
+ *
+ *  Reported by a critic immediately after the bubble clamp shipped, and it is the same defect
+ *  with a different class name: a name is centred on its body, so a body near an edge has its
+ *  name cut in half — measured at 26.5px of "code-reviewer" off the left of a side bar, for
+ *  somebody whose body was still fully on screen. Fixing one instance of a class and leaving its
+ *  sibling is the whole failure.
+ *
+ *  What differs is the SPACE. A bubble counter-scales (--inv) and is a constant screen object, so
+ *  its shift is a screen distance; a nameplate scales WITH the world, so the same screen distance
+ *  is that many world pixels divided by the zoom. Its width is measured off the rendered element
+ *  once per element, because the cap is 66 world pixels and most names are shorter — shifting a
+ *  short name by a long name's overhang moves it visibly too far in.
+ */
+function tagEdge(b, at, zoom) {
+  var el = b.el;
+  var tag = el.querySelector(".wp-tag");
+  if (!tag) return;
+  if (!b.tagW) b.tagW = tag.offsetWidth || 0;
+  if (!b.tagW) return;
+  /* ONLY FOR A BODY THAT IS ON SCREEN — and this guard is the whole reason to write the check
+     once and share it. The bubble had it; the nameplate, copied from the bubble a minute later,
+     did not, so every name in the building was clamped, INCLUDING the ones hundreds of pixels
+     outside the frame: they were all dragged to the same edge and stacked into a pile of
+     unreadable plates. Generalising a fix to its sibling means generalising its GUARD too. */
+  var shift = onScreenAt(at) ? Math.round(edgeShift(at.x, (b.tagW / 2) * zoom) / zoom * 10) / 10 : 0;
+  if (shift === b.tx) return;
+  b.tx = shift;
+  tag.style.left = shift + "px";
+}
+
+function sayEdge(b, py) {
+  var el = b.el;
+  var seenAt = screenAt(b, py);
+  tagEdge(b, seenAt, VIEW.ready ? VIEW.zoom : CAM.zoom);
+  if (!el.classList.contains("is-saying")) {
+    if (b.sx) { b.sx = 0; var off = el.querySelector(".wp-say"); if (off) off.style.removeProperty("--sx"); }
+    return;
+  }
+  var at = seenAt;
+  var sx = at.x;
+  /* WHO GETS A BUBBLE IS SETTLED HERE, EVERY FRAME — the layout pass only decides WHERE it goes.
+     The layout runs every 420ms, and in 420ms a body walks a tile and a half and the camera can
+     cross a room; a character that was on screen when the pass ran is off it long before the next
+     one, still wearing the class, and what remains on the edge is the tail of a sentence with no
+     owner. Measured over 220 frames at side-bar width, that was 173 pixels of a line hanging
+     outside the frame. Cheap: two subtractions per speaking body per frame, and no DOM write
+     unless the answer changed. */
+  if (!onScreenAt(at)) {
+    el.classList.remove("is-saying");
+    return;
+  }
+  var shift = Math.round(edgeShift(sx, SAY_HALF));
+  if (shift === b.sx) return;
+  b.sx = shift;
+  var say = el.querySelector(".wp-say");
+  if (say) say.style.setProperty("--sx", shift + "px");
 }
 
 /* ── the camera ──────────────────────────────────────────────────────────────────────────────
@@ -344,6 +486,42 @@ function place(b, t) {
    arbitrary fractions (0.75, 0.5) smears every hard edge this substrate is made of. Thirds are
    the only ladder that does both. */
 var CAM = { x: 0, y: 0, step: 3, zoom: 1, vw: 0, vh: 0, follow: true, ready: false };
+
+/* ── THE CAMERA MOVES; IT DOES NOT CUT ───────────────────────────────────────────────────────
+ *
+ *  "The zoom could be smoother." It was not smooth in the strict sense: it was INSTANT. A rung is
+ *  a third, so stepping one is a 33-50% change of scale applied in a single frame, and a mouse
+ *  wheel emits one event per detent — so the whole ladder could be run in a flick, as nine cuts.
+ *
+ *  The fix is NOT a continuous scale. Every rung lands one source pixel on a whole number of
+ *  device pixels, which is the only reason this scene stays crisp below 1x, and giving that up
+ *  would smear every hard edge in the building to buy an animation. So the camera is split in
+ *  two:
+ *
+ *    CAM   the LOGICAL camera. Rung-quantised, moved instantly by every handle there is — a
+ *          wheel, a key, the rule, the plan, whole-floor. Every reading anything takes of the
+ *          camera is this one, so the gauge lights the moment you touch it and the state the
+ *          rest of the view derives (near or far, following or held) never flickers mid-move.
+ *
+ *    VIEW  what is actually PAINTED. It chases CAM every frame, and the chase is what you see.
+ *
+ *  Two details that matter more than the easing curve:
+ *
+ *   - SCALE IS CHASED IN LOG SPACE. Interpolating 1/3 to 3 linearly spends most of the move at
+ *     the wide end and reads as a lurch; a constant ratio per unit time is what "zooming at an
+ *     even rate" actually is.
+ *   - IT LANDS EXACTLY, AND ROUNDS ONLY THERE. In flight the transform is left fractional,
+ *     because snapping the translate to whole pixels while the scale is moving is a stutter you
+ *     can see. Within a fifth of a percent of the target it snaps to the rung and rounds — so the
+ *     picture is exact whenever it is still, which is when anybody is actually reading it.
+ */
+var VIEW = { x: 0, y: 0, zoom: 1, live: false, ready: false };
+/* Time to close 99.9% of the gap, which for one rung works out at about 190ms of visible motion
+   and about 300 for whole-floor — the classic UI transition band. Measured rather than guessed:
+   the remaining gap is 0.001^(t/GLIDE), so a rung's 0.118 of log-scale reaches the 0.002 snap
+   threshold at 0.59 x GLIDE. Short enough that a held key never feels laggy, long enough that a
+   rung change is a MOVE and not a cut. */
+var GLIDE = 320;
 /* How many tiles to try to keep across the frame when the panel opens. Sixteen is a room and
    its corridor — unchanged, so the view still OPENS exactly where it used to. */
 var ACROSS = 16;
@@ -449,8 +627,12 @@ function camSetStep(step, ax, ay) {
   var box = view ? view.getBoundingClientRect() : null;
   var hx = box && typeof ax === "number" ? ax - box.left : CAM.vw / 2;
   var hy = box && typeof ay === "number" ? ay - box.top : CAM.vh / 2;
-  var wx = CAM.x + hx / CAM.zoom;
-  var wy = CAM.y + hy / CAM.zoom;
+  /* Anchored on what is PAINTED, not on where the camera is headed. Mid-glide those are different
+     places, and anchoring on the target makes a second wheel notch during the first one's move
+     pull the floor out from under the pointer. */
+  var seen = VIEW.ready ? VIEW : CAM;
+  var wx = seen.x + hx / seen.zoom;
+  var wy = seen.y + hy / seen.zoom;
   CAM.step = next;
   CAM.zoom = zoomOf(next);
   window.__wp.scale = CAM.zoom;
@@ -534,17 +716,61 @@ function camStep(dt) {
   if (Math.abs(gx) > dead.x) CAM.x += (gx - (gx > 0 ? dead.x : -dead.x)) * k;
   if (Math.abs(gy) > dead.y) CAM.y += (gy - (gy > 0 ? dead.y : -dead.y)) * k;
   camClamp();
-  camApply();
+  // No paint here. The frame loop's glide is what puts the picture where the camera is, and a
+  // second write of the identical transform in the same frame is work nobody sees.
+}
+
+/** Chase the logical camera. Returns whether anything moved, so a still camera writes nothing. */
+function camGlide(dt) {
+  if (!CAM.ready) return false;
+  if (!VIEW.ready) {
+    VIEW.x = CAM.x; VIEW.y = CAM.y; VIEW.zoom = CAM.zoom; VIEW.ready = true; VIEW.live = false;
+    return true;
+  }
+  var lz = Math.log(CAM.zoom) - Math.log(VIEW.zoom);
+  var dx = CAM.x - VIEW.x;
+  var dy = CAM.y - VIEW.y;
+  var near = Math.abs(lz) < 0.002 && Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4;
+  if (near) {
+    if (!VIEW.live) return false;
+    VIEW.x = CAM.x; VIEW.y = CAM.y; VIEW.zoom = CAM.zoom; VIEW.live = false;
+    return true;
+  }
+  /* Frame-rate independent: the same fraction of the REMAINING gap per unit time, whatever the
+     frame took. A fixed per-frame lerp is a different curve at 30fps than at 60. */
+  var k = 1 - Math.pow(0.001, Math.min(1, dt / GLIDE));
+  VIEW.zoom = Math.exp(Math.log(VIEW.zoom) + lz * k);
+  VIEW.x += dx * k;
+  VIEW.y += dy * k;
+  VIEW.live = true;
+  return true;
+}
+
+/** Put the picture exactly where the camera is, this instant. For a DRAG, which has to be
+ *  one-to-one with the pointer: easing a drag is what makes a map feel like it is on ice. */
+function camSync() {
+  VIEW.x = CAM.x; VIEW.y = CAM.y; VIEW.zoom = CAM.zoom; VIEW.ready = true; VIEW.live = false;
 }
 
 function camApply() {
   var stage = document.querySelector(".wp-stagebox");
   if (!stage) return;
-  var z = CAM.zoom;
+  /* THE GLIDE IS AN ANIMATION, so it needs both an animator and a licence to animate — and it has
+     neither here. Under prefers-reduced-motion the engine never starts its clock at all, so a
+     camera that only ever paints what the glide has reached would have frozen the moment somebody
+     zoomed: the rung would change, the gauge would light, and the picture would not move again.
+     Same when the clock is simply paused. In both cases the camera CUTS, which is exactly what a
+     reader who has asked for no motion wants. */
+  if (!VIEW.ready || still || !TICK.on) camSync();
+  var z = VIEW.zoom;
+  var tx = -VIEW.x * z;
+  var ty = -VIEW.y * z;
+  // Crisp when still, smooth when moving. Rounding a translate mid-glide is a visible judder;
+  // NOT rounding it at rest leaves the whole building on a half pixel.
+  if (!VIEW.live) { tx = Math.round(tx); ty = Math.round(ty); }
   stage.style.setProperty("--inv", String(1 / z));
   stage.style.setProperty("--z", String(z));
-  stage.style.transform =
-    "translate3d(" + Math.round(-CAM.x * z) + "px," + Math.round(-CAM.y * z) + "px,0) scale(" + z + ")";
+  stage.style.transform = "translate3d(" + tx + "px," + ty + "px,0) scale(" + z + ")";
   /* WRITE ONLY ON CHANGE. This runs on every frame the camera is following, and an attribute
      written on .wp-view — the root every rule in the far-view block hangs off — invalidates
      the whole scene's style even when the value did not change. Measured against the same page
@@ -581,7 +807,7 @@ function camApply() {
   var eye = document.querySelector(".wp-eye");
   var mini = document.querySelector(".wp-mini");
   if (eye && mini) {
-    var span = camSpan();
+    var span = { w: CAM.vw / z, h: CAM.vh / z };
     var world = worldPx();
     var mw = mini.clientWidth - 4, mh = mini.clientHeight - 4;
     var sx = mw / world.w, sy = mh / world.h;
@@ -589,8 +815,8 @@ function camApply() {
        the camera sits at a negative offset and the unclamped box was drawn floating above the
        panel as a bare rectangle over the floor — the tell that the plan and the frame had
        stopped agreeing. Clamped, it simply fills the plan, which is the truth. */
-    var ex = Math.max(0, Math.min(mw, CAM.x * sx));
-    var ey = Math.max(0, Math.min(mh, CAM.y * sy));
+    var ex = Math.max(0, Math.min(mw, VIEW.x * sx));
+    var ey = Math.max(0, Math.min(mh, VIEW.y * sy));
     eye.style.left = (2 + ex) + "px";
     eye.style.top = (2 + ey) + "px";
     eye.style.width = Math.max(4, Math.min(mw - ex, span.w * sx)) + "px";
@@ -615,8 +841,18 @@ function camLookAt(px, py) {
    rather than drawn over them. The boxes are computed in world pixels, which is the same
    comparison the eye makes because everything scales together. */
 var SAY_MAX = 7;
+/* Half a bubble's own width, measured off the rendered element, and how close to the frame edge
+   it may come. */
+var SAY_HALF = 66;
+var SAY_EDGE = 4;
 var SAY_AT = 0;
 var SAID = [];
+
+/** How tall this body is drawn, in device pixels. Published by the renderer from ONE table. */
+function headOf(b) {
+  var n = b.el && Number(b.el.getAttribute("data-head"));
+  return n > 0 ? n : 54;
+}
 
 function boxesOf(b, kind) {
   /* The furniture a character carries, as rectangles in world pixels around its feet.
@@ -627,17 +863,22 @@ function boxesOf(b, kind) {
      air and allows them over a word. Generous on purpose, in the direction that costs a bubble
      rather than the one that draws words on top of a name. */
   var up = b.el && b.el.getAttribute("data-label") === "up";
+  /* The SAME number the stylesheet places these with. A posture changes how tall a body is, and
+     these rectangles are the only thing that promises two labels are never drawn over each other
+     — so a reserve derived from a constant while the element is placed from a variable is a
+     guarantee that silently stops being true. Read it off the element. */
+  var head = headOf(b);
   var x = b.px, y = b.py;
-  if (kind === "tag") return up ? [x - 34, y - 70, x + 34, y - 56] : [x - 34, y + 1, x + 34, y + 15];
+  if (kind === "tag") return up ? [x - 34, y - head - 16, x + 34, y - head - 2] : [x - 34, y + 1, x + 34, y + 15];
   if (kind === "can") return up ? [x - 28, y, x + 28, y + 20] : [x - 28, y + 15, x + 28, y + 35];
-  return up ? [x - 24, y - 95, x + 24, y - 82] : [x - 24, y - 65, x + 24, y - 52];
+  return up ? [x - 24, y - head - 41, x + 24, y - head - 28] : [x - 24, y - head - 11, x + 24, y - head + 2];
 }
 
 function sayBox(b, level) {
   var up = b.el && b.el.getAttribute("data-label") === "up";
   /* Clear of the stamp rather than three pixels off it: measured, the placard's top edge is
      sixty-three world pixels above the boots and the lowest bubble's floor was sixty-six. */
-  var base = (up ? 100 : 72) + level * 26;
+  var base = (up ? 100 : 72) + level * 26 - (54 - headOf(b));
   /* The bubble holds a constant SCREEN size, so in world pixels it shrinks as the camera moves
      in. Reserving the unscaled box would refuse most of the lines at zoom two for a collision
      that is not there. */
@@ -661,17 +902,19 @@ function sayRank(b, t) {
 function speechLayout(t) {
   if (t - SAY_AT < 420) return;
   SAY_AT = t;
-  var span = camSpan();
-  var pad = W.tile * 2;
+  /* A LINE IS A LABEL FOR A CHARACTER, so a character nobody can see does not get one — judged by
+     onScreen(), against the camera that is PAINTED and by the same test the per-frame edge clamp
+     uses. It used to be a two-tile pad around the LOGICAL camera, which is wrong twice over: the
+     logical camera is a room away from the painted one for the length of a glide, and the pad let
+     a body a tile and a half outside the frame keep a bubble that is held at constant SCREEN size
+     — so what showed was the last few letters of somebody else's sentence jammed against the edge
+     with no owner attached. That is the "...face graph ..." a critic found in a side bar. */
   var live = [];
   var taken = SIGNS.slice();
   for (var id in BODIES) {
     var b = BODIES[id];
     if (!b.el || !b.el.isConnected || b.px === undefined) continue;
-    var seen =
-      b.px > CAM.x - pad && b.px < CAM.x + span.w + pad &&
-      b.py > CAM.y - pad && b.py < CAM.y + span.h + pad;
-    if (!seen) continue;
+    if (!onScreen(b)) continue;
     /* Everything a character already wears is an obstacle, whether or not it gets a bubble. */
     taken.push(boxesOf(b, "tag"));
     taken.push(boxesOf(b, "can"));
@@ -689,7 +932,8 @@ function speechLayout(t) {
       taken.push(box);
       live[i].el.style.bottom = "";
       live[i].el.querySelector(".wp-say").style.bottom =
-        ((live[i].el.getAttribute("data-label") === "up" ? 96 : 66) + lv * 26) + "px";
+        ((live[i].el.getAttribute("data-label") === "up" ? 96 : 66) + lv * 26 -
+          (54 - headOf(live[i]))) + "px";
       next.push(live[i].el);
       break;
     }
@@ -701,6 +945,13 @@ function speechLayout(t) {
   var all = document.querySelectorAll(".wp-actor.is-saying");
   for (var k = 0; k < all.length; k++) if (next.indexOf(all[k]) < 0) all[k].classList.remove("is-saying");
   for (var m = 0; m < next.length; m++) next[m].classList.add("is-saying");
+  /* Clamp the ones just granted, HERE, rather than leaving it to the next frame. This function
+     runs AFTER the bodies have been placed, so a bubble that appears on this frame is drawn
+     unclamped for exactly one frame before the edge check catches it — one frame at sixty a
+     second is invisible to a person and perfectly visible to a probe sampling every frame, and it
+     was the whole of the last forty-seven pixels of overflow. A correction owed on the frame the
+     thing appears is applied on that frame. */
+  for (var q = 0; q < live.length; q++) if (next.indexOf(live[q].el) >= 0) sayEdge(live[q], live[q].py);
   SAID = next;
 }
 
@@ -757,7 +1008,14 @@ function doors() {
 /* Worst first. A room holding one crashed agent and five happy ones is a room with a problem in
    it, so the light takes the loudest state in the room rather than an average or the last body
    the loop happened to see. Same order the rail sorts its own rows by. */
-var VOICES = ["error", "asked", "held", "finished", "working", "not-ours"];
+
+/* Which states TAKE a room's colour on their own, and which one it takes only unanimously.
+   ERROR, ASKED and HELD are things that want a person, so one of them is enough — a department
+   with a crashed agent in it burns red whoever else is in there. FINISHED is not like that: it is
+   the absence of anything wanting, so a room is only finished when EVERY body in it is. Ranked
+   ranked with the others it beat plain WORKING, so one done agent among five busy ones turned the
+   whole department green — a light saying the opposite of the truth, which is worse than none. */
+var LOUD = ["error", "asked", "held"];
 
 function lighting() {
   var now = {};
@@ -768,12 +1026,22 @@ function lighting() {
       var r = W.rooms[i];
       if (b.x >= r.x && b.x < r.x + r.w && b.y >= r.y && b.y < r.y + r.h) {
         var v = b.el.getAttribute("data-attention") || "working";
-        var rank = VOICES.indexOf(v);
-        if (rank < 0) rank = VOICES.length - 1;
-        if (!now[r.i] || rank < now[r.i].rank) now[r.i] = { rank: rank, voice: v };
+        var seat = now[r.i] || (now[r.i] = { rank: LOUD.length, voice: "working", done: true });
+        var rank = LOUD.indexOf(v);
+        if (rank >= 0 && rank < seat.rank) { seat.rank = rank; seat.voice = v; }
+        if (v !== "finished" && v !== "not-ours") seat.done = false;
         break;
       }
     }
+  }
+  /* A ROOM WHERE EVERY RUN HAS FINISHED IS THE ONE THING THIS VIEW HAD NO WAY TO SAY AT A GLANCE.
+     Posture says it up close — bodies on the couches instead of at the desks — but a posture is
+     twelve device pixels of height at zoom one and nothing at all at the scale where the whole
+     company is in frame, which is exactly the scale somebody asks "is anything still running?"
+     at. The room's own light is the only mark big enough there, and it was already tinted by the
+     taxonomy; it just had to be told what unanimous means. */
+  for (var kd in now) {
+    if (now[kd].rank === LOUD.length && now[kd].done) now[kd].voice = "finished";
   }
   for (var k in now) {
     if (LIT[k] && LIT[k].voice === now[k].voice) continue;
@@ -877,6 +1145,16 @@ function frame(ts) {
   var dt = Math.min(64, ts - TICK.t || 16);
   TICK.t = ts;
   TICK.dt = dt;
+  /* THE CAMERA MOVES FIRST, and everything is then placed against where it now IS.
+     Aiming and gliding AFTER the bodies left placement one frame behind the transform that would
+     actually paint it. Invisible for a sprite — it rides the stage, so a stale camera moves it
+     along with everything else — and very much not invisible for anything corrected in SCREEN
+     space, because that correction is computed against a camera which has since moved on. It
+     showed as a few pixels of a speech bubble still outside the panel after the clamp: the right
+     rule, one frame stale. Aim from last frame's positions (which is what following means),
+     glide, paint, THEN place. */
+  camStep(dt);
+  if (camGlide(dt)) camApply();
   var busy = 0;
   for (var id in BODIES) {
     var b = BODIES[id];
@@ -891,7 +1169,6 @@ function frame(ts) {
     if (b2.mode === "errand" || b2.mode === "delivering") LIVE++;
   }
   pumpErrands(ts);
-  camStep(dt);
   lighting();
   doors();
   speechLayout(ts);

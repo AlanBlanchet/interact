@@ -98,7 +98,7 @@ body {
   --t-metal: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
   --t-lit: var(--wp-h4);
   --t-glass: color-mix(in srgb, #9fd6e0 52%, var(--wp-bg));
-  --t-leaf: color-mix(in srgb, var(--wp-h4) 62%, var(--wp-bg));
+  --t-leaf: color-mix(in srgb, var(--wp-h4) 74%, var(--wp-bg));
   --t-ground: color-mix(in srgb, var(--wp-h4) 26%, var(--wp-bg));
   --t-ground-hi: color-mix(in srgb, var(--wp-h4) 36%, var(--wp-bg));
   --t-path: color-mix(in srgb, var(--wp-h3) 30%, var(--wp-bg));
@@ -107,6 +107,25 @@ body {
   --t-book: color-mix(in srgb, var(--wp-h2) 62%, var(--wp-bg));
   --t-book2: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
   --t-ink: color-mix(in srgb, var(--wp-ink) 78%, var(--wp-bg));
+
+  /* THE GROUNDS. Three greens, not one: a canopy painted in a single tone is a blob whatever
+     shape it is cut to, and the whole reason the old outdoor props read as floating is that a
+     flat green triangle has no top and no underside. Lit on the north-west shoulder, mid through
+     the body, shade under the south-east — the same sun the building's walls are lit by. */
+  /* THREE GREENS THAT ARE ACTUALLY THREE. At 82 / 62 / 38 percent of one hue the canopy came out
+     a single mint blob at any distance — the tones have to straddle the LAWN's own value, not sit
+     beside it, or a tree is a lighter rectangle of grass. Lit shoulder well above the ground,
+     shade well below it, and the shade mixed toward ink because that is the only direction with
+     anything under it in either theme. */
+  --t-leaf-hi: color-mix(in srgb, var(--wp-h4) 96%, var(--wp-bg));
+  --t-leaf-lo: color-mix(in srgb, var(--wp-h4) 52%, var(--wp-ink));
+  --t-bark: color-mix(in srgb, #6b4423 78%, var(--wp-bg));
+  --t-bark-hi: color-mix(in srgb, #97663a 78%, var(--wp-bg));
+  --t-stone: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
+  --t-stone-hi: color-mix(in srgb, var(--wp-fg) 44%, var(--wp-bg));
+  --t-bloom: color-mix(in srgb, var(--wp-h3) 84%, var(--wp-bg));
+  --t-water: color-mix(in srgb, var(--wp-h1) 40%, var(--wp-bg));
+  --t-water-hi: color-mix(in srgb, var(--wp-h1) 58%, var(--wp-bg));
 
   /* ── the light model ────────────────────────────────────────────────────────────────────
      Depth in this view comes from LIGHT, not from the theme. A room is dark and its lamps carve
@@ -173,6 +192,17 @@ body.vscode-high-contrast-light .wp {
      instead of receding and the whole plan flattened. It is the single biggest reason the light
      theme read as washed out. */
   --t-mass: color-mix(in srgb, var(--wp-ink) 62%, var(--wp-bg));
+
+  /* By day the grounds are the brightest thing on screen and every green mixed toward a WHITE
+     background goes to pastel — the same bottomless-mix problem the floors had. So the leaf
+     tones are mixed toward the INK instead, which is the only surface with anything under it. */
+  --t-ground: color-mix(in srgb, var(--wp-h4) 40%, var(--wp-bg));
+  --t-ground-hi: color-mix(in srgb, var(--wp-h4) 52%, var(--wp-bg));
+  --t-leaf: color-mix(in srgb, var(--wp-h4) 74%, var(--wp-bg));
+  --t-leaf-hi: color-mix(in srgb, var(--wp-h4) 92%, var(--wp-bg));
+  --t-leaf-lo: color-mix(in srgb, var(--wp-h4) 62%, var(--wp-ink));
+  --t-stone: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
+  --t-stone-hi: color-mix(in srgb, var(--wp-fg) 22%, var(--wp-bg));
 
   /* DAY. The sun is the fixture, so the pools are weaker and the SHADOWS carry the range: a hard
      shadow on a bright floor is the whole reason a daylit pixel scene reads as three-dimensional.
@@ -518,7 +548,12 @@ body.vscode-high-contrast-light .wp {
 .wp-lit[data-voice="error"] { --l-tint: var(--vscode-charts-red, #f14c4c); --l-mix: 100%; }
 .wp-lit[data-voice="asked"] { --l-tint: var(--vscode-charts-blue, #4daafc); --l-mix: 82%; }
 .wp-lit[data-voice="held"] { --l-tint: var(--vscode-charts-yellow, #d7ba7d); --l-mix: 55%; }
-.wp-lit[data-voice="finished"] { --l-tint: var(--vscode-charts-green, #89d185); --l-mix: 46%; }
+/* FINISHED earns more of the room than it used to, because it now means something different: it
+   fires only when EVERY run in a department is done, not when any one of them is. At 46% — a mix
+   tuned back when one done agent could trigger it — it was a barely-warmer grey, invisible at the
+   scale somebody actually asks "is anything still running?" at. It is a rare, unanimous, whole-
+   room fact now, and it is the only thing at whole-floor scale that carries it. */
+.wp-lit[data-voice="finished"] { --l-tint: var(--vscode-charts-green, #89d185); --l-mix: 78%; }
 
 /* And the fixture itself differs by trade: a machine room burns colder than a library. The old
    flat wash carried this and it was worth keeping — it is most of what tells two lit rooms apart
@@ -569,6 +604,17 @@ body.vscode-high-contrast-light .wp {
    shadow wearing it appears earlier in the document, so querySelector('.wp-cast') found a desk's
    shadow instead of the cast. */
 .wp-drop { pointer-events: none; }
+/* OUTDOORS IS NOT A ROOM. The same ink that reads as a hard contact shadow on an interior floor
+   is a black bar on a lawn — and the projection made every shadow bigger, so the alpha that was
+   tuned for a translated copy is now three times the coverage. Halved for everything standing in
+   the grounds and the passage, which is where the light comes from a sky rather than a lamp. */
+/* Lighter than a single shadow strictly needs to be, because outdoors they OVERLAP: two dappled
+   canopy shadows crossing compose to roughly double the ink, and at 30% that lands back on the
+   flat slab the dappling exists to prevent — visible in the dark theme, where the substrate has
+   less room underneath it to absorb the second layer. */
+.wp-loose { --wp-drop: color-mix(in srgb, var(--wp-ink) 22%, transparent); }
+body.vscode-light .wp .wp-loose,
+body.vscode-high-contrast-light .wp .wp-loose { --wp-drop: color-mix(in srgb, #232a3d 18%, transparent); }
 
 /* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
    every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */
@@ -685,8 +731,27 @@ body.vscode-high-contrast-light .wp {
   --c-badge: color-mix(in srgb, var(--accent, var(--wp-h1)) 42%, var(--wp-ink));
   --c-eye: #1b1723;
   --c-mouth: color-mix(in srgb, var(--c-skin, #e0a877) 62%, var(--wp-ink));
-  --c-ghost: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
-  --c-ghost-ink: color-mix(in srgb, var(--wp-fg) 52%, var(--wp-bg));
+  /* A VISITOR, not a hole. One flat tone for every part of a human silhouette is what a renderer
+     draws when it cannot find a sprite, so a foreign run read as broken rather than as a
+     category — correctly, because the information the eye is missing there is not hue but VALUE
+     STRUCTURE. This is a five-step ramp like everybody else's, in ONE hue: the same
+     --vscode-charts-purple the rail already prints NOT OURS in, so the two surfaces agree
+     about who this is. A monochrome person in a colour photograph. */
+  --c-guest: var(--vscode-charts-purple, #b180d7);
+  --c-guest-hair: color-mix(in srgb, var(--c-guest) 46%, var(--wp-ink));
+  --c-guest-skin: color-mix(in srgb, var(--c-guest) 40%, var(--wp-fg));
+  /* The COAT is the largest area a visitor puts on screen, so it decides whether they read as
+     background or as the loudest thing in the room. At 62% it out-saturated our own team, which
+     inverts the meaning: someone else's session should be legible and unmistakable, never the
+     first thing the eye lands on. The internal VALUE range does the identifying work; the
+     saturation only has to be enough to say "one hue". */
+  --c-guest-coat: color-mix(in srgb, var(--c-guest) 46%, var(--wp-bg));
+  --c-guest-leg: color-mix(in srgb, var(--c-guest) 32%, var(--wp-bg));
+  --c-guest-boot: color-mix(in srgb, var(--c-guest) 30%, var(--wp-ink));
+  --c-guest-eye: color-mix(in srgb, var(--c-guest) 30%, var(--wp-ink));
+  --c-guest-ink: color-mix(in srgb, var(--c-guest) 34%, var(--wp-ink));
+  --c-ghost: var(--c-guest-coat);
+  --c-ghost-ink: var(--c-guest-ink);
 }
 
 .wp-body {
@@ -744,6 +809,11 @@ body.vscode-high-contrast-light .wp {
     6px 8px, 6px 6px, 2px 6px, 2px 2px, 6px 2px);
 }
 .wp-actor.is-brain .wp-shade { width: 40px; left: -12px; }
+/* A seated body's contact with the floor is its feet and the seat under it, not a standing
+   footprint — narrower, and pulled back under the chair rather than out in front of it. */
+.wp-actor[data-posture="sit"] .wp-shade,
+.wp-actor[data-posture="slump"] .wp-shade { width: 26px; left: -6px; bottom: -3px; }
+.wp-actor[data-posture="lounge"] .wp-shade { width: 34px; left: -10px; bottom: -3px; }
 
 /* Two poses for standing, two for walking, in one element. Which pair shows is the engine's call:
    the walk frames are flipped on DISTANCE covered, not on a clock. */
@@ -753,6 +823,14 @@ body.vscode-high-contrast-light .wp {
 .wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) / 2) steps(1, end) var(--d, 0s) infinite; }
 @keyframes wp-fa { 0%, 62% { opacity: 1; } 63%, 100% { opacity: 0; } }
 @keyframes wp-fb { 0%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
+/* AT EASE BREATHES; STOPPED DOES NOT.
+   The two-frame swap above is gated on the running status, which is right for typing — it is the tempo of
+   work. A body on a couch is not working and must still be alive, so it takes the same two frames
+   at a quarter of the rate: one slow breath, on the building's own beat like everything else.
+   HELD deliberately gets nothing at all. A worker the registry says has stopped stops, and
+   absence of motion is the loudest way a picture can say it. */
+.wp-actor[data-posture="lounge"] .wp-stand .wp-f0 { animation: wp-fa calc(var(--beat) * 2.5) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor[data-posture="lounge"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) * 2.5) steps(1, end) var(--d, 0s) infinite; }
 .wp-walk { visibility: hidden; }
 .wp-actor.is-walking .wp-stand { visibility: hidden; }
 .wp-actor.is-walking .wp-walk { visibility: visible; }
@@ -764,6 +842,10 @@ body.vscode-high-contrast-light .wp {
 
 .wp-tag {
   position: absolute;
+  /* The engine writes the edge clamp onto this, in WORLD pixels — a nameplate scales with the
+     floor, unlike a speech bubble, so its correction is a world distance. On the left property
+     rather than in the transform for the same reason the bubble's is: a transitioned property
+     animates the correction away before anybody sees it. */
   left: 0;
   top: 3px;
   transform: translateX(-50%);
@@ -877,7 +959,15 @@ body.vscode-high-contrast-light .wp {
    that would collide with another bubble or with somebody's name. */
 .wp-say {
   position: absolute;
-  left: 0;
+  /* THE EDGE CLAMP RIDES THE LEFT PROPERTY, NOT THE TRANSFORM, for a measured reason rather
+     than a stylistic one. The transform carries a 220ms transition, so a clamp written into it is ANIMATED
+     to — for a fifth of a second after a bubble appears or the camera moves, the element sits at
+     the position the clamp exists to prevent. The probe caught exactly that: --sx correct at
+     69px, the computed matrix still reading the unshifted -66, and sixty-three pixels of the line
+     outside the panel. The left property is not transitioned, so it lands on the frame it is set.
+     Multiplied by --inv because left is in the STAGE coordinate space, which the camera
+     scales, while the clamp is a distance on the SCREEN. */
+  left: calc(var(--sx, 0px) * var(--inv, 1));
   bottom: 66px;
   transform: translate(-50%, 3px) scale(var(--inv, 1));
   transform-origin: 50% 100%;
@@ -890,7 +980,10 @@ body.vscode-high-contrast-light .wp {
   box-shadow: 2px 2px 0 var(--wp-ink);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 220ms ease, transform 220ms ease;
+  /* Opacity only. Transitioning the transform also transitions the scale(--inv) the camera
+     writes, so every zoom step left the bubbles a fifth of a second behind the floor they belong
+     to — a label that lags the world it labels. */
+  transition: opacity 220ms ease;
   z-index: 5;
 }
 .wp-say b { font-weight: 400; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -904,26 +997,36 @@ body.vscode-high-contrast-light .wp {
   margin-left: -2px;
   background: var(--wp-paper);
 }
-.wp-actor.is-saying .wp-say { opacity: 1; transform: translate(-50%, 0) scale(var(--inv, 1)); }
+.wp-actor.is-saying .wp-say {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(var(--inv, 1));
+}
 .wp-actor:hover, .wp-actor:focus-visible { z-index: 900 !important; }
 
 /* The back rank wears its name over its head: three tiles is room for two people and not enough
    for two people plus their labels, and the front body would otherwise be drawn over the back
    body's name. */
-.wp-actor[data-label="up"] .wp-tag { top: auto; bottom: 58px; }
-.wp-actor[data-label="up"] .wp-say { bottom: 96px; }
-.wp-actor[data-label="up"] .wp-mark { bottom: 84px; }
-.wp-actor[data-label="up"] .wp-kit { top: auto; bottom: 100px; }
+/* EVERY OFFSET THAT HANGS OFF A HEAD IS DERIVED FROM THE HEAD, never from a constant.
+   These were four numbers tuned for the one sprite height there used to be. A seated body is
+   twelve pixels shorter, so each of them left its label floating half a tile above the person it
+   belongs to — and the speech layout's reserved rectangles, which are the only reason two labels
+   are never drawn over each other, were computed from the same stale constants. --head is set per
+   actor from status.ts HEAD, and the layout reads the identical number off data-head. */
+.wp-actor[data-label="up"] .wp-tag { top: auto; bottom: calc(var(--head, 54px) + 4px); }
+.wp-actor[data-label="up"] .wp-say { bottom: calc(var(--head, 54px) + 42px); }
+.wp-actor[data-label="up"] .wp-mark { bottom: calc(var(--head, 54px) + 30px); }
+.wp-actor[data-label="up"] .wp-kit { top: auto; bottom: calc(var(--head, 54px) + 46px); }
 
 .wp-mark {
   position: absolute;
   left: 0;
-  bottom: 54px;
+  bottom: var(--head, 54px);
   transform: translateX(-50%) scale(.5);
   transform-origin: 50% 100%;
   pointer-events: none;
 }
-.wp-zzz { position: absolute; left: 22px; bottom: 44px; --mark: var(--wp-dim); }
+/* The z's belong over the HEAD, so they follow it down when somebody sits. */
+.wp-zzz { position: absolute; left: 22px; bottom: calc(var(--head, 54px) - 10px); --mark: var(--wp-dim); }
 
 /* Somebody has come over to say something. Both of them stop and turn to each other — a message
    that lands with nobody reacting is a note flying past a person rather than to one. */
@@ -935,8 +1038,12 @@ body.vscode-high-contrast-light .wp {
    an ancestor opacity composites the nameplate and the stamp with it, and a greyed-out ERROR is
    the one word that must never be hard to read. */
 .wp-actor[data-stalled="1"] .wp-body,
-.wp-actor[data-status="done"] .wp-body,
-.wp-actor[data-status="foreign"] .wp-body { opacity: calc(1 - var(--idle, 0) * .38); }
+.wp-actor[data-status="done"] .wp-body { opacity: calc(1 - var(--idle, 0) * .38); }
+/* NOT faded with idle. A visitor's session is not ours to age, and fading a body that is already
+   drawn in one hue is precisely how it stopped reading as a person and started reading as a gap
+   in the picture. It recedes by a fixed, small amount — enough to sit behind our own team in the
+   depth of the image, not enough to disappear out of it. */
+.wp-actor[data-status="foreign"] .wp-body { opacity: .88; }
 .wp-actor[data-status="error"] .wp-body { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--wp-bad) 70%, transparent)); }
 
 .wp-proto { position: absolute; visibility: hidden; pointer-events: none; }

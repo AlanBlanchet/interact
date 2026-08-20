@@ -116,6 +116,78 @@ export function stampFor(w: Standing): Stamp | null {
   return a === "working" ? null : STAMPS[a];
 }
 
+/* ── the state a BODY carries, rather than a placard ─────────────────────────────────────────
+ *
+ *  "All the agents say finished whereas we don't care... Instead they could have a seat or rest
+ *  in their room."
+ *
+ *  The stamp is a good device and it was being spent on everything. Four of the five states worth
+ *  saying got the same treatment as the one that wants somebody NOW, so a floor of finished work
+ *  shouted exactly as loudly as a crash, and the loudest thing on screen was a word that means
+ *  "nothing to do here".
+ *
+ *  So the ordinary states move into the BODY — where a person is in their room, and what they are
+ *  doing there — and the placard is kept for the two that genuinely want a human being:
+ *
+ *      ERROR     standing, out of the chair, plate burning, room lit red.   STAMPED.
+ *      ASKED     standing at the desk, turned toward the door.              STAMPED.
+ *      WORKING   sitting at their own desk, elbows out, typing.             no stamp.
+ *      HELD      the same seat, head down, eyes shut, z's.                  no stamp.
+ *      FINISHED  walked to the rest end of their room and sat down.         no stamp.
+ *      NOT OURS  never had a desk here: a visitor, sitting at the rest end. no stamp.
+ *
+ *  Nothing is deleted from the vocabulary — the rail still prints all six words, marks and
+ *  accents, and `stampFor` above still answers for the six, because the side bar renders a LIST
+ *  and a list has no posture to spend. This is the WORLD's reading of the same table.
+ */
+export type Posture = "sit" | "slump" | "lounge" | "stand";
+
+export interface Behaviour {
+  /** Which sprite pair the body rests in. */
+  posture: Posture;
+  /** Which end of its room it occupies. */
+  post: "desk" | "rest";
+  /** Whether the world hangs a placard over it. */
+  stamp: boolean;
+}
+
+const BEHAVIOUR: Record<Attention, Behaviour> = {
+  working: { posture: "sit", post: "desk", stamp: false },
+  held: { posture: "slump", post: "desk", stamp: false },
+  error: { posture: "stand", post: "desk", stamp: true },
+  asked: { posture: "stand", post: "desk", stamp: true },
+  finished: { posture: "lounge", post: "rest", stamp: false },
+  "not-ours": { posture: "lounge", post: "rest", stamp: false },
+};
+
+export function behaviourOf(a: Attention): Behaviour {
+  return BEHAVIOUR[a] ?? BEHAVIOUR.working;
+}
+
+/** How tall a body in each posture is ON SCREEN, in device pixels: the grid's rows plus the
+ *  derived rim, times the sprite scale.
+ *
+ *  Stated ONCE because four different things have to agree with it to the pixel — the nameplate
+ *  and the placard, which hang off the head; the speech layout's reserved rectangles, which are
+ *  what promise that no two labels are drawn over each other; and the stylesheet. They were four
+ *  hand-tuned constants tuned for one sprite height, and a posture that changes the height by
+ *  twelve pixels silently invalidates all of them at once: a name floating a finger's width above
+ *  somebody's head, and a reserve box that refuses bubbles over empty air while allowing one over
+ *  a word. */
+export const HEAD: Record<Posture, number> = {
+  stand: 54,
+  sit: 42,
+  slump: 42,
+  lounge: 45,
+};
+
+/** The stamp the WORLD hangs, which is not the stamp the rail prints. Two states earn a placard
+ *  over somebody's head; the rest are said by what the body is doing. */
+export function worldStampFor(w: Standing): Stamp | null {
+  const a = attentionOf(w);
+  return behaviourOf(a).stamp ? STAMPS[a as StampKind] : null;
+}
+
 /** Only work can stall. Used by both surfaces for the sleep mark and the stopped ambient. */
 export function isHeld(w: Standing): boolean {
   return w.status === "running" && w.idle_seconds >= STALL_SECONDS;

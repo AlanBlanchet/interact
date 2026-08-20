@@ -21,17 +21,23 @@
 import { ZONES } from "../../src/team";
 import type { TeamState, Worker, ZoneId } from "../../src/team";
 import { FACULTIES } from "../../src/capabilities";
-import { closeSheet, draw, drawFrames, openSheet } from "./pixels";
+import { closeSheet, draw, drawFrames, openSheet, place } from "./pixels";
+import type { Grid } from "./pixels";
 import {
   FACULTY_ART,
-  GHOST_PAL,
   NOTE,
   POSE_MOVE,
   POSE_REST,
+  POSE_REST_A,
+  POSE_REST_B,
+  POSE_SIT_A,
+  POSE_SIT_B,
+  POSE_SLUMP,
   POSE_WALK_A,
   POSE_WALK_B,
   SKIN_PAL,
   SNOOZE,
+  VISITOR_PAL,
 } from "./art";
 import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
 
@@ -40,11 +46,12 @@ import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
  *  without ever showing the edge of the drawing. */
 const GROUNDS = 40;
 import type { TileId } from "./tiles";
-import { buildWorld } from "./world";
+import { PITCH, buildWorld } from "./world";
 import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
 import { assignAccents, atMillis, faceOf, hash, idleAmount, shortDuration } from "./palette";
-import { WORDS, attentionOf, isHeld, markOf, stampFor, stampHtml } from "./status";
-import { CAST, inkPalette, lampsFor, poolRuns, runPath as litPath, wallShadow, LEVELS } from "./light";
+import { HEAD, WORDS, attentionOf, behaviourOf, isHeld, markOf, stampHtml, worldStampFor } from "./status";
+import type { Posture } from "./status";
+import { lampsFor, poolRuns, project, runPath as litPath, wallShadow, LEVELS } from "./light";
 import { buildPods, posts, tally } from "./layout";
 import type { Post } from "./layout";
 import { clip, esc } from "./esc";
@@ -146,11 +153,11 @@ export function placeOf(world: World, w: Cast): Room {
  *  zoomed without re-rendering anything. */
 function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
   const t = TILES[id];
-  return draw(t.grid, t.pal, {
+  return place(t.grid, t.pal, x * TILE_CELLS, y * TILE_CELLS, {
     scale: 1,
     outline: !!t.rim,
     className: cls || undefined,
-    attrs: `x="${x * TILE_CELLS}" y="${y * TILE_CELLS}"` + (extra ? " " + extra : ""),
+    attrs: extra,
   });
 }
 
@@ -163,16 +170,28 @@ function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
 const FLAT: ReadonlySet<TileId> = new Set<TileId>([
   "floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug",
   "doorCap", "doorWay", "matt",
+  // Water is a hole in the ground, not a thing standing on it, and ground cover an inch high
+  // throws nothing you could see — drawn, its shadows are the dark specks that made the lawn
+  // look littered rather than textured.
+  "pond", "tuft", "blooms",
 ]);
+
+const DROP_PAL = { "#": "var(--wp-drop)" };
+/** The projected grid per tile, cached by IDENTITY rather than the drawn string: the pixel engine
+ *  keys its own body cache — and the render sheet's `<use>` ids — off the grid object, so handing
+ *  it a freshly-built array on every placement would defeat both. One array per tile id, forever. */
+const CAST_GRID = new Map<TileId, string[]>();
 
 function castOf(id: TileId, x: number, y: number): string {
   if (FLAT.has(id)) return "";
-  const t = TILES[id];
-  return draw(t.grid, inkPalette(t.pal), {
+  let grid = CAST_GRID.get(id);
+  if (!grid) CAST_GRID.set(id, (grid = project(TILES[id].grid, !!TILES[id].leafy)));
+  // NO offset. The projection already lands every pixel where the ground is; a translation on
+  // top of it is exactly what lifted the old shadow off the thing casting it.
+  return place(grid, DROP_PAL, x * TILE_CELLS, y * TILE_CELLS, {
     scale: 1,
     outline: false,
     className: "wp-drop",
-    attrs: `x="${x * TILE_CELLS + CAST.dx}" y="${y * TILE_CELLS + CAST.dy}"`,
   });
 }
 
@@ -251,7 +270,10 @@ function renderMap(world: World): string {
   let out =
     `<svg class="wp-map" width="${world.cols * TILE_PX}" height="${world.rows * TILE_PX}" ` +
     `viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true" focusable="false">` +
-    `<defs>${patterns(["floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug"])}</defs>`;
+    `<defs>${patterns([
+      "floor", "carpet", "grass", "meadow", "earth", "pond", "wall", "path", "lino", "runner",
+      "face", "mass", "dais", "rug",
+    ])}</defs>`;
 
   // The envelope, then everything carved out of it. Mass first: the building is solid until a
   // room or a passage takes a bite out of it, which is what gives a shallow room something
@@ -264,6 +286,14 @@ function renderMap(world: World): string {
   out += patch("grass", {
     x: -GROUNDS, y: -GROUNDS, w: world.cols + GROUNDS * 2, h: world.rows + GROUNDS * 2,
   });
+  /* THE GROUND OF THE SITE, before anything is built on it. Meadow left unmown, bare earth, the
+     pond and the made path — as pattern runs, exactly like a room's floor, because a patch of
+     ground is a rectangle and never five hundred tile elements. A change of GROUND is the only
+     mark on a site big enough to be read as a SHAPE at the scale where the whole company is in
+     frame, which is precisely the scale the camera exists to reach: props are one tile each and
+     one tile is a speck there. */
+  for (const layer of world.terrain) out += patches(layer.tile, layer.runs);
+
   out += patch("mass", {
     x: world.envelope.x,
     y: world.envelope.y,
@@ -525,10 +555,27 @@ const EYE_MARK =
 
 /* ── the people ──────────────────────────────────────────────────────────────────────────────*/
 
-function spriteOf(w: Cast): string {
-  const pal = w.status === "foreign" ? GHOST_PAL : SKIN_PAL;
+/** The pair a body RESTS in, chosen by what its state means it is doing.
+ *
+ *  Deliberately emitted under the same class the standing pair used to carry, so every rule that
+ *  already animates a resting body — the two-frame swap on the beat, the walk swap, the lean —
+ *  keeps working untouched. A posture is a different DRAWING, not a different mechanism.
+ *
+ *  Both seated pairs are fourteen rows against the standing figure's sixteen and every sprite is
+ *  anchored at the boots, so sitting down drops the head six device pixels: the posture is legible
+ *  before any of its detail is, which is the only test that matters at this size.
+ */
+const RESTING: Record<Posture, readonly [Grid, Grid]> = {
+  stand: [POSE_REST, POSE_MOVE],
+  sit: [POSE_SIT_A, POSE_SIT_B],
+  slump: [POSE_SLUMP, POSE_SLUMP],
+  lounge: [POSE_REST_A, POSE_REST_B],
+};
+
+function spriteOf(w: Cast, posture: Posture): string {
+  const pal = w.status === "foreign" ? VISITOR_PAL : SKIN_PAL;
   return (
-    drawFrames([POSE_REST, POSE_MOVE], pal, { scale: 3, className: "wp-sprite wp-stand" }) +
+    drawFrames(RESTING[posture], pal, { scale: 3, className: "wp-sprite wp-stand" }) +
     drawFrames([POSE_WALK_A, POSE_WALK_B], pal, { scale: 3, className: "wp-sprite wp-walk" })
   );
 }
@@ -563,7 +610,12 @@ function faculties(w: Cast, rare: Map<string, number>): string {
 
 function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, rare: Map<string, number>): string {
   const stalled = isHeld(w) ? 1 : 0;
-  const st = stampFor(w);
+  const how = behaviourOf(attentionOf(w));
+  /* A state cannot conjure furniture. Where the place has nothing to sit on — the path outside
+     the gate, an open plaza — a seated posture falls back to standing rather than putting a
+     person cross-legged on a lawn. */
+  const posture: Posture = seat.perch === false && how.posture !== "stand" ? "stand" : how.posture;
+  const st = worldStampFor(w);
   const say = w.activity ? clip(w.activity, 64) : "";
   const label =
     `${w.name} — ${w.status}, ${LABELS.get(w.zone) ?? w.zone}` + (w.activity ? `: ${w.activity}` : "");
@@ -572,19 +624,22 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
     `data-status="${esc(w.status)}" data-zone="${esc(w.zone)}" data-stalled="${stalled}" ` +
     // The state in the RAIL's words, so the room's light and the rail's stamp are one taxonomy
     // read by two renderers rather than two tables that happen to agree today.
-    `data-attention="${esc(attentionOf(w))}" ` +
+    `data-attention="${esc(attentionOf(w))}" data-posture="${posture}" data-head="${HEAD[posture]}" ` +
+    // Which way the body looks once it settles. Worth nothing at a desk and everything on a
+    // bench: two people on one couch turned toward each other are sitting together.
+    `data-face="${seat.face ?? 1}" ` +
     `data-seat="${seat.x},${seat.y}" data-say="${esc(say)}" data-home="${esc(home.id)}" ` +
     (seat.up ? `data-label="up" ` : "") +
     `data-dept="${esc(w.room || w.department || "")}" ` +
     // A head start of their own, so eleven people at their desks are eleven people rather than one
     // animation played eleven times. Measured: without it every sprite reported the same phase.
-    `style="--accent:${accent};--idle:${idleAmount(w.idle_seconds)};` +
+    `style="--accent:${accent};--idle:${idleAmount(w.idle_seconds)};--head:${HEAD[posture]}px;` +
     `--d:-${((hash(w.run_id) % 240) / 100).toFixed(2)}s;${faceOf(w.run_id)}" ` +
     `tabindex="0" role="button" title="${esc(label)}" aria-label="${esc(label)}">` +
     (st ? `<span class="wp-mark">${stampHtml(st)}</span>` : "") +
     (say ? `<span class="wp-say"><b>${esc(say)}</b></span>` : "") +
     `<span class="wp-shade"></span>` +
-    `<span class="wp-body">${spriteOf(w)}` +
+    `<span class="wp-body">${spriteOf(w, posture)}` +
     (stalled ? `<span class="wp-zzz">${draw(SNOOZE.grid, SNOOZE.pal, { scale: 2, outline: false })}</span>` : "") +
     `</span>` +
     `<span class="wp-tag">${esc(clip(w.name, 16))}` +
@@ -597,7 +652,7 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
 
 /** Who stands where. Seats are handed out per room in a stable order so a person does not hop
  *  desks between two snapshots, and the agent that was asked first takes the seat at the core. */
-function seating(world: World, cast: Cast[], brainId: string | null): Map<string, Seat> {
+export function seating(world: World, cast: Cast[], brainId: string | null): Map<string, Seat> {
   const out = new Map<string, Seat>();
   const byRoom = new Map<Room, Cast[]>();
   for (const w of cast) {
@@ -612,11 +667,63 @@ function seating(world: World, cast: Cast[], brainId: string | null): Map<string
       if (b.run_id === brainId) return 1;
       return hash(a.run_id) - hash(b.run_id);
     });
-    list.forEach((w, i) => {
-      const seat = room.seats[i % Math.max(1, room.seats.length)] ?? { x: room.x + 2, y: room.y + 3 };
-      const wrap = Math.floor(i / Math.max(1, room.seats.length));
-      out.set(w.run_id, { x: seat.x, y: seat.y - (wrap % 2), up: seat.up });
-    });
+    /* THE STATE PICKS THE END OF THE ROOM, arrival order only picks the place within it. This is
+       the whole difference between a floor you can read and sixteen interchangeable bodies: a
+       department at its desks is working, and the same department on its couches has finished,
+       from far enough back that no word on screen is legible at all.
+
+       Seat CHANGES are how the transition happens, and they cost nothing here: the engine already
+       treats a moved seat as "the roster moved them", so it routes the body across the room and
+       walks it there. Nobody teleports into a chair. */
+    const desks = room.seats.filter((s) => s.post !== "rest");
+    const rests = room.seats.filter((s) => s.post === "rest");
+    const used = new Set<Seat>();
+    /** The distinct columns the room's places stand in — already a pitch apart by the rule the
+     *  building is checked against, so an overflow queue can borrow them. */
+    const cols = [...new Set(room.seats.map((p) => p.x))].sort((a, b) => a - b);
+    let extra = 0;
+    /* OVERFLOW TAKES ANOTHER DECLARED PLACE; it never invents one.
+       This used to wrap — `seat.y - (wrap % 2)` — which manufactures a standing place ONE TILE
+       from a real one at render time, in a coordinate space the building never agreed to. The
+       whole pitch rule is enforced on the world's own seats, so an invented place is invisible to
+       it by construction: three finished agents in a two-couch room put the third one a single
+       tile above the first, sprites overlapping and nameplates illegible, while every invariant
+       reported the room correct. So: take the end of the room your state asks for, then the other
+       end (a department with nobody working has desks going spare), and only when every declared
+       place in the room is occupied fall back to a step — and a step of a full PITCH, which is
+       the distance the rest of the building is built on. */
+    const take = (wants: "desk" | "rest"): Seat => {
+      const order = wants === "rest" ? [rests, desks] : [desks, rests];
+      for (const pool of order) {
+        for (const seat of pool) if (!used.has(seat)) { used.add(seat); return seat; }
+      }
+      /* Past every declared place — which a room sized from its own headcount cannot actually
+         reach, being built with three places per two people — the fallback still has to be
+         INJECTIVE and still has to respect the pitch, and getting there took two goes. The first
+         counted `used.size`, and adding a seat object already in that Set is a no-op, so the
+         counter FROZE and every body past the first landed on the identical cell. The second gave
+         each body its own counter but kept stepping from the BASE SEAT's own row — and two base
+         seats in the same column are three rows apart, so two different steps could land two
+         rows from each other.
+         A queue is a queue: it takes its COLUMNS from the seat columns (which the pitch rule
+         already guarantees are far enough apart) and its ROWS from the counter alone. Two bodies
+         then differ either in column or in ring, and both are a PITCH. */
+      const col = cols[extra % Math.max(1, cols.length)] ?? room.x + 2;
+      const ring = Math.floor(extra / Math.max(1, cols.length));
+      extra++;
+      return { x: col, y: room.y + room.h + ring * PITCH, post: "rest", face: 1, perch: false };
+    };
+    for (const w of list) {
+      const seat = take(behaviourOf(attentionOf(w)).post);
+      out.set(w.run_id, {
+        x: seat.x,
+        y: seat.y,
+        up: seat.up,
+        post: seat.post,
+        face: seat.face,
+        perch: seat.perch,
+      });
+    }
   }
   return out;
 }
@@ -692,7 +799,13 @@ function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): strin
     chip("running", t.running, WORDS.running, "var(--wp-ok)") +
     chip("error", t.error, WORDS.error, "var(--wp-bad)") +
     chip("held", t.idle, WORDS.held, "var(--wp-dim)") +
-    (mail ? `<span class="wp-chip">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b></span>` : "") +
+    /* The other four chips read "11 on", "1 error", "1 held" — a number and a WORD. This one was
+       a bare envelope and a number, so the only count on the strip nobody could name was the one
+       whose glyph is smallest. It says what it counts. */
+    (mail
+      ? `<span class="wp-chip">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b> ` +
+        `${mail === 1 ? "note" : "notes"}</span>`
+      : "") +
     `<span class="wp-chip wp-spend">${money(t.cost)}</span>` +
     `<span class="wp-clock">${esc(when)}</span>` +
     `</header>`

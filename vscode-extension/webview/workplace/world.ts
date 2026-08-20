@@ -34,6 +34,16 @@ import type { TileId } from "./tiles";
    places three tiles apart — which is what a 36px character with a name over it actually needs. */
 
 export const BAY = 3;
+/** HOW FAR APART TWO STANDING PLACES MUST BE, in tiles, along BOTH axes.
+ *
+ *  Three, and it is not a taste number: a nameplate is capped at 66 world pixels and a tile is 24,
+ *  so two people two tiles apart wear plates that overlap by eighteen; and a body's capability
+ *  glyphs hang at its feet and run twenty-two pixels past them, straight through the face of
+ *  anyone two rows in front. Both were measured, both were reported, and both came back — because
+ *  the first fix was applied to ONE of the four places that emit a row of seats. It is a property
+ *  of a PLACE, so it lives with the places, and `dev/placement.ts` fails the build if any pair in
+ *  any room breaks it. */
+export const PITCH = 3;
 export const MIN_BAYS = 2;
 /** The hall, and the runner down the middle of it. */
 export const HALL_H = 3;
@@ -46,8 +56,12 @@ const LOBBY_W = 8;
 /** Grounds around the building. The world has to be bigger than the level in BOTH axes or the
  *  camera runs out of somewhere to go: a tall narrow side bar letterboxes the plan and puts the
  *  black bars back, which is the defect the camera exists to remove. */
-const MX = 4;
-const MY = 6;
+/* Grounds around the building, in tiles. The world has to be bigger than the level in BOTH axes
+   or the camera runs out of somewhere to go — and it has to be bigger by ENOUGH: at four columns
+   and no right margin at all there was nowhere to put a pond, a meadow or a tree line, so every
+   attempt at landscaping was silently clipped into the four-tile verge west of the building. */
+const MX = 9;
+const MY = 9;
 
 export interface Rect {
   x: number;
@@ -68,6 +82,20 @@ export interface Dept {
   kit?: readonly string[];
 }
 
+/** Which half of a room a standing place belongs to.
+ *
+ *  This is the whole placement model. A room used to be a bag of interchangeable standing places
+ *  and a body was handed the next free one, so where somebody stood said nothing at all: an agent
+ *  that had finished stood in the same spot, in the same pose, as one mid-command, and the only
+ *  difference between them was a word stamped on a placard over their head. Two ranks, three rows
+ *  apart, the back one facing nothing — "a person floating in the middle of a room with a desk two
+ *  tiles away", which is exactly what it looked like.
+ *
+ *  Now a room has a WORKING end and a REST end, and which one you occupy is your state. You read
+ *  a department's condition off where its people are before you read a single word.
+ */
+export type RoomEnd = "desk" | "rest";
+
 export interface Seat {
   x: number;
   y: number;
@@ -75,6 +103,19 @@ export interface Seat {
    *  front of another otherwise has its head in the back rank's labels, and depth ordering draws
    *  the front body over them — the wrong person hiding the right person's name. */
   up?: boolean;
+  /** Which end of the room. Handed out by state, not by arrival order. */
+  post?: RoomEnd;
+  /** Whether there is anything HERE to sit on.
+   *
+   *  Posture comes from a run's state, but a state cannot conjure furniture: a fetch agent
+   *  standing in a field outside the front gate has no desk and no bench, and drawing it seated
+   *  puts a person cross-legged on a lawn. So a place declares what it can offer and a seated
+   *  posture falls back to standing where it cannot be honoured. Absent means yes. */
+  perch?: boolean;
+  /** Which way a body looks once it settles here. The sprite only mirrors, so this is worth
+   *  nothing at a desk and everything on a couch: two people on one bench turned INWARD are
+   *  sitting together, and the same two turned the same way are queuing. */
+  face?: -1 | 1;
 }
 
 export interface Door {
@@ -151,6 +192,10 @@ export interface World {
   /** Things standing in the passage, and things standing outside the building. */
   hallProps: Prop[];
   scenery: Prop[];
+  /** The GROUND of the site, where it is not plain lawn — meadow left unmown, bare earth, water.
+   *  Emitted as horizontal runs per kind, exactly like a room's floor, because a patch of ground
+   *  is one rectangle of a pattern and never five hundred tile elements. */
+  terrain: { tile: TileId; runs: Rect[] }[];
 }
 
 function hash32(text: string): number {
@@ -170,7 +215,21 @@ function hash32(text: string): number {
 
 interface Archetype {
   kind: string;
-  /** Interior rows. Six is the floor: two ranks of people need three rows between them. */
+  /** Interior rows.
+   *
+   *  EIGHT is the floor now, not six, and the reason is a bug the old number hid. The interior
+   *  rows are `depth - 3`, the front rank stood at `iy + 2` and the back rank at `iy + depth-4` —
+   *  which for a depth-6 room is the SAME ROW. Both ranks landed on identical cells, the seat
+   *  de-duplicator walked one of them to "the nearest free cell", and that arbitrary cell is
+   *  where a third of the company was standing. It has no visible symptom: everyone is on the
+   *  floor, nobody is in a wall, and the placement is simply meaningless.
+   *
+   *  A room now needs: a back-wall row, a bank of desks and its rank, a SECOND bank and its rank,
+   *  open floor, the rest furniture and the rest rank. Two banks, because a bay is three tiles
+   *  wide and one bay is one desk — so with the old single rank a six-person department had three
+   *  places for six people and the overflow was pushed one row NORTH, which is the desk row. That
+   *  is what the close-up showed: two ranks stacked on top of the furniture they were supposed to
+   *  be working at. A room holds its people or it is the wrong size. */
   depth: number;
   /** Against the back wall, one per bay. */
   back: TileId[];
@@ -187,7 +246,7 @@ interface Archetype {
 const ARCHETYPES: Record<string, Archetype> = {
   reads: {
     kind: "stacks",
-    depth: 7,
+    depth: 12,
     back: ["stacks", "stacks", "ladder", "cabinet"],
     face: ["pinboard", "winFace", "poster", "clock"],
     desk: "desk",
@@ -196,7 +255,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   },
   writes: {
     kind: "drafting",
-    depth: 6,
+    depth: 11,
     back: ["cabinet", "shelf", "crates", "cabinet"],
     face: ["winFace", "pinboard", "poster", "winFace"],
     desk: "drafting",
@@ -205,7 +264,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   },
   runs: {
     kind: "machine",
-    depth: 6,
+    depth: 11,
     back: ["rack", "rack", "crates", "rack"],
     face: ["pipes", "vent", "screenWall", "pipes"],
     desk: "desk",
@@ -214,7 +273,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   },
   sees: {
     kind: "gallery",
-    depth: 6,
+    depth: 11,
     back: ["screen", "board", "screen", "shelf"],
     face: ["screenWall", "clock", "screenWall", "winFace"],
     desk: "desk",
@@ -223,7 +282,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   },
   searches: {
     kind: "signals",
-    depth: 7,
+    depth: 12,
     back: ["dish", "globe", "board", "rack"],
     face: ["winFace", "poster", "pinboard", "winFace"],
     desk: "desk",
@@ -232,7 +291,7 @@ const ARCHETYPES: Record<string, Archetype> = {
   },
   delegates: {
     kind: "boardroom",
-    depth: 6,
+    depth: 11,
     back: ["board", "cabinet", "board", "shelf"],
     face: ["whiteboard", "clock", "whiteboard", "poster"],
     desk: "desk",
@@ -243,7 +302,7 @@ const ARCHETYPES: Record<string, Archetype> = {
 
 const COMMONS: Archetype = {
   kind: "commons",
-  depth: 6,
+  depth: 11,
   back: ["sofa", "plant", "urn", "sofa"],
   face: ["poster", "winFace", "clock", "pinboard"],
   desk: "bench",
@@ -380,22 +439,69 @@ function furnish(
     room.props.push({ x, y, tile, live: LIVE_OF[tile] });
   };
 
+  /* TWO BANKS OF DESKS. A bay is three tiles and one bay is one desk, so a single rank gave a
+     six-person department three places — and the overflow was pushed a row NORTH onto the desks
+     themselves. The second bank stands in the open, with no back wall behind it, which is what an
+     open-plan floor actually looks like and what makes the room read as deeper than one row of
+     furniture glued to a wall. */
+  const banks = 2;
   for (let i = 0; i < bays; i++) {
     const cx = ix + i * BAY + 1;
     put(cx, iy, arch.back[(i + seed) % arch.back.length]);
-    // Every OTHER desk gets a lit screen. All of them would be forty animations in one room and
-    // a wall of blinking; every other one reads as a floor where some people are at their machine.
-    room.props.push({
-      x: cx,
-      y: iy + 1,
-      tile: arch.desk,
-      live: (i + seed) % 2 === 0 ? LIVE_OF[arch.desk] : undefined,
-    });
+    for (let bank = 0; bank < banks; bank++) {
+      // Every OTHER desk gets a lit screen. All of them would be forty animations in one room and
+      // a wall of blinking; every other one reads as a floor where some people are at a machine.
+      room.props.push({
+        x: cx,
+        y: iy + 1 + bank * PITCH,
+        tile: arch.desk,
+        live: (i + seed + bank) % 2 === 0 ? LIVE_OF[arch.desk] : undefined,
+      });
+    }
   }
 
-  // Two ranks, three rows apart at the very least. The back rank wears its name the other way up.
-  for (let i = 0; i < bays; i++) room.seats.push({ x: ix + i * BAY + 1, y: iy + 2, up: true });
-  for (let i = 0; i < bays; i++) room.seats.push({ x: ix + i * BAY + 1, y: iy + D - 1 });
+  /* ── the two ends of the room ────────────────────────────────────────────────────────────
+     THE WORKING END is the desk rank: one place per bay, directly in front of its own desk, so a
+     body settled there is at a specific machine rather than somewhere in the room's general
+     direction. THE REST END is the far row: a couch, a bench and a low table against the back of
+     the room, with places in front of them and each one turned INWARD.
+
+     The rank that used to sit here faced nothing and belonged to nothing — and in a depth-6 room
+     it was arithmetically the same row as the desk rank, so both collapsed onto one another and
+     the de-duplicator scattered the overflow. */
+  const restRow = iy + D - 1;
+  const restProps = restRow - 1;
+  for (let bank = 0; bank < banks; bank++) {
+    for (let i = 0; i < bays; i++) {
+      room.seats.push({
+        x: ix + i * BAY + 1,
+        y: iy + 2 + bank * PITCH,
+        // The front bank wears its name over its head: the bank behind it is three tiles back and
+        // would otherwise have its own head in the front rank's labels.
+        up: bank === 0,
+        post: "desk",
+        face: i % 2 ? -1 : 1,
+      });
+    }
+  }
+  /* The furniture first, then the places in front of it, so a body that sits down has something
+     behind it rather than sitting on the floor. Alternating pieces: a two-cell couch reads as a
+     couch only when what is beside it is NOT another couch. */
+  const restKit: TileId[] = ["sofa", "bench", "sofa", "chair"];
+  for (let i = 0; i < bays; i++) {
+    const cx = ix + i * BAY + 1;
+    put(cx, restProps, restKit[(i + seed) % restKit.length]);
+    // A low table between two seats, and greenery at the ends: the difference between a row of
+    // chairs and a place somebody would actually sit.
+    if (i > 0) put(cx - 1, restProps, (i + seed) % 2 === 0 ? "tableM" : "plant");
+    room.seats.push({
+      x: cx,
+      y: restRow,
+      post: "rest",
+      // Turned inward, in pairs. Two people on one bench looking the same way are a queue.
+      face: i % 2 === 0 ? 1 : -1,
+    });
+  }
 
   // The face: a fixture over every second bay, offset by the room's hash so no two rooms carry
   // the same things in the same order.
@@ -411,6 +517,22 @@ function furnish(
   }
   // One wall lamp, always on the face, always off-centre.
   room.props.push({ x: ix + ((seed % Math.max(1, bays)) * BAY), y: faceY, tile: "lamp", live: "lamp" });
+
+  /* And places to simply STAND, in the open floor between the banks and the rest end. They are
+     the last resort: a room with four times as many places as bays can never run out and push a
+     body onto its own furniture, which is the failure this whole section exists to end. Marked
+     with nothing to sit on, so anybody sent here is drawn standing. */
+  {
+    const y = iy + 2 + banks * PITCH;
+    // Clear of the rest row by the SAME pitch it is clear of the desks by. It was only ever
+    // checked against the furniture above it, so in a room of this depth it landed two rows from
+    // the couches and a standing agent's nameplate cut across a seated one's head.
+    if (y + PITCH <= restRow) {
+      for (let i = 0; i < bays; i++) {
+        room.seats.push({ x: ix + i * BAY + 1, y, post: "rest", face: i % 2 ? -1 : 1, perch: false });
+      }
+    }
+  }
 
   // The floor between the desks and the door. Left bare it is the "vast empty carpet" that made
   // every room read as a rectangle with props glued to one edge; it is where the things a room
@@ -435,7 +557,7 @@ function furnish(
     for (let k = -1; k <= 1; k++) forbidden.add(d.x + k + ":" + (d.y + (d.deep ? 2 : -2)));
   }
   let c = seed;
-  for (let row = iy + 3; row < iy + D; row++) {
+  for (let row = iy + 2 + banks * PITCH + 1; row < restProps; row++) {
     for (let i = 0; i < bays; i++) {
       c++;
       if ((c * 7 + row * 3) % 4) continue;
@@ -446,8 +568,8 @@ function furnish(
   }
   // And a rug under the middle of it, which is ground rather than furniture: a room whose whole
   // interior is one colour is waiting space, not a room.
-  if (main.w >= 8 && D >= 6) {
-    room.rug = { x: ix + 1, y: iy + 3, w: main.w - 4, h: Math.min(3, D - 4) };
+  if (main.w >= 8 && D >= 11) {
+    room.rug = { x: ix + 1, y: iy + 2 + banks * PITCH + 1, w: main.w - 4, h: Math.min(2, D - 11) };
   }
 
   // The one-of-a-kind thing. It stands in the alcove where the room has one — which is exactly
@@ -465,7 +587,7 @@ function furnish(
     const mate = uniques.pick(["fan", "coffee", "printer", "cabinet", "crates"]) ?? "crates";
     put(ax + 1, ay + 1, mate);
   } else {
-    put(ix + (bays - 1) * BAY + 1, iy + D - 3, only);
+    put(ix + (bays - 1) * BAY + 2, iy + 2 + banks * PITCH, only);
   }
 }
 
@@ -478,7 +600,7 @@ function loosen(room: Room, uniques: Uniques, seed: number): void {
     room.props.push({ x, y, tile, live: LIVE_OF[tile] });
   };
   const wish: TileId[] = ["coffee", "cooler", "tank", "vending", "plant"];
-  const kit: TileId[] = ["sofa", "plant", "bench", "urn", "crates"];
+  const kit: TileId[] = ["sofa", "plant", "bench", "tableM", "crates"];
   let n = 0;
   for (let y = b.y + 1; y < b.y + b.h - 1; y += 3) {
     for (let x = b.x + 2; x < b.x + b.w - 2; x += 4) {
@@ -493,9 +615,27 @@ function loosen(room: Room, uniques: Uniques, seed: number): void {
       put(x, y, kit[(n + seed) % kit.length]);
     }
   }
-  for (let y = b.y + 2; y < b.y + b.h - 2; y += 3) {
-    for (let x = b.x + 3; x < b.x + b.w - 2; x += 3) {
-      room.seats.push({ x, y, up: y === b.y + 2 });
+  /* A plaza is where you stand around, so every place in it is a REST place — and the ones that
+     are actually in front of a couch are the ones you may sit on. Laid out FROM the furniture
+     rather than on a lattice of their own: a seat three cells from the nearest bench is the
+     "person floating in the middle of the room" defect, one room type further out. */
+  const mid = b.x + b.w / 2;
+  const sittable = new Set<string>(["sofa", "bench"]);
+  for (const prop of room.props) {
+    if (!sittable.has(prop.tile)) continue;
+    room.seats.push({
+      x: prop.x,
+      y: prop.y + 1,
+      up: true,
+      post: "rest",
+      face: prop.x < mid ? 1 : -1,
+    });
+  }
+  // And somewhere to simply stand, for the overflow and for anybody the company filed under no
+  // department at all.
+  for (let y = b.y + 3; y < b.y + b.h - 2; y += PITCH + 1) {
+    for (let x = b.x + 4; x < b.x + b.w - 2; x += PITCH + 1) {
+      room.seats.push({ x, y, post: "rest", face: x < mid ? 1 : -1, perch: false });
     }
   }
 }
@@ -591,7 +731,7 @@ export function buildWorld(
   const bandSpan = Math.max(14, bandW(north), bandW(south));
   const lobbyX = bandStart + bandSpan;
   const facadeX = lobbyX + LOBBY_W;
-  const cols = facadeX + 1 + OUT;
+  const cols = facadeX + 1 + OUT + MX;
   const gateY = hallY + 1;
 
   const rooms: Room[] = [];
@@ -718,22 +858,34 @@ export function buildWorld(
     }
     chamber.props.push({ x: cx - 3, y: cy - 5, tile: "plant", live: "sway" });
     chamber.props.push({ x: cx + 3, y: cy - 5, tile: "plant", live: "sway" });
-    chamber.props.push({ x: cx - 3, y: cy + 4, tile: "bench" });
-    chamber.props.push({ x: cx + 3, y: cy + 4, tile: "bench" });
+    // A bench for every place in front of it, and the tables BETWEEN them — a seat whose north
+    // cell is a table is a person sitting on a table.
+    for (let i = -1; i <= 1; i++) chamber.props.push({ x: cx + i * BAY, y: cy + 4, tile: "bench" });
+    chamber.props.push({ x: cx - 1, y: cy + 4, tile: "tableM" });
+    chamber.props.push({ x: cx + 1, y: cy + 4, tile: "tableM" });
     chamber.props.push({ x: cx - 3, y: top + 1, tile: "board", live: "screen" });
     chamber.props.push({ x: cx + 3, y: bot - 1, tile: "crates" });
     const bays = baysOf(core.brain ?? 0);
     const lo = MX + 3;
     const hi = MX + chamberW - 2;
     const fits = (x: number): boolean => x >= lo && x <= hi;
-    chamber.seats.push({ x: cx, y: cy, up: true });
+    // The dais is the working end; the benches under the colonnade are where you sit when the
+    // work is done. Same rule as every department — the chamber simply has no walls.
+    /* The chamber has no desks and never had: it is a colonnade round a raised dais, which is the
+       org chart drawn as architecture. So its working places are STANDING places — nothing to sit
+       at, and a body drawn seated on a dais is a body sitting on the floor. */
+    chamber.seats.push({ x: cx, y: cy, up: true, post: "desk", face: 1, perch: false });
     for (let i = 1; i < bays + 1; i++) {
-      if (fits(cx - i * BAY)) chamber.seats.push({ x: cx - i * BAY, y: cy, up: true });
-      if (fits(cx + i * BAY)) chamber.seats.push({ x: cx + i * BAY, y: cy });
+      if (fits(cx - i * BAY)) {
+        chamber.seats.push({ x: cx - i * BAY, y: cy, up: true, post: "desk", face: 1, perch: false });
+      }
+      if (fits(cx + i * BAY)) {
+        chamber.seats.push({ x: cx + i * BAY, y: cy, post: "desk", face: -1, perch: false });
+      }
     }
-    for (let i = 0; i < bays + 1; i++) {
-      const x = cx - BAY + i * BAY;
-      if (fits(x)) chamber.seats.push({ x, y: cy + 3 });
+    for (let i = -1; i <= 1; i++) {
+      const x = cx + i * BAY;
+      if (fits(x)) chamber.seats.push({ x, y: cy + 5, post: "rest", face: x < cx ? 1 : -1 });
     }
     chamber.dais = { x: cx - 2, y: cy - 3, w: 5, h: 3 };
   }
@@ -763,17 +915,43 @@ export function buildWorld(
     lobby.props.push({ x: lx, y: lobY + 1, tile: "board", live: "screen" });
     lobby.props.push({ x: lx + 5, y: lobY + lobH - 2, tile: "plant", live: "sway" });
     const bays = baysOf(core.lobby ?? 0);
-    for (let i = 0; i < bays; i++) lobby.seats.push({ x: lx + 1, y: gateY - 2 + i * 3, up: i === 0 });
-    for (let i = 0; i < bays; i++) lobby.seats.push({ x: lx + 4, y: gateY - 2 + i * 3 });
+    // A front desk is people BEHIND a counter and people waiting in front of it. The waiting
+    // side is the rest end, and it is what a visitor from another project is shown to.
+    // The counter, and the waiting side. Each place has the thing it belongs to directly behind
+    // it, which is the whole rule: a seat is a seat because of what is at its back.
+    for (let i = 0; i < bays; i++) {
+      lobby.props.push({ x: lx + 1, y: gateY - 3 + i * 3, tile: "desk", live: i % 2 ? undefined : "screen" });
+      lobby.seats.push({ x: lx + 1, y: gateY - 2 + i * 3, up: i === 0, post: "desk", face: 1 });
+    }
+    for (let i = 0; i < bays; i++) {
+      const y = lobY + 2 + i * PITCH;
+      if (y >= lobY + lobH - 1) break;
+      lobby.props.push({ x: lx + 5, y: y - 1, tile: i % 2 ? "bench" : "sofa" });
+      lobby.seats.push({ x: lx + 5, y, post: "rest", face: -1 });
+    }
+    lobby.props.push({ x: lx + 4, y: lobY + 2, tile: "tableM" });
   }
   rooms.push(lobby);
 
   // Outdoors. Not a room and no walls: you get there by walking out of the gate, which is the
   // only reason the gate exists.
+  /* OUT ON THE WEB. Two ranks on a five-by-three lattice of lawn was the outdoor half of the
+     placement complaint: nothing anchored anybody, so a fetch agent stood in the middle of a
+     field. Now the yard has a PATH out of the gate with working places along it, and a bench
+     under the trees to the south that is the yard's rest end. */
   const yardSeats: Seat[] = [];
-  for (const dy of [0, 3, -3, 6, -6]) {
-    for (let dx = 2; dx < OUT; dx += 3) yardSeats.push({ x: facadeX + dx, y: gateY + dy, up: dx === 2 });
+  for (let dx = 2; dx < OUT; dx += PITCH) {
+    // Nothing to sit on out here: an agent working the web is standing on the path looking out.
+    yardSeats.push({ x: facadeX + dx, y: gateY - 1, up: true, post: "desk", face: 1, perch: false });
   }
+  const yardProps: Prop[] = [];
+  for (let dx = 2; dx < OUT; dx += PITCH) {
+    // The bench first, the place in front of it second. Benches laid on their own rhythm put two
+    // of the three places on bare grass, which is the "sitting on a lawn" defect one room out.
+    yardProps.push({ x: facadeX + dx, y: gateY + 3, tile: "bench" });
+    yardSeats.push({ x: facadeX + dx, y: gateY + 4, post: "rest", face: dx < OUT / 2 ? 1 : -1 });
+  }
+  for (let dx = 3; dx < OUT; dx += PITCH) yardProps.push({ x: facadeX + dx, y: gateY + 3, tile: "tableM" });
   const yard = blank("__web", "Out on the web", [{ x: facadeX + 1, y: wallY, w: OUT, h: floorY - wallY + 1 }], {
     outdoor: true,
     open: true,
@@ -781,9 +959,12 @@ export function buildWorld(
     floor: "grass",
     seats: yardSeats,
     props: [
+      ...yardProps,
       { x: facadeX + 4, y: wallY + 2, tile: "mast" },
-      { x: facadeX + 3, y: floorY - 3, tile: "plant", live: "sway" },
-      { x: facadeX + 5, y: floorY - 6, tile: "plant", live: "sway" },
+      { x: facadeX + 2, y: wallY + 4, tile: "tree", live: "sway" },
+      { x: facadeX + 6, y: floorY - 3, tile: "pine", live: "sway" },
+      { x: facadeX + 5, y: wallY + 3, tile: "bush" },
+      { x: facadeX + 1, y: floorY - 4, tile: "blooms" },
     ],
   });
   rooms.push(yard);
@@ -838,6 +1019,13 @@ export function buildWorld(
     if (room.open) {
       carve(room.rects[0]);
       room.floorRuns = [{ ...room.rects[0] }];
+      /* A STANDING PLACE OUTRANKS A PROP HERE TOO. The rule below was written for rooms with
+         walls and quietly skipped every open one — the lobby, the chamber, the plazas, the yard —
+         so the front desk's vending machine was standing in the middle of the waiting bench and
+         the seat under it was simply solid. A rule that holds for four room kinds and not the
+         other four is not a rule. */
+      const on = new Set(room.seats.map((p) => p.x + ":" + p.y));
+      room.props = room.props.filter((p) => !on.has(p.x + ":" + p.y));
       for (const p of room.props) block(p.x, p.y);
       continue;
     }
@@ -928,16 +1116,251 @@ export function buildWorld(
 
   for (const p of hallProps) block(p.x, p.y);
 
-  // Trees and shrubs in the grounds. Deterministic, thinned near the gate so the way in stays
-  // clear, and never on the building — scenery the camera can rest on rather than a green margin.
-  for (let y = 1; y < rows - 1; y += 2) {
-    for (let x = 1; x < cols - 1; x += 3) {
-      if (x >= envelope.x - 1 && x <= facadeX + OUT && y >= envelope.y - 1 && y <= envelope.y + envelope.h) continue;
-      const seed = hash32(x + ":" + y);
-      if (seed % 5) continue;
-      scenery.push({ x, y, tile: seed % 3 === 0 ? "plant" : "urn", live: seed % 3 === 0 ? "sway" : undefined });
+  /* ── the grounds ──────────────────────────────────────────────────────────────────────────
+     What was here before is the whole of "floating trees, and the sprites are weirdly placed":
+
+       for (y += 2) for (x += 3) if (hash % 5) continue;  →  plant or urn
+
+     Three defects in four lines. The KIT is indoor — `plant` is a houseplant and `urn` is a
+     screen on a stand, so a lawn was furnished with office decor. The LATTICE is a hard grid of
+     three columns by two rows, so every piece lands in a visible rank and file, which is exactly
+     what "weirdly placed" looks like from far enough back to see the pattern. And the DENSITY is
+     uniform, so the grounds are the same everywhere and read as wallpaper.
+
+     A landscape is none of those things. It is CLUSTERED (trees grow in copses, and a copse is
+     what makes the gaps between them read as clearings), it is GRADED (thick at the boundary of
+     the site, thin where people walk), and it has more than one kind of thing in it. So:
+
+       - a made PATH out of the gate, with lamps along it, because the way in should look like a
+         way in and not a gap in a wall;
+       - copses seeded at jittered centres, each one a handful of pieces scattered around it —
+         the cluster is the unit, never the cell;
+       - a thicker fringe at the edges of the site, which is what stops the world's border being
+         a straight line where the drawing simply stops;
+       - a pond, some rock, some flowers, and tufts of longer grass at low density so the lawn
+         has texture the ground pattern alone cannot carry at this pitch.
+
+     All deterministic in the cell, so the site looks the same on every render. */
+  const taken = new Set<string>();
+  const paved = new Set<string>();
+  /** Cells a TRUNK must keep out of, because its shadow would reach the water from there.
+   *  Declared with the other occupancy sets rather than inside the pond, so `plant` below reads
+   *  it as one of the site's standing rules and not as a special case for one feature. */
+  const wet = new Set<string>();
+  /** Inside the site and outside the building. */
+  const site = (x: number, y: number): boolean => {
+    if (x < 1 || y < 1 || x >= cols - 1 || y >= rows - 1) return false;
+    // Never on the building, never in the yard, never on the way out of the gate.
+    return !(x >= envelope.x - 1 && x <= facadeX + OUT + 1 && y >= envelope.y - 1 && y <= envelope.y + envelope.h);
+  };
+  /** Free for something to STAND on. Ground is a separate layer: a tree may grow in a meadow. */
+  const clear = (x: number, y: number): boolean => site(x, y) && !taken.has(x + ":" + y);
+  /* WIND COSTS A WEB ANIMATION PER PLANT, and a planted site is four hundred plants. Every one of
+     them swaying is five hundred running animations for a lawn — measured, against about seventy
+     for the entire building before any of this existed — and the ones that cost the most are the
+     ones worth the least: a tuft of grass eight pixels tall moving by one of them is invisible at
+     any scale anybody reads this at.
+     So the wind is in the CANOPIES, and in one crown out of three. A wood where every tree moves
+     together is a texture scrolling; a wood where some of them move is wind. */
+  const WINDY = new Set<TileId>(["tree", "treeBig", "pine", "bush"]);
+  const TALL = new Set<TileId>(["tree", "treeBig", "pine", "lamppost", "mast"]);
+  const plant = (x: number, y: number, tile: TileId, live?: LiveId): void => {
+    if (!clear(x, y)) return;
+    if (TALL.has(tile) && wet.has(x + ":" + y)) return;
+    taken.add(x + ":" + y);
+    const windy = live === "sway" && WINDY.has(tile) && hash32("w:" + x + ":" + y) % 3 === 0;
+    scenery.push({ x, y, tile, live: windy ? "sway" : undefined });
+  };
+
+  /* ── the ground itself ────────────────────────────────────────────────────────────────────
+     Props alone cannot furnish a site. A wall-to-wall lawn with objects on it is a green sheet
+     with objects on it, because every prop is one tile and one tile is too small to be read as a
+     SHAPE at any scale where the whole company is in frame — which is precisely the scale the
+     camera exists to reach. What is big enough is the GROUND, so the site gets ground of more
+     than one kind: patches of meadow left unmown, and bare earth where things are walked.
+
+     Laid as ellipses around deterministic centres, which is a shape rather than a rectangle and
+     costs one cell each. They go down FIRST, so everything planted afterwards stands on them. */
+  const soil = new Map<TileId, Set<number>>();
+  const lay = (x: number, y: number, tile: TileId): void => {
+    for (const cells of soil.values()) cells.delete(y * cols + x);
+    let cells = soil.get(tile);
+    if (!cells) soil.set(tile, (cells = new Set()));
+    cells.add(y * cols + x);
+  };
+  const ground = (cx: number, cy: number, rx: number, ry: number, tile: TileId): void => {
+    for (let y = cy - ry; y <= cy + ry; y++) {
+      for (let x = cx - rx; x <= cx + rx; x++) {
+        const nx = (x - cx) / rx;
+        const ny = (y - cy) / ry;
+        // A ragged edge, not a drawn ellipse: the boundary cells drop out on their own hash.
+        const d = nx * nx + ny * ny;
+        if (d > 1) continue;
+        if (d > 0.55 && hash32("e:" + x + ":" + y) % 3 === 0) continue;
+        // GROUND IS A LAYER, not an occupant: a meadow that blocked planting would leave every
+        // patch on the site conspicuously treeless, which is the opposite of what a meadow is.
+        if (!site(x, y)) continue;
+        paved.add(x + ":" + y);
+        lay(x, y, tile);
+      }
+    }
+  };
+  for (let gy = 3; gy < rows; gy += 9) {
+    for (let gx = 3; gx < cols; gx += 11) {
+      const seed = hash32("m:" + gx + ":" + gy);
+      if (seed % 3 === 0) continue;
+      ground(gx + (seed % 6), gy + ((seed >>> 4) % 6), 3 + (seed % 4), 2 + ((seed >>> 8) % 3), "meadow");
     }
   }
+
+  // The path out of the gate, running east to the edge of the site, and lit.
+  const pathY = gateY;
+  for (let x = facadeX + OUT + 1; x < cols; x++) {
+    lay(x, pathY, "path");
+    lay(x, pathY + 1, "path");
+    taken.add(x + ":" + pathY);
+    taken.add(x + ":" + (pathY + 1));
+    if ((x - facadeX) % 5 === 0) plant(x, pathY - 1, "lamppost");
+  }
+
+  /* ── THE POND ─────────────────────────────────────────────────────────────────────────────
+     Laid BEFORE anything is planted, because water is the one thing on the site that decides
+     where other things may go.
+
+     The first one was a hand-listed set of cells with an independently-drawn ellipse of earth
+     near it, and it rendered as exactly that: a blocky plus of blue with a differently-blocky
+     plus of brown offset from it, and a tree on the lip throwing its shadow across the water. Two
+     rules fix all of it, and both are about the water OWNING its surroundings rather than sharing
+     a neighbourhood with them:
+
+       THE BANK IS DERIVED FROM THE WATER, never drawn beside it — it is exactly the cells that
+       TOUCH water, so a shore hugs its own pond whatever shape the pond is.
+       NOTHING TALL STANDS WITHIN REACH OF THE WATER. A tree's shadow rakes four cells to the
+       right, so a tree planted on the shore lays a hard slab across the surface — which is what
+       "floating" looks like when the thing under the shadow is flat and blue. Low cover is fine
+       and welcome; trunks keep back. */
+  {
+    const cx = envelope.x + 6;
+    const cy = envelope.y + envelope.h + 4;
+    const rx = 4;
+    const ry = 3;
+    const water: [number, number][] = [];
+    for (let y = cy - ry; y <= cy + ry; y++) {
+      for (let x = cx - rx; x <= cx + rx; x++) {
+        const nx = (x - cx) / rx;
+        const ny = (y - cy) / ry;
+        const d = nx * nx + ny * ny;
+        if (d > 1) continue;
+        if (d > 0.6 && hash32("w:" + x + ":" + y) % 4 === 0) continue;
+        if (!site(x, y)) continue;
+        water.push([x, y]);
+      }
+    }
+    const isWater = new Set(water.map(([x, y]) => x + ":" + y));
+    for (const [x, y] of water) {
+      lay(x, y, "pond");
+      taken.add(x + ":" + y);
+    }
+    for (const [x, y] of water) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const bx = x + dx;
+          const by = y + dy;
+          if (isWater.has(bx + ":" + by) || !site(bx, by)) continue;
+          lay(bx, by, "earth");
+          taken.add(bx + ":" + by);
+        }
+      }
+    }
+    // How far a trunk must keep back: one cell more than a canopy's shadow reaches.
+    const KEEP = 5;
+    for (const [x, y] of water) {
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -KEEP; dx <= 1; dx++) wet.add(x + dx + ":" + (y + dy));
+      }
+    }
+  }
+
+  /* Copses. A centre every so often, jittered off its own lattice cell so the centres themselves
+     are not in rank and file, then a handful of pieces scattered around each one — bigger trees
+     toward the middle, shrubs and tufts at the skirt, which is how a stand of trees actually
+     thins out. */
+  const WOOD: TileId[] = ["tree", "treeBig", "pine", "tree", "pine", "treeBig"];
+  const SKIRT: TileId[] = ["bush", "tuft", "blooms", "bush", "rock", "tuft"];
+  for (let gy = 2; gy < rows - 2; gy += 6) {
+    for (let gx = 2; gx < cols - 2; gx += 7) {
+      const seed = hash32("copse:" + gx + ":" + gy);
+      if (seed % 6 === 0) continue; /* a clearing */
+      const cx = gx + (seed % 5);
+      const cy = gy + ((seed >>> 3) % 5);
+      // Thicker at the boundary of the site than in the middle of the lawn.
+      const edge = Math.min(cx, cy, cols - 1 - cx, rows - 1 - cy);
+      const size = 3 + ((seed >>> 7) % 3) + (edge < 4 ? 3 : 0);
+      /* A copse is TOUCHING crowns, not a sprinkle. Jittering each piece independently inside a
+         five-by-five box scatters them one cell apart and every tree ends up alone, which at this
+         tile size reads as a shrub — the mass has to be adjacent before the eye calls it a tree.
+         So the shape grows OUTWARD from the centre along a fixed spiral of neighbours, and only
+         what falls off the end of it lands in the skirt. */
+      const SPIRAL = [
+        [0, 0], [1, 0], [0, 1], [1, 1], [-1, 0], [0, -1], [-1, 1], [1, -1],
+        [2, 0], [-1, -1], [2, 1], [0, 2], [1, 2], [-2, 0], [2, -1], [-1, 2],
+      ];
+      for (let k = 0; k < size && k < SPIRAL.length; k++) {
+        const s = hash32("t:" + cx + ":" + cy + ":" + k);
+        const [ox, oy] = SPIRAL[k];
+        const core = Math.abs(ox) + Math.abs(oy) <= 1;
+        const kit = core ? WOOD : SKIRT;
+        const tile = kit[(s >>> 9) % kit.length];
+        plant(cx + ox, cy + oy, tile, tile === "rock" ? undefined : "sway");
+      }
+    }
+  }
+
+  /* A TREE LINE at the boundary. Without it the site simply stops: the outermost copse is
+     followed by lawn to the edge of the drawing, and the edge of the drawing is a straight line
+     nothing in the picture accounts for. A planted boundary is what a site has instead. */
+  for (let x = 1; x < cols - 1; x++) {
+    for (const y of [1, 2, rows - 2, rows - 3]) {
+      const seed = hash32("edge:" + x + ":" + y);
+      if (seed % 3) continue;
+      const tile = (["treeBig", "tree", "pine", "tree"] as TileId[])[(seed >>> 6) % 4];
+      plant(x, y, tile, "sway");
+    }
+  }
+  for (let y = 1; y < rows - 1; y++) {
+    for (const x of [1, 2, cols - 2, cols - 3]) {
+      const seed = hash32("edge:" + x + ":" + y);
+      if (seed % 3) continue;
+      const tile = (["pine", "tree", "treeBig", "bush"] as TileId[])[(seed >>> 6) % 4];
+      plant(x, y, tile, "sway");
+    }
+  }
+
+  /* And the thin stuff. Uniform noise over the whole site is the lattice defect wearing a
+     different hat — every cell tested at the same rate gives an even sprinkle of identical marks,
+     which is wallpaper. It goes where cover actually grows: at the SKIRT of what is already
+     planted, so a copse has a fringe and the open lawn stays open. */
+  const rim: Prop[] = [];
+  const CANOPY = new Set<TileId>(["tree", "treeBig", "pine"]);
+  for (const at of scenery) {
+    // Only under the CANOPIES, and at half the old rate. Cover is the cheapest thing on the site
+    // to look at and the most expensive to draw — two hundred sprites of texture measured as a
+    // fifth of the whole scene's node count — so it goes where it actually reads: as the skirt of
+    // a copse, never as an even sprinkle over open lawn.
+    if (!CANOPY.has(at.tile)) continue;
+    for (const [ox, oy] of [[-1, 1], [1, 1], [2, 0], [0, 2]]) {
+      const x = at.x + ox;
+      const y = at.y + oy;
+      const seed = hash32("g:" + x + ":" + y);
+      if (seed % 4) continue;
+      if (!clear(x, y)) continue;
+      taken.add(x + ":" + y);
+      // No wind down here. Ground cover is eight pixels tall and moving one of them is an
+      // animation nobody can see, two hundred times over.
+      rim.push({ x, y, tile: seed % 6 === 0 ? "blooms" : "tuft" });
+    }
+  }
+  scenery.push(...rim);
 
   const byId = new Map(rooms.map((r) => [r.id, r]));
   return {
@@ -957,5 +1380,9 @@ export function buildWorld(
     envelope,
     hallProps,
     scenery,
+    terrain: [...soil].map(([tile, cells]) => ({
+      tile,
+      runs: runsOf(cells, { x: 0, y: 0, w: cols, h: rows }, cols),
+    })),
   };
 }

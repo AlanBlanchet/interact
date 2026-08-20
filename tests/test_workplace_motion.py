@@ -311,12 +311,22 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
     still does when two long activity strings land in the same room: "reviewing the diff a…"
     over "benchmark harness di…" is not a legible workplace, it is a collision.
 
-    Measured over every VISIBLE text-bearing leaf, and both halves of that were learned the hard
-    way. Scoping by class compared three header elements while every character label went
+    Measured over every VISIBLE text-bearing leaf, and all THREE halves of that were learned the
+    hard way. Scoping by class compared three header elements while every character label went
     unchecked — a measurement that reports zero because it looked in the wrong place. Then
     counting laid-out-but-invisible elements reported four collisions that are not on screen at
-    all, because the activity bubbles sit at opacity 0 until hovered. A measurement is only worth
-    what its scope is.
+    all, because the activity bubbles sit at opacity 0 until hovered.
+
+    And now the third: the world is a bounded viewport with `overflow: hidden` and a building
+    deliberately bigger than it, so most of the cast is OUTSIDE the frame at any moment — and a
+    clipped-away element still reports a full bounding box. That is how "artist" was found lying
+    over the header while sitting six hundred and fifty pixels above the top of the panel. The
+    board by the door is the same case one step in: an opaque strip laid OVER the world at
+    z-index 500, so anything under it is covered rather than collided with.
+
+    So every box is CLIPPED to what a reader can actually see — the frame, minus that strip —
+    before anything is compared, and a box with nothing left is not a label at all. The assertion
+    is unchanged; the scope is now the screen.
     """
     page_file = scene / f"{theme}.html"
     if not page_file.exists():
@@ -326,6 +336,12 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
     pg.wait_for_timeout(2500)          # let the cast settle where it actually stands
     result = pg.evaluate(
         """() => {
+          // What a reader can see: the world's own clipped viewport, minus the opaque strip laid
+          // over the top of it. Everything is measured inside this and nowhere else.
+          const view = document.querySelector('.wp-view').getBoundingClientRect();
+          const hud = document.querySelector('.wp-hud');
+          const bar = hud ? hud.getBoundingClientRect().bottom : view.top;
+          const frame = {l: view.left, r: view.right, t: Math.max(view.top, bar), b: view.bottom};
           const boxes = [];
           for (const el of document.querySelectorAll('*')) {
             const t = (el.textContent || '').trim();
@@ -342,7 +358,16 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
               n = n.parentElement;
             }
             if (op <= 0.05) continue;
-            boxes.push({t: t.slice(0, 24), x: r.left, y: r.top, w: r.width, h: r.height});
+            // Clip to the frame. A label scrolled out of the world, or lying under the board by
+            // the door, is not on screen and cannot be drawn over anything.
+            const own = hud && hud.contains(el);
+            const box = own
+              ? {x: r.left, y: r.top, w: r.width, h: r.height}
+              : {x: Math.max(r.left, frame.l), y: Math.max(r.top, frame.t),
+                 w: Math.min(r.right, frame.r) - Math.max(r.left, frame.l),
+                 h: Math.min(r.bottom, frame.b) - Math.max(r.top, frame.t)};
+            if (box.w <= 2 || box.h <= 2) continue;
+            boxes.push({t: t.slice(0, 24), x: box.x, y: box.y, w: box.w, h: box.h});
           }
           const hits = [];
           for (let i = 0; i < boxes.length; i++)
@@ -455,6 +480,87 @@ def test_you_can_pull_back_further_than_the_old_camera_allowed(page):
     )
     assert seen["tiles_whole"] > seen["tiles_at_one"], (
         "pulling back shows no more of the world than zoom 1 did"
+    )
+
+
+def test_every_standing_place_has_the_thing_it_belongs_to_behind_it(tmp_path_factory):
+    """Alan: "sprites are very weirdly placed, and are just simply bad."
+
+    That defect had no symptom a screenshot could catch. Everybody was on the floor and nobody was
+    in a wall; the placement was simply MEANINGLESS — two ranks that collapsed onto the same row in
+    any depth-6 room, an overflow rule that pushed the extra bodies one row NORTH onto the desks
+    they were meant to be working at, and a "rest" rank standing three tiles from the nearest thing
+    to sit on. Nothing throws, so nothing failed, and by the time it is visible in pixels it is one
+    frame of a simulation that never holds still.
+
+    So the rule is checked against the BUILT WORLD, where it is one line: a place is defined by
+    what is behind it. Every place that claims something to sit on must have a desk, a couch or a
+    bench on the tile directly north of it; a place with nothing declares `perch: false` and its
+    occupant is drawn standing. A seat that can say neither is the bug.
+    """
+    probe = EXT / "webview" / "workplace" / "dev" / "placement.ts"
+    if not probe.exists() or shutil.which("npx") is None:
+        pytest.skip("the extension's webview toolchain is not available here")
+    out = tmp_path_factory.mktemp("placement") / "placement.js"
+    build = subprocess.run(
+        ["npx", "esbuild", str(probe), "--bundle", f"--outfile={out}",
+         "--format=cjs", "--platform=node", "--target=es2022"],
+        cwd=EXT, capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        pytest.fail(f"the placement probe would not build:\n{build.stderr}")
+    run = subprocess.run(["node", str(out)], capture_output=True, text=True)
+    assert run.returncode == 0, (
+        "somebody is standing where nothing is:\n" + run.stdout + run.stderr)
+
+
+def test_nobodys_line_hangs_off_the_edge_of_the_panel(scene, browser):
+    """At the width this actually ships in: a VS Code side bar.
+
+    A line is centred on its body and held at a constant SCREEN size, so at 400px most of the floor
+    is within half a bubble of an edge and a sentence gets cut in half by the viewport. An
+    independent critic found exactly that — `"...face graph ..."` with no owner attached.
+
+    Two things had to be true and neither was. WHO gets a bubble was decided by the speech layout,
+    which runs every 420ms — and in 420ms a body walks a tile and a half and the camera can cross a
+    room, so the character was long gone by the time anyone looked. And the layout culled against
+    the LOGICAL camera while the paint uses the one that has actually glided there, which are a
+    room apart during a move. Both are now settled per FRAME, in screen terms.
+
+    Sampled over frames rather than once, because this defect is a fraction of a second wide: a
+    single screenshot catches it only by luck, which is how it survived a whole rebuild.
+    """
+    page_file = scene / "live.html"
+    if not page_file.exists():
+        pytest.skip("live.html was not built")
+    pg = browser.new_page(viewport={"width": 400, "height": 900}, reduced_motion="no-preference")
+    pg.goto(page_file.as_uri())
+    pg.wait_for_timeout(2000)
+    got = pg.evaluate(
+        """() => new Promise((done) => {
+             const v = document.querySelector('.wp-view').getBoundingClientRect();
+             let worst = 0, readings = 0, frames = 0, who = '';
+             const tick = () => {
+               frames++;
+               for (const a of document.querySelectorAll('.wp-actor.is-saying')) {
+                 const say = a.querySelector('.wp-say');
+                 const r = say.getBoundingClientRect();
+                 readings++;
+                 const over = Math.max(v.left - r.left, r.right - v.right);
+                 if (over > worst) { worst = over; who = say.textContent.trim().slice(0, 24); }
+               }
+               if (frames < 240) requestAnimationFrame(tick);
+               else done({frames, readings, worst: Math.round(worst), who});
+             };
+             requestAnimationFrame(tick);
+           })"""
+    )
+    pg.close()
+    assert got["readings"] > 50, f"almost nobody spoke in {got['frames']} frames — the scene is not live"
+    # Two pixels of antialiasing is not a line hanging off the panel; 173 was.
+    assert got["worst"] <= 3, (
+        f'a line hung {got["worst"]}px outside the panel ("{got["who"]}") '
+        f"over {got['frames']} frames"
     )
 
 

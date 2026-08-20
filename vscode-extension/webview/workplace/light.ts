@@ -208,3 +208,67 @@ export function inkPalette(pal: Readonly<Record<string, string>>): Record<string
 
 /** How far a standing thing's shadow is thrown, in cells. Matches the wall band's direction. */
 export const CAST = { dx: 2, dy: 2 };
+
+/** THE SHADOW IS PROJECTED ONTO THE GROUND, never translated.
+ *
+ *  This is the mechanism behind "floating trees", and it was not only the art. A prop's shadow
+ *  was the prop's own grid drawn in one ink and moved two cells down and right — which is a
+ *  correct-looking contact patch for something FLAT on the floor and completely wrong for
+ *  anything TALL. A tree's canopy lives in the top rows of its tile, so the copy of that canopy
+ *  landed two cells below the canopy: a dark shape hanging in the air beside a green one, with
+ *  nothing touching the ground anywhere. The eye reads that as two objects floating, and it is
+ *  exactly what a translated silhouette must produce for every tall thing in the building.
+ *
+ *  A real cast shadow is the object SEEN FROM THE SUN and laid flat. So each source pixel is
+ *  moved by how far it is ABOVE the base: the higher it sits, the further along the ground its
+ *  shadow falls, and the whole thing is squashed toward the base row. A pixel standing on the
+ *  floor does not move at all, which is what makes the shadow touch what casts it — the single
+ *  property the old one could never have.
+ *
+ *  Done to the GRID rather than with a transform, because a CSS skew would resample every hard
+ *  edge in a scene whose whole substrate is hard edges.
+ */
+/* Tuned on the rendered grounds, not on paper. At 0.62 the shadow of an eight-row tree reaches
+   four cells and lands as a black BAR beside it — the projection is right and the length is a
+   lie, because the same ink now covers three times the area the translated copy did. Shorter,
+   and the outdoor group dims its own ink further (a lawn in daylight is not a room). */
+const SHEAR = 0.45;
+const SQUASH = 0.3;
+/* AND THE WHOLE SHADOW STEPS OFF THE OBJECT'S OWN FOOT.
+   Shear alone moves a pixel by how far it is ABOVE the base, so a pixel standing ON the base does
+   not move at all — which is exactly right for the contact point and exactly wrong for anything
+   whose widest part is DOWN THERE. A conifer's skirt and a shrub are widest at their feet, so the
+   entire projection landed underneath the canopy that cast it and both read, again, as having no
+   ground contact: the same symptom the projection was written to fix, surviving in the half of the
+   wood that is pines. One cell down and one cell right of the base puts the shadow out from under
+   every silhouette regardless of its shape, and it is where a low sun in the north-west puts it. */
+const FOOT_X = 1;
+const FOOT_Y = 1;
+
+export function project(grid: readonly string[], leafy = false): string[] {
+  const rows = grid.length;
+  if (!rows) return [];
+  const cols = Math.max(...grid.map((r) => r.length));
+  const reach = Math.round((rows - 1) * SHEAR) + FOOT_X;
+  const tall = rows + FOOT_Y;
+  const out: string[][] = Array.from({ length: tall }, () => new Array(cols + reach).fill("."));
+  for (let r = 0; r < rows; r++) {
+    const row = grid[r];
+    const high = rows - 1 - r;
+    const dx = FOOT_X + Math.round(high * SHEAR);
+    const y = rows - 1 - Math.round(high * SQUASH) + FOOT_Y;
+    if (y < 0 || y >= tall) continue;
+    for (let c = 0; c < row.length; c++) {
+      if (row[c] === "." || row[c] === " ") continue;
+      const x = c + dx;
+      /* DAPPLE, past the contact. The two cells nearest the foot stay solid — that is the part
+         that says the thing is standing ON something — and everything the canopy throws beyond
+         them is a checkerboard, which is what leaf shade looks like and, more to the point, what
+         stops two neighbouring trees' shadows from merging into one continuous bar. In a scene
+         made of hard pixels a dither IS the soft edge; a blur would not be. */
+      if (leafy && dx > FOOT_X + 1 && (x + y) % 2 === 1) continue;
+      out[y][x] = "#";
+    }
+  }
+  return out.map((r) => r.join(""));
+}

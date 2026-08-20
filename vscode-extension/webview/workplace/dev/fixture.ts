@@ -65,6 +65,15 @@ const SEEDS: Seed[] = [
   // The Wealth Desk, which is the whole point of departments: finance work is filed elsewhere and
   // therefore stands in a room of its own, on the other side of the building from the critics.
   ["fiscal-auditor", "fiscal-auditor", "running", "data", "netting the PFU on the arbitrage", "a", "interact", 0.07, 5, "wealth", ["reads"]],
+
+  /* A DEPARTMENT WHERE EVERY RUN HAS FINISHED, which nothing in this fixture could show before.
+     The whole claim of the posture system is that you read a room's condition off where its
+     people ARE — desks or couches — with no word on screen, and a harness in which no room is
+     ever fully done cannot put that claim in front of anybody. An independent critic hit exactly
+     that and had to record the requirement as untestable, which is a hole in the fixture, not a
+     gap in the feature: the state exists, the harness simply never entered it. */
+  ["teacher", "teacher", "done", "library", "wrote the lesson for Conv2d", "a", "interact", 0.31, 190, "records", ["reads", "writes", "delegates"]],
+  ["advocate", "advocate", "done", "library", "measured every claim in the README", "a", "interact", 0.24, 275, "records", ["reads", "writes", "runs"]],
 ];
 
 const ID = "abcdefghijklmnopqrstuvwxyz";
