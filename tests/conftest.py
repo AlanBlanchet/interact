@@ -3,6 +3,16 @@ import sys
 
 import pytest
 
+# Set BEFORE any interact module is imported: importing `interact.runtime` loads the model
+# registry, which now asks a running Ollama daemon what it has. A unit test must never reach the
+# network — and on a developer box with a real daemon it silently would. `setdefault` so an
+# integration run can force it back on.
+#
+# The name is deliberately NOT `INTERACT_`-prefixed: `_LiveConfig.refresh()` deletes every
+# `INTERACT_*` var that config.env does not define, and any test whose code path refreshes config
+# (every `@instrumented` MCP tool does) would silently re-enable discovery for the REST of the run.
+os.environ.setdefault("OLLAMA_DISCOVERY", "0")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _load_repo_dotenv() -> None:

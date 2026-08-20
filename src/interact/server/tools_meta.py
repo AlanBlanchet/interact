@@ -1,6 +1,7 @@
 """Meta MCP tools that aren't about a page or a window: report_issue (feedback channel) and
 list_providers (what VLM models/keys are configured)."""
 
+import asyncio
 import json
 import os
 
@@ -64,6 +65,17 @@ async def list_providers() -> str:
                 if key in keys:
                     available.add(provider)
 
+    from interact.models import Model
+
+    # Off the event loop: loading the registry now asks a running Ollama daemon what it has, and
+    # a host that ACCEPTS then stalls would otherwise block every other MCP call on this server
+    # for the length of the timeouts.
+    await asyncio.to_thread(Model.load_registry)
+    # A provider that ANSWERED us is available whatever the key scan above concluded — a local
+    # Ollama needs no key at all, so the scan alone would both hide it and then warn about a
+    # model pinned to it. Discovery is the authority here.
+    available |= Model.live_providers()
+
     result: dict = {
         "config": {
             "image_model": config.image_model or None,
@@ -73,11 +85,22 @@ async def list_providers() -> str:
         "available_providers": sorted(available),
     }
 
+    # An agent picking a model over MCP cannot see the user's daemon, so name what it actually
+    # serves — otherwise the only discoverable models are the ones baked into the catalog. Memoised
+    # by the load_registry call above, so this is a dict lookup rather than a second round trip.
+    from interact import ollama
+
+    served = ollama.serving()
+    if served:
+        result["ollama"] = {
+            "endpoint": served[0].base,
+            "models": [
+                {"id": m.model_id, "vision": m.vision, "cloud": m.cloud} for m in served
+            ],
+        }
+
     # Warn on configured models whose provider has no key — via the env-key check, NOT
     # litellm.validate_environment (which can hang on interactive provider auth flows).
-    from interact.models import Model
-
-    Model.load_registry()
     warnings = []
     for model_name in [config.image_model, config.component_model, config.video_model]:
         if not model_name:

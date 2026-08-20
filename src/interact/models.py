@@ -3,7 +3,7 @@ import logging
 import os
 import time
 from enum import StrEnum
-from typing import ClassVar, Literal, Self
+from typing import TYPE_CHECKING, ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -13,6 +13,9 @@ from interact.benchmarks.published import (
 )
 from interact.data import PackageData
 from interact.formats import CoordFormat
+
+if TYPE_CHECKING:
+    from interact.ollama import OllamaModel
 
 _log = logging.getLogger(__name__)
 
@@ -199,6 +202,17 @@ class Model(RegistryMixin, BaseModel):
     _provider_keys: ClassVar[dict[str, list[str]]] = {}
     # ordered component (UI-grounding) model recommendations, from the loaded config
     _component_recommendations: ClassVar[list[str]] = []
+    #: provider -> the model ids it was PROVEN to serve, by asking it directly at load time
+    #: (currently: a running Ollama daemon answered ``/api/tags``). A declared env key is a PROXY
+    #: for "this will run"; an answer from the thing itself is the fact the proxy stands in for,
+    #: so it outranks the key — which is what makes a local Ollama, needing no key at all, usable
+    #: rather than invisible. It also makes availability SHARPER, not just broader: the bundled
+    #: catalog lists ~70 Ollama models, and a key alone made every one of them look available even
+    #: though the user pulled three. Once the daemon has told us what it has, that answer governs.
+    _served: ClassVar[dict[str, set[str]]] = {}
+    #: coordFormats from the loaded catalog, kept so a model discovered AFTER the JSON pass can be
+    #: matched against the same grounding table rather than a second copy of it.
+    _coord_formats: ClassVar[dict] = {}
 
     def can(self, cap: ModelCapability) -> bool:
         return cap in self.capabilities
@@ -234,6 +248,12 @@ class Model(RegistryMixin, BaseModel):
         that as "cannot run" would let auto-selection quietly override somebody's pinned local
         model, which is the opposite of respecting a choice they made.
         """
+        if self.provider in Model._served:
+            # It answered us, so there is no key to be missing. Deliberately NOT "and it serves
+            # this id": key_missing gates whether auto-selection may WALK PAST AN EXPLICIT PIN,
+            # and a model the daemon does not list today may be one the user is about to pull.
+            # Respecting the pin stays the rule; is_available below is where precision belongs.
+            return False
         keys = Model._provider_keys.get(self.provider)
         if not keys:
             return False  # unknown provider, or one that needs no key: not our call to overrule
@@ -246,8 +266,15 @@ class Model(RegistryMixin, BaseModel):
         ``litellm.validate_environment`` call, which can BLOCK on an interactive provider
         auth flow / network (it hung CI here). A provider absent from the catalog (no
         declared keys) can't be confirmed without that call, so it's treated unavailable.
-        Keyless providers (``envKeys: []``, e.g. a local Ollama) are available.
+
+        The one thing that outranks the key check is a provider we ALREADY confirmed by asking
+        it — see ``_served``. That is still a pure local check here: the daemon was asked once,
+        at registry load, with a short timeout; this method only reads the answer. And the answer
+        is per-MODEL, so a catalog row for something the user never pulled is correctly NOT
+        available even though its provider is running.
         """
+        if self.provider in Model._served:
+            return self.is_served()
         keys = Model._provider_keys.get(self.provider)
         if not keys:
             # None (unknown provider) OR [] (no declared API key). Empty means we can't
@@ -258,6 +285,18 @@ class Model(RegistryMixin, BaseModel):
             # is_available only filters automatic fallback candidates.
             return False
         return all(os.environ.get(k) for k in keys)
+
+    def is_served(self) -> bool:
+        """False only when a LIVE provider itself told us it does not have this model.
+
+        Split out of :meth:`is_available` because the two questions compose differently: this one
+        is purely "has the provider ruled it out?", so a caller that already checked the provider
+        key (``available_by_capability``) can add it without re-asking the key question. Keeping
+        them as one method is what let the two disagree — ``is_available`` counting 4 models while
+        ``available_by_capability`` still offered 21 from the same provider.
+        """
+        served = Model._served.get(self.provider)
+        return served is None or self.id in served
 
     @property
     def cost_score(self) -> float:
@@ -362,6 +401,7 @@ class Model(RegistryMixin, BaseModel):
         cls._component_recommendations = list(
             models_config.recommendations.get("component", [])
         )
+        cls._coord_formats = dict(models_config.coord_formats)
         component_recs = set(cls._component_recommendations)
 
         for provider_name, provider_spec in models_config.providers.items():
@@ -452,19 +492,27 @@ class Model(RegistryMixin, BaseModel):
         """Catalog providers whose declared API key(s) are all set in the environment.
 
         Providers that declare no key are omitted — there is nothing to configure,
-        so their presence is not evidence the user has set anything up.
+        so their presence is not evidence the user has set anything up. A provider that
+        ANSWERED us is included whether or not it declares a key: it is running.
         """
         return sorted(
-            provider
-            for provider, keys in cls._provider_keys.items()
-            if keys and all(os.environ.get(k) for k in keys)
+            {
+                provider
+                for provider, keys in cls._provider_keys.items()
+                if keys and all(os.environ.get(k) for k in keys)
+            }
+            | set(cls._served)
         )
 
     @classmethod
     def available_by_capability(cls, cap: ModelCapability) -> list[Self]:
         """Models with ``cap`` from providers whose API keys are configured, cheapest first."""
         available = set(cls.available_providers())
-        models = [m for m in cls._registry if m.can(cap) and m.provider in available]
+        models = [
+            m
+            for m in cls._registry
+            if m.can(cap) and m.provider in available and m.is_served()
+        ]
         models.sort(key=lambda m: m.cost_score)
         return models  # type: ignore[return-value]
 
@@ -488,6 +536,7 @@ class Model(RegistryMixin, BaseModel):
                 and model.id not in seen
                 and model.can(ModelCapability.GUI_GROUNDING)
                 and model.provider in configured
+                and model.is_served()
             ):
                 seen.add(model.id)
                 ranked.append(model)  # type: ignore[arg-type]
@@ -503,16 +552,81 @@ class Model(RegistryMixin, BaseModel):
         return ranked
 
     @classmethod
+    def live_providers(cls) -> set[str]:
+        """Providers that answered us directly at load time, rather than merely declaring a key."""
+        return set(cls._served)
+
+    @classmethod
+    def merge_ollama(cls, discovered: "list[OllamaModel]") -> None:
+        """Fold the models a running Ollama daemon actually has into the registry.
+
+        The baked catalog is a SNAPSHOT — it cannot contain a model somebody pulled after it was
+        generated, which is exactly the model they are most likely to want. What the daemon
+        reports is the truth, so it wins where the two disagree and ADDS where the catalog is
+        silent; a baked row's scores and grounding format survive, because the daemon does not
+        know those and overwriting them with nothing would be a downgrade.
+
+        Takes the CHAT-capable models only (:func:`interact.ollama.serving`): an embedding model
+        returns vectors, not answers, so letting it into a pool of prompt-answering candidates
+        would only produce a confusing failure later.
+        """
+        if not discovered:
+            return
+        served: set[str] = set()
+        for found in discovered:
+            model_id = found.model_id
+            caps: set[ModelCapability] = set()
+            if found.vision:
+                caps.add(ModelCapability.VLM)
+            if "completion" in found.capabilities:
+                caps.add(ModelCapability.LLM)
+            fmt = cls._match_coord_format(model_id, cls._coord_formats)
+            # Grounding is a claim about reading a SCREEN, so it only follows a vision model —
+            # a text model matching the same id prefix must not inherit it.
+            if fmt is not None and ModelCapability.VLM in caps:
+                caps.add(ModelCapability.GUI_GROUNDING)
+            if is_native_video_model(model_id):
+                caps.add(ModelCapability.VIDEO)
+            if is_audio_model(model_id):
+                caps.add(ModelCapability.AUDIO)
+            baked = cls.by_id(model_id)
+            cls._register(
+                cls(
+                    id=model_id,
+                    provider="ollama",
+                    capabilities=caps | (baked.capabilities if baked else set()),
+                    input_cost_per_million=baked.input_cost_per_million if baked else None,
+                    output_cost_per_million=baked.output_cost_per_million if baked else None,
+                    supports_structured_output=bool(baked and baked.supports_structured_output),
+                    intelligence_score=baked.intelligence_score if baked else None,
+                    coord_format=fmt or (baked.coord_format if baked else None),
+                )
+            )
+            served.add(model_id)
+        if served:
+            # Deliberately not `{... : served}` unconditionally. A daemon that is up but serves
+            # nothing we can prompt with (an embeddings-only box — a normal RAG setup) would
+            # otherwise revoke every baked row's key-based availability while still advertising
+            # the provider. Knowing nothing usable is not the same as knowing there is nothing.
+            cls._served = {**cls._served, "ollama": served}
+
+    @classmethod
     def load_registry(cls, models_json: str | None = None) -> None:
         """Populate the registry from models.json, falling back to litellm.
 
         Source order: the ``models_json`` argument → ``INTERACT_MODELS_JSON`` →
         the catalog bundled in :mod:`interact.data` → ``litellm.model_cost``.
         Measured grounding scores are hydrated from :meth:`PackageData.grounding_raw`.
+
+        Then the LIVE pass: a running Ollama daemon is asked what it actually has, because a
+        bundled catalog structurally cannot know. That read is cached, short-timeout and silent —
+        no daemon means no models, no error and no delay (see :mod:`interact.ollama`).
         """
         cls._reset()
         cls._provider_keys = {}
         cls._component_recommendations = []
+        cls._coord_formats = {}
+        cls._served = {}
         raw = models_json or PackageData.models_raw()
         if raw:
             cls._load_from_json(raw)
@@ -521,6 +635,16 @@ class Model(RegistryMixin, BaseModel):
         grounding_raw = PackageData.grounding_raw()
         if grounding_raw:
             cls.hydrate_measured(grounding_raw)
+        try:
+            # Imported HERE, not at module scope: `interact.ollama` pulls in httpx (~167 ms cold)
+            # and `interact.models` is on the import path of every CLI command — the same reason
+            # `_litellm()` above is lazy. Module attribute lookup, so a caller can substitute the
+            # daemon by swapping `ollama.discover_cached`.
+            from interact import ollama
+
+            cls.merge_ollama(ollama.serving())
+        except Exception:  # a live source must never be able to break the catalog
+            _log.debug("ollama discovery failed; using the bundled catalog", exc_info=True)
 
 
 __all__ = [

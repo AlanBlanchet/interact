@@ -75,6 +75,42 @@ def _print_resolved_models(indent: str = "  ") -> None:
     print(f"{indent}{'measure_ui (contrast)':<33}→ deterministic — no model")
 
 
+#: Enough to see the shortlist without burying the rest of `doctor` — a cloud catalog is ~19 rows.
+_OLLAMA_SHOWN = 8
+
+
+def _print_ollama(indent: str = "  ") -> None:
+    """Name what the Ollama daemon actually serves, so "did interact see the model I pulled?" is
+    answerable without guessing.
+
+    Vision models are named individually because those are the ones interact can DRIVE; the rest
+    are counted, not listed, because a wall of text-only ids would bury the rest of doctor without
+    telling him anything he can act on. Silent when there is no daemon — someone who does not run
+    Ollama must not read a line about it.
+    """
+    from interact import ollama
+
+    found = ollama.serving()
+    if not found:
+        return
+    # Where they CAME from, not where we looked first — discovery walks a ladder, and this is
+    # also the endpoint a completion will be sent to, so the two are checkable against each other.
+    where = found[0].base or ollama.candidate_bases()[0]
+    vision = sorted((m for m in found if m.vision), key=lambda m: m.name)
+    rest = sorted((m for m in found if not m.vision), key=lambda m: m.name)
+
+    usable = f"{len(vision)} vision-capable" if vision else "none vision-capable"
+    print(f"{indent}{'ollama':<14}: {len(found)} available on {where} — {usable}")
+    for model in vision[:_OLLAMA_SHOWN]:
+        print(f"{indent}  · {model.describe()}")
+    if len(vision) > _OLLAMA_SHOWN:
+        print(f"{indent}  · … +{len(vision) - _OLLAMA_SHOWN} more vision models")
+    if rest:
+        names = ", ".join(m.name for m in rest[:_OLLAMA_SHOWN])
+        more = f", +{len(rest) - _OLLAMA_SHOWN} more" if len(rest) > _OLLAMA_SHOWN else ""
+        print(f"{indent}  · text-only ({len(rest)}): {names}{more}")
+
+
 @app.command
 def version() -> None:
     """Print the installed interact version (same as `interact --version`/`-v`)."""
@@ -488,6 +524,7 @@ def doctor(*, fix: bool = False) -> None:
     grounding = Model.available_by_capability(ModelCapability.GUI_GROUNDING)
     print(f"  providers     : {', '.join(available) or 'none — set a provider API key'}")
     print(f"  grounding     : {len(grounding)} model(s) ready")
+    _print_ollama()
     print("  selection     : (what each tool resolves to — answers 'why is my default X?')")
     _print_resolved_models(indent="    ")
 
