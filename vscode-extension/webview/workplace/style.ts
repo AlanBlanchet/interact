@@ -212,7 +212,8 @@ body.vscode-high-contrast-light .wp {
   image-rendering: pixelated;
   will-change: transform;
 }
-.wp-map { position: absolute; inset: 0; display: block; }
+/* The grounds run past the world, so the map paints outside its own box on purpose. */
+.wp-map { position: absolute; inset: 0; display: block; overflow: visible; }
 .wp-world { display: none; }
 
 /* Daylight crossing the building, and the dust hanging in it. The two slowest things on screen:
@@ -281,23 +282,39 @@ body.vscode-high-contrast-light .wp {
 .wp-spend { color: var(--wp-dim); }
 .wp-clock { margin-left: auto; color: var(--wp-dim); font-size: 9px; }
 
-/* ── the plan, in the corner ───────────────────────────────────────────────────────────────
-   The camera takes the overview away; this gives it back in the one form that costs no space.
-   Rooms as shapes, a dot per person in their pod's colour, and a box showing where you are
-   looking — which is also how you steer, because clicking it takes the camera there. */
+/* ── the survey panel ─────────────────────────────────────────────────────────────────────
+   The camera takes the overview away; this gives it back, and gives the reader the camera.
 
-.wp-mini {
+   What shipped before was the plan alone: 96x72, aria-hidden, click to jump, and nothing else
+   — no scale control at all, because the scale was derived from the panel width. So the one
+   thing anybody wants from a map they are lost in, PULLING BACK, was not on offer at any
+   setting, and the panning that did exist announced itself with a cursor and undid itself six
+   seconds later. This is that corner rebuilt as an instrument: the plan, a rule of scale marks,
+   and two latches that say in words what the camera is doing. */
+
+.wp-plan {
   position: absolute;
   z-index: 500;
   right: 5px;
   bottom: 5px;
-  width: 96px;
-  height: 72px;
+  width: 118px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 8px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.wp-mini {
+  position: relative;
+  height: 74px;
   background: var(--wp-chrome);
   border: 1px solid var(--wp-line);
-  opacity: .92;
-  cursor: pointer;
+  box-shadow: 2px 2px 0 var(--wp-ink);
+  cursor: crosshair;
 }
+.wp-mini:focus-visible { outline: 1px solid var(--wp-fg); outline-offset: 1px; }
 .wp-mini svg { position: absolute; inset: 2px; width: calc(100% - 4px); height: calc(100% - 4px); }
 .wp-mini .mm-bg { fill: color-mix(in srgb, var(--wp-fg) 10%, var(--wp-bg)); }
 .wp-mini .mm-r { fill: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg)); }
@@ -306,6 +323,7 @@ body.vscode-high-contrast-light .wp {
 .wp-eye {
   position: absolute;
   border: 1px solid var(--wp-fg);
+  background: color-mix(in srgb, var(--wp-fg) 12%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--wp-ink) 60%, transparent);
   pointer-events: none;
 }
@@ -317,6 +335,145 @@ body.vscode-high-contrast-light .wp {
   margin: -1px 0 0 -1px;
   background: var(--accent, var(--wp-h1));
 }
+
+/* ── the scale rule ───────────────────────────────────────────────────────────────────────
+   The ladder drawn as what it is. Nine marks of rising height, the one you are standing on lit
+   and the ones below it half-lit, so the rule reads as a filled gauge rather than as nine
+   identical dots — you can see at a glance how far back you are and how much further there is
+   to go. A cap at each end because minus and plus are the two symbols nobody has to learn. */
+
+.wp-rule {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: 16px;
+  background: var(--wp-chrome);
+  border: 1px solid var(--wp-line);
+  box-shadow: 2px 2px 0 var(--wp-ink);
+}
+.wp-rungs {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1px;
+  padding: 0 2px 2px;
+  cursor: ew-resize;
+}
+.wp-rungs i {
+  flex: 1 1 auto;
+  height: var(--h, 4px);
+  /* Faint. The unlit marks are the TALL ones, so at any weight they out-mass the lit one and
+     the rule reads as a grey block with a speck in it rather than as a gauge. */
+  background: color-mix(in srgb, var(--wp-fg) 15%, var(--wp-bg));
+}
+/* The gauge. data-step is the rung the camera is on; every mark up to it is filled and the
+   rung itself is lit — so the rule reads how far back you are AND how much further it goes,
+   which nine identical dots could not. nth-child(-n+N) is what keeps this in the stylesheet
+   instead of costing nine element writes on every frame the camera moves. */
+.wp-rule[data-step="1"] .wp-rungs i:nth-child(-n+1),
+.wp-rule[data-step="2"] .wp-rungs i:nth-child(-n+2),
+.wp-rule[data-step="3"] .wp-rungs i:nth-child(-n+3),
+.wp-rule[data-step="4"] .wp-rungs i:nth-child(-n+4),
+.wp-rule[data-step="5"] .wp-rungs i:nth-child(-n+5),
+.wp-rule[data-step="6"] .wp-rungs i:nth-child(-n+6),
+.wp-rule[data-step="7"] .wp-rungs i:nth-child(-n+7),
+.wp-rule[data-step="8"] .wp-rungs i:nth-child(-n+8),
+.wp-rule[data-step="9"] .wp-rungs i:nth-child(-n+9) {
+  background: color-mix(in srgb, var(--wp-fg) 60%, var(--wp-bg));
+}
+.wp-rule[data-step="1"] .wp-rungs i:nth-child(1),
+.wp-rule[data-step="2"] .wp-rungs i:nth-child(2),
+.wp-rule[data-step="3"] .wp-rungs i:nth-child(3),
+.wp-rule[data-step="4"] .wp-rungs i:nth-child(4),
+.wp-rule[data-step="5"] .wp-rungs i:nth-child(5),
+.wp-rule[data-step="6"] .wp-rungs i:nth-child(6),
+.wp-rule[data-step="7"] .wp-rungs i:nth-child(7),
+.wp-rule[data-step="8"] .wp-rungs i:nth-child(8),
+.wp-rule[data-step="9"] .wp-rungs i:nth-child(9) {
+  background: var(--wp-fg);
+}
+.wp-rungs i { transition: background 120ms linear; }
+.wp-read {
+  align-self: center;
+  padding: 0 4px 0 2px;
+  min-width: 20px;
+  text-align: right;
+  color: var(--wp-fg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* ── the two latches ──────────────────────────────────────────────────────────────────────
+   Full-width, labelled in words, and each one says what it does rather than what it is. */
+
+.wp-cam {
+  font: inherit;
+  color: var(--wp-dim);
+  background: var(--wp-chrome);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.wp-cam-step {
+  width: 15px;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--wp-fg);
+}
+.wp-cam-step:hover { background: color-mix(in srgb, var(--wp-fg) 18%, var(--wp-chrome)); }
+.wp-cam-wide {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--wp-line);
+  box-shadow: 2px 2px 0 var(--wp-ink);
+  color: var(--wp-fg);
+}
+.wp-cam-wide:hover { background: color-mix(in srgb, var(--wp-fg) 16%, var(--wp-chrome)); }
+.wp-cam-wide:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--wp-ink); }
+.wp-cam:focus-visible { outline: 1px solid var(--wp-fg); outline-offset: 1px; }
+.wp-cam-mark { width: 9px; height: 9px; flex: 0 0 auto; fill: currentColor; display: block; }
+
+/* FOLLOWING is the resting truth, so it is quiet. HOLDING is a state the reader put the view
+   into and may have forgotten about, so it lights up in the accent the rest of the building
+   uses for attention, and it BREATHES on the building's own beat — the one control on screen
+   that asks to be pressed. */
+.wp-cam-follow .wp-off { display: none; }
+.wp-view[data-follow="0"] .wp-cam-follow .wp-on { display: none; }
+.wp-view[data-follow="0"] .wp-cam-follow .wp-off { display: inline; }
+.wp-view[data-follow="0"] .wp-cam-follow {
+  color: var(--wp-bg);
+  background: var(--wp-h3);
+  border-color: var(--wp-h3);
+  animation: wp-latch calc(var(--beat) * 2) ease-in-out infinite;
+}
+@keyframes wp-latch { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.22); } }
+
+/* ── pulled back ──────────────────────────────────────────────────────────────────────────
+   Below one, a nameplate held at constant SCREEN size is wider than the room the person stands
+   in — the words out-mass the building, which is the complaint the constant-size trick exists
+   to prevent, arriving from the other side. So the far view sheds its words. What is left is a
+   signed plan: room signs (a plan is signed), the light, and a person as their own colour. */
+
+.wp-view[data-far="1"] .wp-tag,
+.wp-view[data-far="1"] .wp-say,
+.wp-view[data-far="1"] .wp-kit { display: none; }
+.wp-view[data-far="1"] .wp-can { opacity: 0; pointer-events: none; }
+.wp-view[data-far="1"] .wp-plaque {
+  font-size: 6px;
+  padding: 0 2px;
+  letter-spacing: 0;
+  /* A room pulled back is short of WIDTH, never of height, so a sign that wraps says more
+     than one that ellipses: "PRODUCTION & MAKERS" over two lines beats "PRODUCTIO...". */
+  white-space: normal;
+  line-height: 1.1;
+  text-align: center;
+}
+
 
 /* ── the rooms ─────────────────────────────────────────────────────────────────────────────*/
 
@@ -491,6 +648,11 @@ body.vscode-high-contrast-light .wp {
   z-index: 300;
   transform: scale(var(--inv, 1));
   transform-origin: 0 0;
+  /* Held at constant SCREEN size, so its layout box is its pixel box — which makes the cap on
+     its width computable: the room's own width on screen, tiles by the tile size by the zoom.
+     A flat cap in world pixels was right at one scale and wrong at every other, and pulled back
+     it let three department signs sit on top of each other over rooms 64px wide. */
+  max-width: calc(var(--rw, 8) * 24px * var(--z, 1));
   font-size: 7px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -572,6 +734,11 @@ body.vscode-high-contrast-light .wp {
   width: 32px;
   height: 8px;
   background: var(--wp-drop);
+  /* A cast shadow is a drawing, never a target. It is 32px wide against a 36px body and it sits
+     down and to the RIGHT of the person it belongs to, so it overhangs the neighbour's tool
+     glyphs — and it was catching their clicks: a pointer at a glyph's own centre resolved to the
+     shadow of the person standing behind. Two of the sixteen actors on screen, every frame. */
+  pointer-events: none;
   clip-path: polygon(
     6px 0, 24px 0, 24px 2px, 28px 2px, 28px 6px, 24px 6px, 24px 8px,
     6px 8px, 6px 6px, 2px 6px, 2px 2px, 6px 2px);
@@ -793,8 +960,9 @@ ${STAMP_CSS}
   .wp-actor.is-brain::before,
   .wp-actor .wp-stand .wp-f0,
   .wp-actor .wp-stand .wp-f1,
-  .wp-actor.is-talking .wp-body { animation: none !important; }
-  .wp-pool, .wp-shut, .wp-leaf { transition: none; }
+  .wp-actor.is-talking .wp-body,
+  .wp-view[data-follow="0"] .wp-cam-follow { animation: none !important; }
+  .wp-pool, .wp-shut, .wp-leaf, .wp-rungs i, .wp-fac { transition: none; }
   .wp-lit .wp-pool { animation: none !important; }
   .wp-stand .wp-f0 { opacity: 1; }
   .wp-stand .wp-f1 { opacity: 0; }

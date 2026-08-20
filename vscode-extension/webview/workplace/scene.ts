@@ -34,6 +34,11 @@ import {
   SNOOZE,
 } from "./art";
 import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
+
+/** How far the ground runs past the built world, in tiles. Forty covers the worst aspect
+ *  mismatch the panel can be given (a tall side bar at the bottom rung of the scale ladder)
+ *  without ever showing the edge of the drawing. */
+const GROUNDS = 40;
 import type { TileId } from "./tiles";
 import { buildWorld } from "./world";
 import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
@@ -251,7 +256,14 @@ function renderMap(world: World): string {
   // The envelope, then everything carved out of it. Mass first: the building is solid until a
   // room or a passage takes a bite out of it, which is what gives a shallow room something
   // BEHIND it instead of a blank corridor.
-  out += patch("grass", { x: 0, y: 0, w: world.cols, h: world.rows });
+  // The ground runs well past the world. A panel whose aspect does not match the building's —
+  // a 380px side bar against a hall-shaped floor — cannot frame the whole company without slack
+  // in the other axis, which is geometry and not a bug; what IS a bug is that slack reading as a
+  // void. Drawn as more of the same ground at the same pitch (the pattern tiles from the origin,
+  // so a whole number of tiles out is seamless), it reads as the rest of the site. One rect.
+  out += patch("grass", {
+    x: -GROUNDS, y: -GROUNDS, w: world.cols + GROUNDS * 2, h: world.rows + GROUNDS * 2,
+  });
   out += patch("mass", {
     x: world.envelope.x,
     y: world.envelope.y,
@@ -420,17 +432,39 @@ function plaques(world: World): string {
       const y = r.open ? main.y + 1 : main.y + 1;
       return (
         `<span class="wp-plaque" data-room="${esc(r.id)}" ` +
-        `style="left:${x * TILE_PX}px;top:${y * TILE_PX - 11}px;` +
-        `max-width:${(main.w - 2) * TILE_PX}px">${esc(r.label)}</span>`
+        `style="left:${x * TILE_PX}px;top:${y * TILE_PX - 11}px;--rw:${main.w - 2}">` +
+        `${esc(r.label)}</span>`
       );
     })
     .join("");
 }
 
-/** The whole building at a glance, in the corner. The camera takes the overview away, so this
- *  gives it back in the one form that costs no space: room shapes, and a dot per person in their
- *  pod's colour. The engine draws the dots and the box showing where you are looking. */
-function minimap(world: World): string {
+/** THE SURVEY PANEL — the one corner that owns "where am I looking, and how far back".
+ *
+ *  The camera took the overview away and gave back a 96px plan you could click, which is where
+ *  this went wrong: the plan was `aria-hidden`, it carried no label, no cursor story and no
+ *  scale, and the SCALE ITSELF was not a control at all — it was derived from the panel width
+ *  and clamped to whole numbers, so the smallest view possible was two thirds of the building.
+ *  A reader could neither pull back nor tell that dragging was allowed. The gesture existed and
+ *  the affordance did not, which is an ergonomic failure and not a missing feature.
+ *
+ *  So the plan becomes a survey sheet, and it carries the instruments a survey sheet carries:
+ *
+ *    the plan        rooms as shapes, a dot per person, a box for where you are looking —
+ *                    click it or DRAG it to go there
+ *    the scale rule  the zoom ladder drawn as what it is, a rule of ascending scale marks, with
+ *                    the rung you are on lit and a cap at each end
+ *    whole floor     the bottom of the ladder plus a centred frame: the whole company, once
+ *    follow          the latch that says whether the camera is chasing the work or you are
+ *                    holding it, because a camera that silently takes itself back is worse than
+ *                    one that never moved
+ *
+ *  Rejected: a floating +/-/fit pill in the corner, which is what every map on the web ships and
+ *  therefore what I would have drawn for any project at all; and putting the controls in the top
+ *  strip, which re-adds the dashboard chrome the previous round deleted and splits "where am I
+ *  looking" across two corners of the same frame.
+ */
+function survey(world: World): string {
   const body = world.rooms
     .filter((r) => !r.outdoor)
     .map((r) =>
@@ -440,16 +474,54 @@ function minimap(world: World): string {
           `width="${r.w * TILE_CELLS}" height="${r.h * TILE_CELLS}"/>`,
     )
     .join("");
+  // Nine rungs, because a rung is a THIRD of a source pixel's width on screen and thirds are the
+  // only ladder that stays pixel-exact BELOW one. Drawn as a rule of rising marks: the shape says
+  // "scale" on sight, and the mark you are standing on is the one that is lit.
+  const rungs = Array.from({ length: 9 }, (_, i) => i + 1)
+    .map((n) => `<i data-rung="${n}" style="--h:${2 + n}px"></i>`)
+    .join("");
   return (
-    `<div class="wp-mini" aria-hidden="true" data-cols="${world.cols}" data-rows="${world.rows}">` +
-    `<svg viewBox="0 0 ${world.cols * TILE_CELLS} ${world.rows * TILE_CELLS}" preserveAspectRatio="none">` +
+    `<div class="wp-plan">` +
+    `<div class="wp-mini" data-cols="${world.cols}" data-rows="${world.rows}" ` +
+    `role="button" tabindex="0" aria-label="The plan — click or drag to look somewhere else" ` +
+    `title="The plan — click or drag to look somewhere else">` +
+    `<svg viewBox="0 0 ${world.cols * TILE_CELLS} ${world.rows * TILE_CELLS}" ` +
+    `preserveAspectRatio="none" aria-hidden="true">` +
     `<rect class="mm-bg" x="0" y="0" width="${world.facadeX * TILE_CELLS}" height="${world.rows * TILE_CELLS}"/>` +
     body +
     `<rect class="mm-hall" x="${world.hall.x * TILE_CELLS}" y="${world.hall.y * TILE_CELLS}" ` +
     `width="${world.hall.w * TILE_CELLS}" height="${world.hall.h * TILE_CELLS}"/>` +
-    `</svg><b class="wp-eye"></b><span class="wp-dots"></span></div>`
+    `</svg><b class="wp-eye"></b><span class="wp-dots"></span></div>` +
+    `<div class="wp-rule" data-step="3">` +
+    `<button class="wp-cam wp-cam-step" data-cam="out" type="button" ` +
+    `title="Pull back — mouse wheel, or the minus key" aria-label="Zoom out">&#8722;</button>` +
+    `<span class="wp-rungs" role="group" aria-label="Scale">${rungs}</span>` +
+    `<button class="wp-cam wp-cam-step" data-cam="in" type="button" ` +
+    `title="Move in — mouse wheel, or the plus key" aria-label="Zoom in">+</button>` +
+    `<b class="wp-read">1&#215;</b>` +
+    `</div>` +
+    `<button class="wp-cam wp-cam-wide" data-cam="whole" type="button" ` +
+    `title="Frame the whole company — the 0 key, or double-click the floor" ` +
+    `aria-label="Show the whole floor">${FIT_MARK}<span>WHOLE FLOOR</span></button>` +
+    `<button class="wp-cam wp-cam-wide wp-cam-follow" data-cam="follow" type="button" ` +
+    `title="Follow the work — the F key" aria-label="Follow the work" ` +
+    `aria-pressed="true">${EYE_MARK}` +
+    `<span class="wp-on">FOLLOWING</span><span class="wp-off">RESUME FOLLOW</span></button>` +
+    `</div>`
   );
 }
+
+/** Two marks for the two latches, drawn rather than typed: a glyph font is the one thing in this
+ *  document that cannot be relied on inside a webview, and both of these have to read at 11px. */
+const FIT_MARK =
+  `<svg class="wp-cam-mark" viewBox="0 0 12 12" aria-hidden="true">` +
+  `<path d="M0 0h4v1.5H1.5V4H0zM8 0h4v4h-1.5V1.5H8zM0 8h1.5v2.5H4V12H0zM10.5 8H12v4H8v-1.5h2.5z"/>` +
+  `<rect x="3.5" y="4" width="5" height="4.5"/></svg>`;
+const EYE_MARK =
+  `<svg class="wp-cam-mark" viewBox="0 0 12 12" aria-hidden="true">` +
+  `<path d="M5.25 0h1.5v2.5h-1.5zM5.25 9.5h1.5V12h-1.5zM0 5.25h2.5v1.5H0zM9.5 5.25H12v1.5H9.5z"/>` +
+  `<path d="M6 2.5A3.5 3.5 0 1 0 6 9.5 3.5 3.5 0 1 0 6 2.5zm0 1.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/>` +
+  `</svg>`;
 
 /* ── the people ──────────────────────────────────────────────────────────────────────────────*/
 
@@ -645,7 +717,7 @@ export function renderScene(state: TeamState): string {
     renderActors(state) +
     `</div>` +
     hud(state, t, list.length) +
-    minimap(WORLD) +
+    survey(WORLD) +
     `</div>`;
   return `<div class="wp">${closeSheet()}${body}</div>`;
 }

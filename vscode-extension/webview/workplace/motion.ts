@@ -113,36 +113,120 @@ export const SCRIPT =
   }
 
   /* ── steering ────────────────────────────────────────────────────────────────────────────
-     The camera follows the work on its own. A reader who wants to look somewhere else drags the
-     floor or points at the plan in the corner, and it goes back to following a few seconds later
-     — a view that has to be handed back is a view you stop using. */
+     Every way a person might reasonably try to move a map, wired to the same camera.
+
+     What was here before was ONE of them — drag the floor — with no affordance beyond a grab
+     cursor, and it undid itself six seconds later. So the reader could not pull back (there was
+     no zoom control of any kind), could not tell panning was allowed, and could not keep a view
+     they had found. Now:
+
+       drag the floor          pan, and the frame keeps a grab cursor plus a HOLDING latch that
+                               says out loud the camera is yours
+       wheel over the floor    zoom about the pointer, so the desk under the cursor stays there
+       the rule                click a mark, or drag along it, to set the scale outright
+       + and -                 one rung at a time, on the buttons and on the keys
+       0                       the whole company, framed
+       double-click the floor  the same, because that is what a double-click means on a map
+       arrows / WASD           pan by a screen-sized step
+       f                       hand the camera back to the work
+
+     Taking the camera is IMPLICIT (any of the above) and giving it back is EXPLICIT (the latch,
+     or f). That asymmetry is the whole ergonomic argument: a reader who moves the map meant to,
+     and a reader who wants the work back can always see how to ask for it. */
 
   function steer() {
     var view = document.querySelector(".wp-view");
+    var plan = document.querySelector(".wp-plan");
     var mini = document.querySelector(".wp-mini");
+
+    /* The plan, pointed at AND dragged. Pointer capture is what turns the second into the first
+       held down: without it a drag that leaves the little box stops steering. */
     if (mini) {
-      mini.addEventListener("pointerdown", function (e) {
+      var aimAt = function (e) {
         var r = mini.getBoundingClientRect();
         camLookAt(
           ((e.clientX - r.left - 2) / (r.width - 4)) * W.cols * W.tile,
           ((e.clientY - r.top - 2) / (r.height - 4)) * W.rows * W.tile
         );
+      };
+      var steering = false;
+      mini.addEventListener("pointerdown", function (e) {
+        steering = true;
+        aimAt(e);
+        try { mini.setPointerCapture(e.pointerId); } catch (err) {}
+        e.preventDefault();
         e.stopPropagation();
       });
+      mini.addEventListener("pointermove", function (e) { if (steering) aimAt(e); });
+      mini.addEventListener("pointerup", function () { steering = false; });
+      mini.addEventListener("pointercancel", function () { steering = false; });
     }
+
+    /* The rule and the two latches. One listener for the lot: they are all camera verbs and the
+       button carries which one it is. A pointerdown on the rungs scrubs, so the scale can be run
+       up and down in one gesture rather than nine clicks. */
+    if (plan) {
+      plan.addEventListener("click", function (e) {
+        var btn = e.target.closest ? e.target.closest("[data-cam]") : null;
+        if (!btn) return;
+        var verb = btn.getAttribute("data-cam");
+        if (verb === "in") camSetStep(CAM.step + 1), camHold();
+        else if (verb === "out") camSetStep(CAM.step - 1), camHold();
+        else if (verb === "whole") camWhole();
+        else if (verb === "follow") camFollow(!CAM.follow);
+        e.stopPropagation();
+      });
+      var rungs = plan.querySelector(".wp-rungs");
+      if (rungs) {
+        var scrub = function (e) {
+          var r = rungs.getBoundingClientRect();
+          var f = (e.clientX - r.left) / Math.max(1, r.width);
+          camHold();
+          camSetStep(1 + Math.round(Math.max(0, Math.min(1, f)) * 8));
+        };
+        var scrubbing = false;
+        rungs.addEventListener("pointerdown", function (e) {
+          scrubbing = true;
+          scrub(e);
+          try { rungs.setPointerCapture(e.pointerId); } catch (err) {}
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        rungs.addEventListener("pointermove", function (e) { if (scrubbing) scrub(e); });
+        rungs.addEventListener("pointerup", function () { scrubbing = false; });
+        rungs.addEventListener("pointercancel", function () { scrubbing = false; });
+      }
+      /* The panel sits inside the frame, so without this a click on a button would also start
+         dragging the floor underneath it. */
+      plan.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+    }
+
     if (!view) return;
+
+    /* Zoom about the pointer. passive:false is required or the browser refuses the
+       preventDefault and the whole webview scrolls instead of the map zooming. A trackpad's
+       pinch arrives here as ctrlKey + wheel, which is the same verb. */
+    view.addEventListener("wheel", function (e) {
+      if (e.target.closest && e.target.closest(".wp-plan")) return;
+      e.preventDefault();
+      var dir = e.deltaY < 0 ? 1 : -1;
+      camHold();
+      camSetStep(CAM.step + dir, e.clientX, e.clientY);
+    }, { passive: false });
+
     var drag = null;
     view.addEventListener("pointerdown", function (e) {
-      if (e.target.closest && e.target.closest(".wp-actor")) return;
-      drag = { x: e.clientX, y: e.clientY, cx: CAM.x, cy: CAM.y };
+      if (e.target.closest && e.target.closest(".wp-actor, .wp-plan")) return;
+      drag = { x: e.clientX, y: e.clientY, cx: CAM.x, cy: CAM.y, moved: false };
       view.classList.add("is-dragging");
       try { view.setPointerCapture(e.pointerId); } catch (err) {}
     });
     view.addEventListener("pointermove", function (e) {
       if (!drag) return;
-      CAM.x = drag.cx - (e.clientX - drag.x) / CAM.zoom;
-      CAM.y = drag.cy - (e.clientY - drag.y) / CAM.zoom;
-      CAM.free = TICK.t + 6000;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) { drag.moved = true; camHold(); }
+      CAM.x = drag.cx - dx / CAM.zoom;
+      CAM.y = drag.cy - dy / CAM.zoom;
       camClamp();
       camApply();
     });
@@ -153,6 +237,30 @@ export const SCRIPT =
     };
     view.addEventListener("pointerup", release);
     view.addEventListener("pointercancel", release);
+    view.addEventListener("dblclick", function (e) {
+      if (e.target.closest && e.target.closest(".wp-actor, .wp-plan")) return;
+      camWhole();
+    });
+
+    /* Keys. The frame takes focus so they can be aimed at the map rather than at the page, and
+       every one of them is on a tooltip somewhere in the panel — a shortcut nothing announces is
+       a shortcut nobody has. */
+    view.setAttribute("tabindex", "0");
+    view.addEventListener("keydown", function (e) {
+      if (e.target !== view) return;
+      var k = e.key;
+      var pan = Math.max(48, Math.min(CAM.vw, CAM.vh) * 0.28);
+      if (k === "+" || k === "=") camHold(), camSetStep(CAM.step + 1);
+      else if (k === "-" || k === "_") camHold(), camSetStep(CAM.step - 1);
+      else if (k === "0") camWhole();
+      else if (k === "f" || k === "F") camFollow(!CAM.follow);
+      else if (k === "ArrowLeft" || k === "a") camPan(-pan, 0);
+      else if (k === "ArrowRight" || k === "d") camPan(pan, 0);
+      else if (k === "ArrowUp" || k === "w") camPan(0, -pan);
+      else if (k === "ArrowDown" || k === "s") camPan(0, pan);
+      else return;
+      e.preventDefault();
+    });
   }
 
   /* ── clicking a character aims the rest of the panel at them ─────────────────────────────── */
@@ -243,9 +351,14 @@ export const SCRIPT =
   /* A handle for looking at the whole building at once, which the camera deliberately never does.
      For a build loop and a critic, never for the product. */
   window.__wp.zoom = function (z) {
-    CAM.zoom = z; CAM.free = TICK.t + 600000; camClamp(); camApply();
-    return { zoom: CAM.zoom, span: camSpan(), world: { w: W.cols * W.tile, h: W.rows * W.tile } };
+    camHold();
+    camSetStep(typeof z === "number" ? z * 3 : CAM.step);
+    return { zoom: CAM.zoom, step: CAM.step, span: camSpan(), world: worldPx() };
   };
+  window.__wp.whole = function () { return camWhole(); };
+  window.__wp.follow = function (on) { return camFollow(on === undefined ? true : on); };
+  window.__wp.pan = function (dx, dy) { camPan(dx, dy); return { x: CAM.x, y: CAM.y }; };
+  window.__wp.fitStep = function () { return { fit: camFitStep(), at: CAM.step, min: 1, max: 9 }; };
   window.__wp.step = function (ts) {
     TICK.t = ts;
     var dt = 16;

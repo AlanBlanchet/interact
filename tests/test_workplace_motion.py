@@ -409,3 +409,75 @@ def test_nobody_stands_on_top_of_anybody(page):
         "characters sharing a spot for most of the window — one of them cannot be seen:\n  "
         + "\n  ".join(f"{p}: {n}/{samples} frames" for p, n in stuck.items())
     )
+
+
+def test_a_shadow_never_swallows_the_click_meant_for_a_glyph(page):
+    """A cast shadow is scenery; it must not be in the way of the thing it falls on.
+
+    Five capability glyphs failed a hit-test at their own geometric centre, and it looked like a
+    z-order bug across sixteen actors. It was not: two of the five were `.wp-shade` — a shadow cast
+    down-and-right, lying over the NEIGHBOUR's glyphs with no `pointer-events: none`. Decoration
+    that intercepts a pointer is a defect no screenshot can show, because the pixels are correct.
+    """
+    offenders = page.evaluate(
+        """() => [...document.querySelectorAll('.wp-shade')]
+              .filter((el) => getComputedStyle(el).pointerEvents !== 'none').length"""
+    )
+    assert offenders == 0, f"{offenders} shadow(s) can intercept a click meant for what they fall on"
+
+
+def test_you_can_pull_back_further_than_the_old_camera_allowed(page):
+    """Alan: "I also can't pan and unzoom easily in the team window."
+
+    The root cause was not discoverability. `camFit` clamped zoom to WHOLE NUMBERS >= 1, and at
+    zoom 1 the viewport already spans less than the building — so no reachable scale showed the
+    whole company, the diagnostic handle included. Whole numbers can only zoom IN. Seeing
+    everything needs a fractional rung, quantised to the sprite's own pixel so the art stays crisp
+    rather than smearing between device pixels.
+
+    So the guard is not "does a button exist" but "is there a scale below 1 at all" — the thing
+    whose absence made the complaint unfixable by any amount of better affordances.
+    """
+    seen = page.evaluate(
+        """() => {
+             const wp = window.__wp;
+             if (!wp || !wp.whole || !wp.cam) return null;
+             wp.whole();
+             const at_whole = wp.cam.zoom;
+             const tiles = (z) => window.innerWidth / (wp.world.tile * z);
+             return { at_whole, tiles_whole: tiles(at_whole), tiles_at_one: tiles(1) };
+           }"""
+    )
+    assert seen is not None, "the camera exposes no handle to measure — it must stay measurable"
+    assert seen["at_whole"] < 1, (
+        f"whole-floor settled at zoom {seen['at_whole']}, so it can only zoom IN; the fractional "
+        "rungs are what make pulling back possible"
+    )
+    assert seen["tiles_whole"] > seen["tiles_at_one"], (
+        "pulling back shows no more of the world than zoom 1 did"
+    )
+
+
+def test_the_camera_does_not_rewrite_the_scene_sixty_times_a_second(page):
+    """`camApply` stamped `data-far` / `data-follow` on the scene root every frame, whether or not
+    they had changed — sixty attribute writes a second, each one an invalidation, for a value that
+    changes when you touch the camera and at no other time.
+
+    Written as a guard rather than a claimed win: measured frame time was the same before and
+    after (the honest answer, after sampling a control), so this pins the CORRECTNESS — a still
+    camera should be silent — instead of a speedup nobody demonstrated.
+    """
+    writes = page.evaluate(
+        """() => new Promise((done) => {
+             const root = document.querySelector('.wp-world') || document.body;
+             let n = 0;
+             const obs = new MutationObserver((rs) => {
+               for (const r of rs) if (r.attributeName === 'data-far' || r.attributeName === 'data-follow') n++;
+             });
+             obs.observe(root, { attributes: true });
+             setTimeout(() => { obs.disconnect(); done(n); }, 900);
+           })"""
+    )
+    assert writes <= 2, (
+        f"the camera rewrote its own state {writes} times while nothing about it changed"
+    )

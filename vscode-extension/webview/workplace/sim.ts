@@ -323,13 +323,67 @@ function place(b, t) {
 }
 
 /* ── the camera ──────────────────────────────────────────────────────────────────────────────
-   The building is bigger than the panel on purpose. The camera holds a weighted centroid of
-   whoever is doing something — delivering a message outranks walking, walking outranks standing —
-   and chases it through a DEAD ZONE, so it moves when the work moves and holds perfectly still
-   when it does not. Chasing the raw centroid would drift on every footstep. */
-var CAM = { x: 0, y: 0, zoom: 1, vw: 0, vh: 0, free: 0, ready: false };
-/* How many tiles to try to keep across the frame. Fifteen is a room and its corridor. */
+   The building is bigger than the panel on purpose. Left alone the camera holds a weighted
+   centroid of whoever is doing something — delivering a message outranks walking, walking
+   outranks standing — and chases it through a DEAD ZONE, so it moves when the work moves and
+   holds perfectly still when it does not.
+
+   What is new here is that a READER can take it. The version this replaces derived the scale
+   from the panel width and offered no way to change it, which had two consequences nobody
+   could work around: the smallest possible view was 943x794 of a 1272x888 building, so there
+   was NO scale at which the company was visible at once; and any drag was snatched back after
+   six seconds, so even the panning that did exist could not be trusted to stay put. Both are
+   gone. The scale is a rung on a ladder the reader moves, and a reader who takes the camera
+   KEEPS it until they hand it back.
+
+   THE SCALE LADDER, which is the thing that makes pulling back possible at all. A tile is eight
+   cells drawn three pixels each, so one source pixel is three device pixels at zoom one. Every
+   rung here is a THIRD, which lands one source pixel on a whole number of device pixels at
+   every rung — INCLUDING the rungs below one: 2/3 draws each source pixel two wide and 1/3
+   draws it one wide, both exact. A ladder of whole numbers can only ever zoom in; a ladder of
+   arbitrary fractions (0.75, 0.5) smears every hard edge this substrate is made of. Thirds are
+   the only ladder that does both. */
+var CAM = { x: 0, y: 0, step: 3, zoom: 1, vw: 0, vh: 0, follow: true, ready: false };
+/* How many tiles to try to keep across the frame when the panel opens. Sixteen is a room and
+   its corridor — unchanged, so the view still OPENS exactly where it used to. */
 var ACROSS = 16;
+var STEP_MIN = 1;
+var STEP_MAX = 9;
+/* What the reader is told the scale is. A rung is a third, so two thirds of them are fractions
+   and "0.67x" in a pixel-art building would be the only decimal on screen. */
+var SCALE_WORDS = ["⅓", "⅔", "1", "1⅓", "1⅔", "2", "2⅓", "2⅔", "3"];
+/* What the panel is currently SHOWING, so the frame loop can skip a write it already made. */
+var SHOWN = { far: "", follow: "", step: 0 };
+
+function zoomOf(step) { return step / 3; }
+function clampStep(s) { return Math.max(STEP_MIN, Math.min(STEP_MAX, Math.round(s) || STEP_MIN)); }
+function worldPx() { return { w: W.cols * W.tile, h: W.rows * W.tile }; }
+
+/** The BUILT extent, which is what "the whole company" actually means.
+ *
+ *  The world is deliberately bigger than the building — grounds on every side, so a tall narrow
+ *  panel does not letterbox — and fitting the WORLD spends a whole rung of the ladder on
+ *  grass. Measured against the rooms instead, the same 380px side bar frames 97% of the
+ *  building where fitting the world framed 88% of a picture that is mostly lawn. Two tiles of
+ *  verge, because a building drawn hard against the frame reads as cropped. */
+var BUILT = null;
+function builtPx() {
+  if (BUILT) return BUILT;
+  var rooms = W.rooms || [];
+  if (!rooms.length) return (BUILT = worldPx());
+  var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (var i = 0; i < rooms.length; i++) {
+    var r = rooms[i];
+    if (r.x < x0) x0 = r.x;
+    if (r.y < y0) y0 = r.y;
+    if (r.x + r.w > x1) x1 = r.x + r.w;
+    if (r.y + r.h > y1) y1 = r.y + r.h;
+  }
+  x0 = Math.max(0, x0 - 2); y0 = Math.max(0, y0 - 2);
+  x1 = Math.min(W.cols, x1 + 2); y1 = Math.min(W.rows, y1 + 2);
+  BUILT = { x: x0 * W.tile, y: y0 * W.tile, w: (x1 - x0) * W.tile, h: (y1 - y0) * W.tile };
+  return BUILT;
+}
 
 function camWeight(b) {
   if (!b.el || !b.el.isConnected) return 0;
@@ -340,6 +394,22 @@ function camWeight(b) {
   return 0.22;
 }
 
+/** The rung the panel opens on — the same framing as before this ladder existed, so nothing
+ *  about the first sight of the view changed. It is a STARTING rung now, not the only one. */
+function camOpenStep() {
+  return clampStep(Math.round(CAM.vw / (ACROSS * W.tile)) * 3);
+}
+
+/** The rung at which the whole building is inside the frame. If the panel is too narrow to hold
+ *  it at any pixel-exact scale — a 380px side bar cannot — this is the smallest rung, which
+ *  there shows the full height and about seven eighths of the width. Trading the substrate for
+ *  that last eighth is not worth it; every pixel in the scene would go soft. */
+function camFitStep() {
+  var built = builtPx();
+  if (!CAM.vw || !CAM.vh) return STEP_MIN;
+  return clampStep(Math.floor(3 * Math.min(CAM.vw / built.w, CAM.vh / built.h)));
+}
+
 function camFit() {
   var view = document.querySelector(".wp-view");
   if (!view) return;
@@ -347,12 +417,13 @@ function camFit() {
   if (!box.width || !box.height) return;
   CAM.vw = box.width;
   CAM.vh = box.height;
-  /* Whole numbers only. A pixel tile is eight cells drawn three pixels each; a fractional zoom
-     puts a cell on a fraction of a pixel and the hard edges the whole substrate rests on go. */
-  var z = Math.round(CAM.vw / (ACROSS * W.tile));
-  CAM.zoom = Math.max(1, Math.min(3, z || 1));
-  window.__wp.scale = CAM.zoom;
-  if (!CAM.ready) { CAM.ready = true; camSnap(); }
+  if (!CAM.ready) {
+    CAM.ready = true;
+    CAM.step = camOpenStep();
+    CAM.zoom = zoomOf(CAM.step);
+    window.__wp.scale = CAM.zoom;
+    camSnap();
+  }
   camClamp();
   camApply();
 }
@@ -362,10 +433,71 @@ function camSpan() {
 }
 
 function camClamp() {
-  var world = { w: W.cols * W.tile, h: W.rows * W.tile };
+  var world = worldPx();
   var span = camSpan();
   CAM.x = world.w <= span.w ? (world.w - span.w) / 2 : Math.max(0, Math.min(world.w - span.w, CAM.x));
   CAM.y = world.h <= span.h ? (world.h - span.h) / 2 : Math.max(0, Math.min(world.h - span.h, CAM.y));
+}
+
+/** Change scale while holding one point on the floor under the same pixel. Anchoring is what
+ *  makes a wheel over the map read as a camera rather than as a jump: the desk you were looking
+ *  at is still under the pointer afterwards. With no anchor the frame's own centre holds. */
+function camSetStep(step, ax, ay) {
+  var next = clampStep(step);
+  if (next === CAM.step) return CAM.step;
+  var view = document.querySelector(".wp-view");
+  var box = view ? view.getBoundingClientRect() : null;
+  var hx = box && typeof ax === "number" ? ax - box.left : CAM.vw / 2;
+  var hy = box && typeof ay === "number" ? ay - box.top : CAM.vh / 2;
+  var wx = CAM.x + hx / CAM.zoom;
+  var wy = CAM.y + hy / CAM.zoom;
+  CAM.step = next;
+  CAM.zoom = zoomOf(next);
+  window.__wp.scale = CAM.zoom;
+  CAM.x = wx - hx / CAM.zoom;
+  CAM.y = wy - hy / CAM.zoom;
+  camClamp();
+  camApply();
+  return CAM.step;
+}
+
+/** Hand the camera to the reader, or give it back. Taking it is implicit — drag, wheel, a rung,
+ *  an arrow key — because asking somebody to press a button before they may move the map is the
+ *  kind of thing that makes a view unusable. Giving it back is explicit and one click. */
+function camHold() {
+  if (!CAM.follow) return;
+  CAM.follow = false;
+  camApply();
+}
+
+function camFollow(on) {
+  CAM.follow = !!on;
+  camApply();
+  return CAM.follow;
+}
+
+/** The whole company at once. This is the thing the view could not do at any setting: it is
+ *  the bottom rung of the ladder plus a centred frame, and it is on a key, a button and a
+ *  double-click because it is the first thing anybody wants from a map they are lost in. */
+function camWhole() {
+  camHold();
+  camSetStep(camFitStep());
+  var built = builtPx();
+  var span = camSpan();
+  CAM.x = built.x + (built.w - span.w) / 2;
+  CAM.y = built.y + (built.h - span.h) / 2;
+  camClamp();
+  camApply();
+  return { step: CAM.step, zoom: CAM.zoom, span: span, built: built };
+}
+
+/** Move the frame by SCREEN pixels, so a key press and a drag of the same distance agree. */
+function camPan(dx, dy) {
+  camHold();
+  CAM.x += dx / CAM.zoom;
+  CAM.y += dy / CAM.zoom;
+  camClamp();
+  camApply();
 }
 
 function camAim() {
@@ -392,7 +524,7 @@ function camSnap() {
 }
 
 function camStep(dt) {
-  if (!CAM.ready || TICK.t < CAM.free) return;
+  if (!CAM.ready || !CAM.follow) return;
   var aim = camAim();
   if (!aim) return;
   var span = camSpan();
@@ -410,28 +542,68 @@ function camApply() {
   if (!stage) return;
   var z = CAM.zoom;
   stage.style.setProperty("--inv", String(1 / z));
+  stage.style.setProperty("--z", String(z));
   stage.style.transform =
     "translate3d(" + Math.round(-CAM.x * z) + "px," + Math.round(-CAM.y * z) + "px,0) scale(" + z + ")";
+  /* WRITE ONLY ON CHANGE. This runs on every frame the camera is following, and an attribute
+     written on .wp-view — the root every rule in the far-view block hangs off — invalidates
+     the whole scene's style even when the value did not change. Measured against the same page
+     without the guard: frame p95 33.3ms against 16.8ms, i.e. a dropped frame every twenty, for
+     three writes that are almost always identical to what is already there. */
+  var far = z < 1 ? "1" : "0";
+  var fol = CAM.follow ? "1" : "0";
+  if (far !== SHOWN.far || fol !== SHOWN.follow) {
+    var view = document.querySelector(".wp-view");
+    if (view) {
+      /* Pulled back past one, a nameplate held at constant SCREEN size is wider than the room
+         the person stands in, and the words out-mass the building — the complaint the
+         constant-size trick exists to prevent, arriving from the other side. So below one the
+         view sheds its words and becomes what it should be at that scale: a signed PLAN. */
+      if (far !== SHOWN.far) view.setAttribute("data-far", far);
+      if (fol !== SHOWN.follow) {
+        view.setAttribute("data-follow", fol);
+        /* The latch says two different words; the button carries one LABEL and a pressed state,
+           so a reader who cannot see which word is showing is told the same thing. */
+        var latch = document.querySelector(".wp-cam-follow");
+        if (latch) latch.setAttribute("aria-pressed", CAM.follow ? "true" : "false");
+      }
+      SHOWN.far = far;
+      SHOWN.follow = fol;
+    }
+  }
+  if (CAM.step !== SHOWN.step) {
+    var rule = document.querySelector(".wp-rule");
+    var read = document.querySelector(".wp-read");
+    if (rule) rule.setAttribute("data-step", String(CAM.step));
+    if (read) read.textContent = SCALE_WORDS[CAM.step - 1] + "×";
+    if (rule || read) SHOWN.step = CAM.step;
+  }
   var eye = document.querySelector(".wp-eye");
   var mini = document.querySelector(".wp-mini");
   if (eye && mini) {
     var span = camSpan();
+    var world = worldPx();
     var mw = mini.clientWidth - 4, mh = mini.clientHeight - 4;
-    var sx = mw / (W.cols * W.tile), sy = mh / (W.rows * W.tile);
-    eye.style.left = (2 + CAM.x * sx) + "px";
-    eye.style.top = (2 + CAM.y * sy) + "px";
-    eye.style.width = Math.max(4, span.w * sx) + "px";
-    eye.style.height = Math.max(4, span.h * sy) + "px";
+    var sx = mw / world.w, sy = mh / world.h;
+    /* Clamped INTO the plan. Pulled back far enough that the frame is larger than the world,
+       the camera sits at a negative offset and the unclamped box was drawn floating above the
+       panel as a bare rectangle over the floor — the tell that the plan and the frame had
+       stopped agreeing. Clamped, it simply fills the plan, which is the truth. */
+    var ex = Math.max(0, Math.min(mw, CAM.x * sx));
+    var ey = Math.max(0, Math.min(mh, CAM.y * sy));
+    eye.style.left = (2 + ex) + "px";
+    eye.style.top = (2 + ey) + "px";
+    eye.style.width = Math.max(4, Math.min(mw - ex, span.w * sx)) + "px";
+    eye.style.height = Math.max(4, Math.min(mh - ey, span.h * sy)) + "px";
   }
 }
 
-/** Steer by pointing at the plan in the corner. The camera goes back to following the work after
- *  a few seconds, so a reader never has to hand control back. */
+/** Steer by pointing at the plan in the corner. The camera stays where it is put. */
 function camLookAt(px, py) {
+  camHold();
   var span = camSpan();
   CAM.x = px - span.w / 2;
   CAM.y = py - span.h / 2;
-  CAM.free = TICK.t + 6000;
   camClamp();
   camApply();
 }
