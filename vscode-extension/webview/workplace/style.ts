@@ -224,6 +224,9 @@ body.vscode-high-contrast-light .wp {
    the engine and arrives here as one transform on the stage, so every tile, sprite and route
    stays in exact proportion and nothing ever reflows. */
 
+/* Scenery is not selectable prose. A drag starting on a speech bubble or a nameplate used to
+   begin a native text selection instead of panning the map, which reads as the map jamming. */
+.wp-say, .wp-tag, .wp-plaque, .wp-stamp, .wp-kit, .wp-fac { user-select: none; -webkit-user-select: none; }
 .wp-view {
   position: relative;
   flex: 1 1 auto;

@@ -86,8 +86,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // clause goes false — and a disposed webview whose reference we kept throws on the next write.
     // That made the SECOND conversation you opened blank the whole sidebar with no visible way
     // back: `Error: Webview is disposed` out of render(), sidebar chrome and nothing in it.
-    // Forget it here and the next show() resolves a fresh one. `railView.ts` has always guarded
-    // this; this file never needed to until the `when` clause made it disposable.
+    // Forget it here and the next show() resolves a fresh one. The roster view always guarded this;
+    // this file never needed to until a `when` clause made it disposable too.
     // Paint when it actually becomes visible. render() now refuses to write to a hidden view, and
     // a `when`-gated view can resolve a moment before VS Code shows it — without this the first
     // conversation of a session could resolve to an empty panel.

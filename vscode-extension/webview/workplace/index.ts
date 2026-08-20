@@ -40,7 +40,20 @@ function safeNonce(nonce: string): string {
   return clean || "workplace";
 }
 
-export function renderWorkplace(state: TeamState, nonce: string): string {
+/** An embedded panel rendered BESIDE the room — the roster, supplied by the host.
+ *
+ *  "Your team and agents panel are still on the left side, whereas they should be in the big main
+ *  panel somewhere." The room and the roster are two views of the same company and belong in the
+ *  same wide surface; the side bar is left for the one conversation you are having. The host owns
+ *  the roster's markup so this module keeps knowing only about the world.
+ */
+export interface WorkplaceAside {
+  style: string;
+  body: string;
+  script: string;
+}
+
+export function renderWorkplace(state: TeamState, nonce: string, aside?: WorkplaceAside): string {
   const n = safeNonce(nonce);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -51,10 +64,32 @@ export function renderWorkplace(state: TeamState, nonce: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The team</title>
 <style>${STYLE}</style>
+${aside ? `<style>${aside.style}
+/* The company, two ways, in one surface: the room on the left, the roster on the right. The
+   roster scrolls on its own so a long team never pushes the room off screen. */
+.wp-split { display: flex; align-items: stretch; height: 100vh; width: 100%; }
+.wp-split > .wp-room { flex: 1 1 auto; min-width: 0; position: relative; overflow: hidden; }
+.wp-split > .wp-list {
+  flex: 0 0 clamp(240px, 26%, 380px); min-width: 0; overflow-y: auto; overflow-x: hidden;
+  border-left: 1px solid var(--vscode-panel-border, transparent);
+  background: var(--vscode-editor-background);
+}
+/* 560, not 720. The breakpoint applies to the EDITOR GROUP, not the window: measured live, a
+   1280px laptop with both side bars open leaves roughly 630px here, so a 720px threshold stacked
+   the split for most real windows and only flipped side-by-side above ~1440px. At 560 the roster
+   still gets its 240px floor and the room keeps ~320px, which is a room rather than a slot. */
+@media (max-width: 560px) { .wp-split { flex-direction: column; }
+  .wp-split > .wp-list { flex: 0 0 auto; max-height: 45%; border-left: 0;
+    border-top: 1px solid var(--vscode-panel-border, transparent); } }
+</style>` : ""}
 </head>
 <body>
-${renderScene(state)}
+${aside
+  ? `<div class="wp-split"><div class="wp-room">${renderScene(state)}</div>` +
+    `<div class="wp-list">${aside.body}</div></div>`
+  : renderScene(state)}
 <script nonce="${n}">${SCRIPT}</script>
+${aside ? `<script nonce="${n}">${aside.script}</script>` : ""}
 </body>
 </html>`;
 }

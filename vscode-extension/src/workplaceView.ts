@@ -11,7 +11,8 @@ import type { TeamState, Worker } from "./team";
 /** The pixel-art renderer, loaded once. Bundled from `webview/workplace/` by
  *  `npm run build:workplace` and required at runtime rather than imported: it lives outside
  *  tsc's rootDir on purpose, so the visual can be reworked without recompiling the data layer. */
-let art: ((state: TeamState, nonce: string) => string) | null | undefined;
+type Aside = { style: string; body: string; script: string };
+let art: ((state: TeamState, nonce: string, aside?: Aside) => string) | null | undefined;
 /** Just the scene, for pushing an update into a document that is already live. */
 let scene: ((state: TeamState) => string) | null | undefined;
 
@@ -19,6 +20,8 @@ export function renderWorkplace(
   state: TeamState,
   nonce: string,
   log?: { appendLine(line: string): void },
+  /** The roster, rendered beside the room. Optional so the plain fallback below still works. */
+  aside?: Aside,
 ): string {
   if (art === undefined) {
     try {
@@ -32,7 +35,7 @@ export function renderWorkplace(
   }
   if (art) {
     try {
-      return art(state, nonce);
+      return art(state, nonce, aside);
     } catch (err) {
       log?.appendLine(`workplace art failed to render: ${err}`);
     }

@@ -282,31 +282,12 @@
     "views": {
       "interactAgentsSecondary": [
         {
-          "id": "interactAgents.rail",
-          "name": "Team",
-          "type": "webview",
-          "contextualTitle": "Interact team",
-          "visibility": "visible",
-          "initialSize": 5,
-          "when": "!interact.inConversation"
-        },
-        {
-          "id": "interactAgents.board",
-          "name": "Agents",
-          "contextualTitle": "Interact agents",
-          "icon": "media/interact.svg",
-          "visibility": "collapsed",
-          "initialSize": 1,
-          "when": "!interact.inConversation"
-        },
-        {
           "id": "interactAgents.chat",
-          "name": "Chat",
+          "name": "Conversation",
           "type": "webview",
           "contextualTitle": "Interact agent chat",
           "visibility": "visible",
-          "initialSize": 5,
-          "when": "interact.inConversation"
+          "initialSize": 5
         }
       ]
     },

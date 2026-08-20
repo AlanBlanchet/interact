@@ -18,6 +18,10 @@ export const SCRIPT =
   var FRESH_SECONDS = 60;
   var api = null;
   try { api = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null; } catch (e) { api = null; }
+  // Share it. A webview may acquire this handle exactly ONCE, and the roster now renders in the
+  // same document beside the room — a second acquire would throw and take the roster's buttons
+  // with it. The world runs first, so it is the one that publishes the handle.
+  try { window.__wpApi = api; } catch (e) { /* nothing depends on the stash succeeding */ }
 
   function load(key) {
     try { var s = api && api.getState ? api.getState() : null; if (s && s[key]) return s[key]; } catch (e) {}

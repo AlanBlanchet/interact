@@ -20,6 +20,14 @@ import { scopeStore } from "./scopeStore";
 import { facultiesOf, parseCapabilities } from "./capabilities";
 import { readOrg } from "./org";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
+import { buildRail, railRoute } from "./rail";
+import { railBody, railScript, railStyle } from "./railHtml";
+import { actionsFor } from "./agentActions";
+import { agentLabel, conversationTitle, roleOf } from "./roster";
+import { voiceOf } from "./statusLanguage";
+import { companyOf } from "./org";
+import { lastObservedAt } from "./teamState";
+import { describeScope, projectFor } from "./workspaceScope";
 
 export class WorkplacePanel {
   private static current: WorkplacePanel | undefined;
@@ -41,7 +49,22 @@ export class WorkplacePanel {
       // what the plain fallback does. Accepting only one was why clicking a sprite did nothing at
       // all — the hook was there, the two halves just never agreed on the word.
       const runId = selectedRunId(msg);
-      if (runId) void vscode.commands.executeCommand("interact.agents.chat", runId);
+      if (runId) {
+        void vscode.commands.executeCommand("interact.agents.chat", runId);
+        return;
+      }
+      // The roster shares this document now, so its buttons arrive here too. Routed through the
+      // same `railRoute` the side-bar view used, so what a row can do is decided in one place and
+      // an untrusted message still cannot name an arbitrary command.
+      railRoute(msg, {
+        run: (command) => void vscode.commands.executeCommand(command),
+        open: (id) => void vscode.commands.executeCommand("interact.agents.chat", id),
+        agent: (id) => { this.inside = id; this.pushRoster(); },
+        act: (command, id) => {
+          const run = readAgentRuns().find((r) => r.run_id === id);
+          if (run) void vscode.commands.executeCommand(command, { run });
+        },
+      });
     });
     this.watch();
     this.render();
@@ -120,6 +143,43 @@ export class WorkplacePanel {
   /** Whether the document exists yet. Assigning `webview.html` REBUILDS it — every sprite becomes
    *  a new element, every running animation dies, and there is no clock — so it happens once. */
   private mounted = false;
+  /** The agent whose conversations the roster is narrowed to, if you have gone into one. */
+  private inside: string | null = null;
+
+  /** The roster, as a fragment for the panel beside the room.
+   *
+   *  It used to be a side-bar view. "Your team and agents panel are still on the left side, whereas
+   *  they should be in the big main panel somewhere" — the room and the roster are two views of one
+   *  company, so they share a surface, and the side bar is left for the conversation.
+   */
+  private roster(): string {
+    const company = companyOf(readOrg()) ?? undefined;
+    const store = scopeStore();
+    const runs = store?.runs() ?? readAgentRuns();
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const now = Date.now() / 1000;
+    const rail = buildRail(
+      runs,
+      store ? describeScope(store.scope, folder ? projectFor(folder) : "") : "",
+      // Idleness is time since the run was last OBSERVED doing something, not since it started.
+      (run) => Math.max(0, now - (lastObservedAt(readAgentActivity(run.run_id, 40)) ?? now)),
+      undefined,
+      this.inside ? { agent: this.inside, roleOf: (r) => roleOf(r as never, company).id } : undefined,
+    );
+    return railBody(
+      rail,
+      voiceOf,
+      (run) => conversationTitle(run as never),
+      (run) => ({ id: roleOf(run as never, company).id, label: agentLabel(run as never, company) }),
+      (run) => actionsFor(run as never),
+    );
+  }
+
+  /** Repaint just the roster — going into an agent must not rebuild the room and restart every
+   *  animation in it. */
+  private pushRoster(): void {
+    void this.panel.webview.postMessage({ type: "roster", html: this.roster() });
+  }
 
   private render(): void {
     const state = this.state();
@@ -131,13 +191,16 @@ export class WorkplacePanel {
       const html = renderScene(state, this.log);
       if (html !== null) {
         void this.panel.webview.postMessage({ type: "team", html, state });
+        void this.panel.webview.postMessage({ type: "roster", html: this.roster() });
         return;
       }
       // No scene renderer (an old or broken bundle): fall back to rebuilding rather than freezing.
       this.mounted = false;
     }
     try {
-      this.panel.webview.html = renderWorkplace(state, nonce(), this.log);
+      this.panel.webview.html = renderWorkplace(state, nonce(), this.log, {
+        style: railStyle(), body: this.roster(), script: railScript(),
+      });
       this.mounted = true;
       // Straight after a rebuild, or the engine sits on the shell's snapshot until the next
       // registry write — which on a quiet team is minutes of a still picture.

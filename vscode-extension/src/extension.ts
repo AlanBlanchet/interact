@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 
 import { ACTIVITY_SCHEME, activityPath, formatActivity, runIdFromPath } from "./activityDocument";
 import { ChatViewProvider } from "./chatView";
-import { RailViewProvider } from "./railView";
 import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
@@ -333,6 +332,12 @@ async function manageApiKeys(
   }
 }
 
+/** Repaint the room's roster. Lazily imported: the workplace pulls in the art bundle, and a
+ *  window that never opens the room should not pay for it. */
+function refreshWorkplace(): void {
+  void import("./workplacePanel").then((m) => m.WorkplacePanel.refreshIfOpen()).catch(() => {});
+}
+
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
@@ -385,7 +390,6 @@ export async function activate(
   const chatProvider = new ChatViewProvider(log);
   // Clicking somebody in the rail aims the chat at them, exactly as clicking a tree row does —
   // one behaviour, so the two surfaces cannot teach different things.
-  const railProvider = new RailViewProvider((runId) => chatProvider.show(runId));
 
   // The way back out of a conversation. Clearing the context key un-hides the roster views, and
   // focusing the rail puts you where you were — so "open a conversation" and "see the team" are
@@ -393,7 +397,8 @@ export async function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand("interact.agents.backToTeam", () => {
       void vscode.commands.executeCommand("setContext", "interact.inConversation", false);
-      void vscode.commands.executeCommand("interactAgents.rail.focus");
+      // The team lives in the big panel now, so this reveals the room rather than a side-bar view.
+      void vscode.commands.executeCommand("interact.agents.team");
     }),
   );
   context.subscriptions.push(
@@ -403,7 +408,6 @@ export async function activate(
     // until the pointer enters the header and clipped with no overflow menu, which is why the
     // team view could not be reached at all — measured on a real editor, not inferred. Clicking
     // somebody here aims the chat at them, exactly as the tree does.
-    vscode.window.registerWebviewViewProvider(RailViewProvider.viewId, railProvider),
     // Picking an agent aims the chat at it — the reason the two views sit together.
     // Switching which agent you are reading meant leaving the chat for the tree, which is half of
     // "i can't control everything from there". Scoped to the current workspace, so the list is the
@@ -429,7 +433,6 @@ export async function activate(
       const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
       if (runId) chatProvider.show(runId);
     }),
-    vscode.window.registerTreeDataProvider("interactAgents.board", agentsProvider),
     vscode.workspace.registerTextDocumentContentProvider(ACTIVITY_SCHEME, {
       async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
         const { readAgentActivity } = await import("./agents");
@@ -476,9 +479,7 @@ export async function activate(
     vscode.commands.registerCommand("interact.agents.workspace", async () => {
       if (await scope.pick()) {
         agentsProvider.refresh();
-        railProvider.refresh();
-        const { WorkplacePanel } = await import("./workplacePanel");
-        WorkplacePanel.refreshIfOpen();
+        refreshWorkplace();
       }
     }),
     scope.onDidChange(() => agentsProvider.refresh()),
@@ -544,7 +545,7 @@ export async function activate(
         }
         void vscode.window.showInformationMessage(`${picked.label} is working (${said.slice(0, 8)}).`);
         agentsProvider.refresh();
-        railProvider.refresh();
+        refreshWorkplace();
       });
     }),
     // The autonomy a new agent gets here, set WITHOUT having to spawn one to be asked. A
@@ -611,7 +612,7 @@ export async function activate(
         }
         vscode.window.showInformationMessage(said || `Sent to ${run.name}.`);
         agentsProvider.refresh();
-        railProvider.refresh();
+        refreshWorkplace();
       });
     }),
     vscode.commands.registerCommand("interact.agents.openConversation", async (arg?: string | { run?: { run_id: string } }) => {
@@ -640,7 +641,7 @@ export async function activate(
       execFile("interact", ["agents", "stop", run.run_id], (err) => {
         if (err) vscode.window.showErrorMessage(`Could not stop ${run.name}: ${err.message}`);
         agentsProvider.refresh();
-        railProvider.refresh();
+        refreshWorkplace();
       });
     }),
     vscode.commands.registerCommand("interact.agents.showEvents", async (node?: { run?: { run_id: string; name: string } }) => {

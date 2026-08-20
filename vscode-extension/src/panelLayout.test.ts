@@ -26,31 +26,24 @@ const byId = (id: string): View => {
   return v;
 };
 
-test("the roster and the conversation are never on screen together", () => {
-  /* His complaint: "the actual conversation chat panel is not taking the whole space on the right
-     side of my vscode. Instead, i'm having to close the menus for team and agent."
+test("the side bar holds the conversation and nothing else", () => {
+  /* His words, after several rounds of me rearranging the wrong container: "Your team and agents
+     panel are still on the left side, whereas they should be in the big main panel somewhere...
+     That's what i've been trying to make you understand but without telling you."
 
-     Weighting the views was not enough — an EMPTY chat still held weight 5 of the column, leaving
-     the roster ~230px, six rows across three scroll-screens. The two are states of one panel, not
-     neighbours, so their `when` clauses are complements: each gets the whole column when it is the
-     one you are using, and nobody collapses anything by hand. */
-  const chat = byId("interactAgents.chat");
-  const rail = byId("interactAgents.rail");
-  const board = byId("interactAgents.board");
-  assert.equal(chat.when, "interact.inConversation");
-  for (const roster of [rail, board]) {
-    assert.equal(roster.when, "!interact.inConversation",
-      `${roster.id} must step aside for exactly the state the chat appears in`);
-  }
+     The room and the roster are two views of ONE company and belong together in the wide editor
+     panel. The side bar is for the single conversation you are having — "the sidepanel is there to
+     view info about who we click on, and view the conversation. That's all." Stacking the roster
+     in there was the mistake underneath every earlier squeeze-the-column fix. */
+  assert.deepEqual(views.map((v) => v.id), ["interactAgents.chat"],
+    "anything else in this container is the roster creeping back into the side bar");
 });
 
-test("the duplicate roster tree does not take height at rest", () => {
-  assert.equal(
-    byId("interactAgents.board").visibility,
-    "collapsed",
-    "the rail already lists every agent; a second expanded tree of the same people is what " +
-      "squeezed the conversation",
-  );
+test("the conversation needs no when-clause, being alone", () => {
+  /* It used to hide behind `interact.inConversation` so the roster could have the column back.
+     With the roster gone to the main panel there is nothing to trade the column with — and a
+     `when` clause is what made VS Code dispose this view and blank the sidebar on the second open. */
+  assert.equal(byId("interactAgents.chat").when, undefined);
 });
 
 test("every view still declares a size, so none silently collapses to nothing", () => {
@@ -70,7 +63,7 @@ test("a view that VS Code can dispose is never written to afterwards", () => {
 
      Not unit-testable: chatView.ts imports `vscode`, which the strip-types loader cannot resolve,
      and that is exactly why the defect reached a live host. So the contract is pinned at the
-     source: forget the view on disposal, and never paint one that is not visible. `railView.ts`
+     source: forget the view on disposal, and never paint one that is not visible. The roster view
      has always done both; this file only became disposable when it gained a `when`. */
   const chat = readFileSync(join(import.meta.dirname, "chatView.ts"), "utf8");
   assert.match(chat, /onDidDispose\(/,
@@ -80,10 +73,7 @@ test("a view that VS Code can dispose is never written to afterwards", () => {
   assert.match(chat, /if \(!this\.view\?\.visible\) return;/,
     "render() must refuse a hidden view — writing to one VS Code tore down throws, it does not no-op");
 
-  /* And the invariant that makes it necessary: a `when`-gated view is a disposable view. */
-  const views = JSON.parse(
-    readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"),
-  ).contributes.views.interactAgentsSecondary as View[];
-  const gated = views.filter((v) => v.when);
-  assert.ok(gated.length >= 1, "if nothing is gated any more, this guard has lost its subject");
+  /* Kept even though no view carries a `when` today: VS Code disposes a webview view whenever it
+     hides, and this file cost a blanked sidebar once already. The guard is cheap; rediscovering it
+     is not. */
 });

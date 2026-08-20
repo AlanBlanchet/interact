@@ -73,41 +73,18 @@ export function railHtml(
    *  runtime import — the test loader demands ".ts" specifiers that tsc refuses to emit. */
   actionsFor: (run: Rail["runs"][number]["run"]) => AgentAction[] = () => [],
 ): string {
-  const chips = rail.chips
-    .map((c) => `<button class="chip" data-command="${esc(c.command)}">${esc(c.label)}</button>`)
-    .join("");
+  return railDocument(nonce, railStyle(), railBody(rail, voiceOf, titleOf, roleOf, actionsFor));
+}
 
-  const rows = rail.runs.map((r) => {
-    const voice = voiceOf(r.attention);
-    return `
-      <li class="row" data-run="${esc(r.run.run_id)}" data-attention="${esc(r.attention)}"${
-        r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}
-        style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
-        <span class="mark">${esc(voice.mark)}</span>
-        <span class="who">${esc(titleOf(r.run))}${
-          r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
-        <span class="stamp">${esc(voice.word)}</span>
-        <button class="role" data-agent="${esc(roleOf(r.run).id)}"
-          title="Show every conversation with ${esc(roleOf(r.run).label)}">${esc(roleOf(r.run).label)}</button>
-        <span class="note">${esc(r.note)}</span>
-        <span class="acts">${actionsFor(r.run).map((a) =>
-          `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
-          ` title="${esc(a.label)}">${a.mark}</button>`).join("")}</span>
-      </li>`;
-  }).join("");
-
-  const empty = rail.runs.length
-    ? ""
-    : `<p class="empty">Nothing here yet — start someone with <b>Company</b>.</p>`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-<style>
-/* Tokens hang off body: VS Code injects --vscode-* there, and a :root block never resolves. */
+/** The rail's stylesheet, on its own so a HOST document can embed the roster.
+ *
+ *  The roster's home is the big editor panel, beside the world — "they should be in the big main
+ *  panel somewhere". A side-bar view renders a whole document; an editor panel needs a FRAGMENT it
+ *  can place next to the room. Splitting document from fragment is what lets one roster serve both
+ *  without a second implementation drifting away from this one.
+ */
+export function railStyle(): string {
+  return `/* Tokens hang off body: VS Code injects --vscode-* there, and a :root block never resolves. */
 body {
   margin: 0;
   font-family: var(--vscode-font-family);
@@ -222,11 +199,45 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 /* Attention reads by SHAPE first; colour only reinforces it. One accent per row, supplied by the
    shared vocabulary — six near-identical rules here were how the two surfaces drifted apart. */
 .mark { color: var(--accent, var(--vscode-foreground)); }
-.empty { color: ${DIM}; padding: 10px; }
-</style>
-</head>
-<body>
-<div class="rail">
+.empty { color: ${DIM}; padding: 10px; }`;
+}
+
+/** The roster itself: header, chips, breadcrumb, rows. No document, no script — a fragment. */
+export function railBody(
+  rail: Rail,
+  voiceOf: (attention: string) => Voice,
+  titleOf: (run: Rail["runs"][number]["run"]) => string,
+  roleOf: (run: Rail["runs"][number]["run"]) => { id: string; label: string },
+  actionsFor: (run: Rail["runs"][number]["run"]) => AgentAction[] = () => [],
+): string {
+  const chips = rail.chips
+    .map((c) => `<button class="chip" data-command="${esc(c.command)}">${esc(c.label)}</button>`)
+    .join("");
+
+  const rows = rail.runs.map((r) => {
+    const voice = voiceOf(r.attention);
+    return `
+      <li class="row" data-run="${esc(r.run.run_id)}" data-attention="${esc(r.attention)}"${
+        r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}
+        style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
+        <span class="mark">${esc(voice.mark)}</span>
+        <span class="who">${esc(titleOf(r.run))}${
+          r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
+        <span class="stamp">${esc(voice.word)}</span>
+        <button class="role" data-agent="${esc(roleOf(r.run).id)}"
+          title="Show every conversation with ${esc(roleOf(r.run).label)}">${esc(roleOf(r.run).label)}</button>
+        <span class="note">${esc(r.note)}</span>
+        <span class="acts">${actionsFor(r.run).map((a) =>
+          `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
+          ` title="${esc(a.label)}">${a.mark}</button>`).join("")}</span>
+      </li>`;
+  }).join("");
+
+  const empty = rail.runs.length
+    ? ""
+    : `<p class="empty">Nothing here yet — start someone with <b>Company</b>.</p>`;
+
+  return `<div class="rail">
   <div><button class="scope" data-command="interact.agents.workspace"
     title="Show agents from another project">${esc(rail.header.scope || "all workspaces")}</button><span
     class="counts">${esc(headerLine(rail.header))}</span></div>
@@ -235,9 +246,14 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
     `<span class="crumbSep">/</span><span class="crumbNow">${esc(rail.filter)}</span></div>` : ""}
 </div>
 ${empty}
-<ul class="runs">${rows}</ul>
-<script nonce="${nonce}">
-  const api = acquireVsCodeApi();
+<ul class="runs">${rows}</ul>`;
+}
+
+/** What the roster's buttons DO. Shared by both hosts for the same reason as the style. */
+export function railScript(): string {
+  return `const api = (window.__wpApi ||
+    (typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null));
+  function bindRail() {
   document.querySelectorAll(".chip, .scope").forEach((b) => {
     b.addEventListener("click", () => api.postMessage({ type: "command", command: b.dataset.command }));
   });
@@ -256,7 +272,37 @@ ${empty}
       e.stopPropagation();
       api.postMessage({ type: "act", command: b.dataset.command, runId: b.closest(".row").dataset.run });
     });
+  });  }
+  bindRail();
+  // The panel MOUNTS once and is updated by message thereafter — rebuilding the document would
+  // kill every running animation in the room next door. So the roster is replaced in place and
+  // re-bound, exactly as the room is.
+  window.addEventListener("message", function (e) {
+    var m = e && e.data;
+    if (!m || m.type !== "roster" || typeof m.html !== "string") return;
+    var host = document.querySelector(".wp-list");
+    if (!host) return;
+    host.innerHTML = m.html;
+    bindRail();
   });
+`;
+}
+
+export function railDocument(nonce: string, style: string, body: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>
+${style}
+</style>
+</head>
+<body>
+${body}
+<script nonce="${nonce}">
+${railScript()}
 </script>
 </body>
 </html>`;
