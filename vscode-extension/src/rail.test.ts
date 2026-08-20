@@ -10,7 +10,7 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { attentionOf, brainOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS } from "./rail.ts";
+import { attentionOf, brainOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS, SCOPE_COMMAND } from "./rail.ts";
 import { buildTeam } from "./teamState.ts";
 import { actionsFor } from "./agentActions.ts";
 
@@ -233,4 +233,49 @@ test("every action a row can show is one the rail will accept", () => {
       assert.deepEqual(routed, [a.command], `${status}/${a.id} is shown but refused`);
     }
   }
+});
+
+test("the scope label can change the scope, without becoming a destination", () => {
+  /* "i can't switch to other projects from the panel." The command existed but only in the palette.
+     It lives on the scope pill — the thing that STATES which project you are looking at — rather
+     than as a fifth chip, because the chips are capped to what fits a narrow sidebar. */
+  assert.deepEqual(
+    railAction({ type: "command", command: SCOPE_COMMAND }),
+    { kind: "command", command: SCOPE_COMMAND },
+  );
+  assert.ok(!CHIPS.some((c) => c.command === SCOPE_COMMAND), "it must not take a chip slot");
+  assert.equal(railAction({ type: "command", command: "interact.somethingElse" }), null,
+    "and nothing else gets in through the same door");
+});
+
+test("going into an agent narrows the roster to its conversations", () => {
+  /* "When i click on an agent, i should be able to view the conversations is had." An agent is a
+     ROLE; the conversations are the engagements. Filtering happens BEFORE counting, so the header
+     describes what you are looking at rather than the team behind it. */
+  const runs = [
+    { run_id: "1", provider: "claude", name: "tester", agent: "tester", status: "running" },
+    { run_id: "2", provider: "claude", name: "tester", agent: "tester", status: "done" },
+    { run_id: "3", provider: "claude", name: "researcher", agent: "researcher", status: "running" },
+  ];
+  const roleOf = (r: { agent?: string | null; provider?: string }) => r.agent || r.provider || "agent";
+  const all = buildRail(runs as never[], "s", () => 0);
+  assert.equal(all.runs.length, 3);
+  assert.equal(all.filter, undefined, "the whole team is not a place you have to leave");
+
+  const inside = buildRail(runs as never[], "s", () => 0, undefined,
+    { agent: "tester", roleOf: roleOf as never });
+  // Membership, not order: the rail sorts by who needs you, which is its own tested behaviour.
+  assert.deepEqual(inside.runs.map((r) => r.run.run_id).sort(), ["1", "2"]);
+  assert.equal(inside.filter, "tester", "the breadcrumb needs to know where you are");
+});
+
+test("the panel can take you into an agent and back out again", () => {
+  const seen: (string | null)[] = [];
+  const handlers = {
+    run: () => {}, open: () => {}, act: () => {},
+    agent: (id: string | null) => seen.push(id),
+  };
+  railRoute({ type: "agent", id: "visual-critic" }, handlers);
+  railRoute({ type: "agent", id: "" }, handlers);
+  assert.deepEqual(seen, ["visual-critic", null], "an empty id means: back to the whole team");
 });

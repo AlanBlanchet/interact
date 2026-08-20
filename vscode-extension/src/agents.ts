@@ -187,6 +187,12 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
           // talking to another agent looked exactly like you talking to it.
           from_run: raw.from_run ?? null,
           to_run: raw.to_run ?? null,
+          // WHEN interact observed this line. Declared and documented on AgentActivity from the
+          // start, and never copied out here — so `lastObservedAt` always returned null, every
+          // run's idle time computed as 0, and HELD became a state that exists, is styled, is in
+          // the shared vocabulary, and could not once be reached. A field the type promises and
+          // the reader drops is invisible to the compiler and to every UI test.
+          at: typeof raw.at === "number" ? raw.at : null,
         });
       }
     } catch {

@@ -263,6 +263,11 @@
         "command": "interact.showLogs",
         "title": "Interact: Show Logs",
         "icon": "$(output)"
+      },
+      {
+        "command": "interact.agents.backToTeam",
+        "title": "Back to the Team",
+        "category": "Interact"
       }
     ],
     "viewsContainers": {
@@ -270,7 +275,7 @@
         {
           "id": "interactAgentsSecondary",
           "title": "Interact",
-          "icon": "media/agents.svg"
+          "icon": "media/interact.svg"
         }
       ]
     },
@@ -282,15 +287,17 @@
           "type": "webview",
           "contextualTitle": "Interact team",
           "visibility": "visible",
-          "initialSize": 2
+          "initialSize": 5,
+          "when": "!interact.inConversation"
         },
         {
           "id": "interactAgents.board",
           "name": "Agents",
           "contextualTitle": "Interact agents",
-          "icon": "media/agents.svg",
+          "icon": "media/interact.svg",
           "visibility": "collapsed",
-          "initialSize": 1
+          "initialSize": 1,
+          "when": "!interact.inConversation"
         },
         {
           "id": "interactAgents.chat",
@@ -298,7 +305,8 @@
           "type": "webview",
           "contextualTitle": "Interact agent chat",
           "visibility": "visible",
-          "initialSize": 5
+          "initialSize": 5,
+          "when": "interact.inConversation"
         }
       ]
     },

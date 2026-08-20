@@ -1,0 +1,85 @@
+/** His words: "an agent is different than a conversation with an agent... When i click on an agent,
+ *  i should be able to view the conversations is had, and go back to the parent if there is one."
+ *  And, separately: "The names are not correct."
+ */
+import { strict as assert } from "node:assert";
+import { test } from "node:test";
+import {
+  agentsFrom, ancestry, childrenOf, conversationTitle, roleOf, type Run,
+} from "./roster.ts";
+
+const run = (o: Partial<Run> & { run_id: string }): Run => ({ provider: "claude", ...o });
+
+test("a conversation is named by what it is DOING, not by the CLI that ran it", () => {
+  /* The bug he reported. Python records `name` as the provider when a run has no definition, so
+     the panel showed a column of identical "claude" rows for completely unrelated work. */
+  const r = run({ run_id: "abc12345", name: "claude", provider: "claude", task: "Fix the uinput attach race" });
+  assert.equal(conversationTitle(r), "Fix the uinput attach race");
+});
+
+test("a name that merely repeats the CLI is not a name", () => {
+  const r = run({ run_id: "abc12345", name: "claude", provider: "claude" });
+  /* A bare id-slice reads as a typo, not an identifier — a critic mistook "run-fore" for one. */
+  assert.equal(conversationTitle(r), "untitled · abc123",
+    "should say what it is rather than repeat the CLI or emit a bare id fragment");
+});
+
+test("a long task is truncated so a roster stays scannable", () => {
+  const t = "x".repeat(200);
+  const got = conversationTitle(run({ run_id: "a", task: t }));
+  assert.ok(got.length <= 60, `title was ${got.length} chars`);
+  assert.ok(got.endsWith("…"));
+});
+
+test("a real definition names the role; a bare CLI is marked plain", () => {
+  assert.deepEqual(roleOf(run({ run_id: "a", agent: "visual-critic" })), { id: "visual-critic", plain: false });
+  assert.deepEqual(roleOf(run({ run_id: "b", agent: null, provider: "claude" })), { id: "claude", plain: true });
+});
+
+test("one agent holds many conversations", () => {
+  const runs = [
+    run({ run_id: "1", agent: "tester", task: "verify chords" }),
+    run({ run_id: "2", agent: "tester", task: "verify delivery" }),
+    run({ run_id: "3", agent: "researcher", task: "price check" }),
+  ];
+  const agents = agentsFrom(runs);
+  assert.equal(agents.length, 2);
+  const tester = agents.find((a) => a.id === "tester")!;
+  assert.equal(tester.conversations.length, 2, "both engagements belong to the same role");
+  assert.deepEqual(tester.conversations.map(conversationTitle), ["verify chords", "verify delivery"]);
+});
+
+test("you can walk up to the parent, and to its parent", () => {
+  const runs = [
+    run({ run_id: "child", parent_run_id: "mid", task: "c" }),
+    run({ run_id: "mid", parent_run_id: "root", task: "m" }),
+    run({ run_id: "root", task: "r" }),
+  ];
+  assert.deepEqual(ancestry("child", runs).map((r) => r.run_id), ["mid", "root"]);
+  assert.deepEqual(ancestry("root", runs), [], "a root conversation has nowhere to go up to");
+});
+
+test("a malformed parent link cannot hang the panel", () => {
+  /* These ids are written by several processes; a cycle must degrade, never spin. */
+  const runs = [
+    run({ run_id: "a", parent_run_id: "b" }),
+    run({ run_id: "b", parent_run_id: "a" }),
+  ];
+  const chain = ancestry("a", runs);
+  assert.ok(chain.length <= 2, "cycle was not bounded");
+});
+
+test("a parent outside the current scope stops the chain rather than inventing a row", () => {
+  const runs = [run({ run_id: "a", parent_run_id: "elsewhere" })];
+  assert.deepEqual(ancestry("a", runs), []);
+});
+
+test("a conversation knows what it spawned", () => {
+  const runs = [
+    run({ run_id: "lead", task: "lead" }),
+    run({ run_id: "k1", parent_run_id: "lead", task: "one" }),
+    run({ run_id: "k2", parent_run_id: "lead", task: "two" }),
+    run({ run_id: "other", task: "unrelated" }),
+  ];
+  assert.deepEqual(childrenOf("lead", runs).map((r) => r.run_id), ["k1", "k2"]);
+});

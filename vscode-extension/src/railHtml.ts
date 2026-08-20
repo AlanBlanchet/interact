@@ -60,6 +60,13 @@ export function railHtml(
   nonce: string,
   /** How each status is spoken — the SAME vocabulary the workplace stamps. See `statusLanguage.ts`. */
   voiceOf: (attention: string) => Voice,
+  /** What to CALL a conversation. Passed in (this module stays runtime-import-free) from
+   *  `conversation.ts`, which names a conversation by what it is DOING — the old rule fell back to
+   *  the provider, so twenty unrelated engagements all rendered as "claude". */
+  titleOf: (run: Rail["runs"][number]["run"]) => string,
+  /** Which AGENT held a conversation. An agent is a role you can hold many conversations with, so
+   *  it is a place you can go, not a label. From `roster.ts`; passed in, never imported. */
+  roleOf: (run: Rail["runs"][number]["run"]) => string,
   /** What each row can be asked to do. Passed in rather than imported so this module keeps no
    *  runtime import — the test loader demands ".ts" specifiers that tsc refuses to emit. */
   actionsFor: (run: Rail["runs"][number]["run"]) => AgentAction[] = () => [],
@@ -75,9 +82,11 @@ export function railHtml(
         r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}
         style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
         <span class="mark">${esc(voice.mark)}</span>
-        <span class="who">${esc(r.run.name || r.run.run_id.slice(0, 8))}${
+        <span class="who">${esc(titleOf(r.run))}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         <span class="stamp">${esc(voice.word)}</span>
+        <button class="role" data-agent="${esc(roleOf(r.run))}"
+          title="Show every conversation with ${esc(roleOf(r.run))}">${esc(roleOf(r.run))}</button>
         <span class="note">${esc(r.note)}</span>
         <span class="acts">${actionsFor(r.run).map((a) =>
           `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
@@ -110,7 +119,21 @@ body {
   background: inherit;
   border-bottom: 1px solid var(--vscode-panel-border, transparent);
 }
-.scope { font-weight: 600; }
+/* The scope is the answer to "whose agents are these?" — so it is also the way to change it.
+   A label that looks like a label teaches nothing; this one invites the click it already needed. */
+.scope {
+  font: inherit; font-weight: 600; cursor: pointer;
+  padding: 1px 7px 1px 6px; border-radius: 4px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-button-secondaryBackground, transparent);
+  /* Visible AT REST. Transparent-until-hover made this read as a bold label, so the one control
+     that answers "whose agents am I looking at?" looked like the answer, not the question. */
+  border: 1px solid var(--vscode-panel-border, var(--vscode-descriptionForeground));
+}
+.scope::after { content: " ⌄"; opacity: .7; font-size: .85em; }
+.scope:hover { background: var(--vscode-list-hoverBackground);
+  border-color: var(--vscode-panel-border, transparent); }
+.scope:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .counts { color: ${DIM}; margin-left: 6px; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .chip {
@@ -124,13 +147,41 @@ body {
 }
 .chip:hover { background: var(--vscode-list-hoverBackground); }
 .chip:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+.crumbs { display: flex; align-items: baseline; gap: 5px; margin-top: 6px; font-size: .92em; }
+.crumb {
+  font: inherit; cursor: pointer; padding: 0 5px; border-radius: 4px;
+  color: var(--vscode-textLink-foreground); background: transparent; border: 1px solid transparent;
+}
+.crumb:hover { background: var(--vscode-list-hoverBackground); }
+.crumbSep { color: ${DIM}; }
+.crumbNow { font-weight: 600; }
+/* The role a conversation was held with. Quiet, but a real control: it is how you get from one
+   engagement to every other engagement with the same colleague. */
+.role {
+  font: inherit; font-size: .82em; cursor: pointer;
+  padding: 0 5px; border-radius: 8px; white-space: nowrap;
+  color: ${DIM}; background: transparent;
+  border: 1px solid var(--vscode-panel-border, transparent);
+}
+.role:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+.role:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 ul.runs { list-style: none; margin: 0; padding: 4px 0; }
+/* FLEX, not grid, and deliberately so. This row was a 4-track grid; the round that added a stamp
+   and a role chip took it to six children, so .note landed in the 16px mark column and broke one
+   letter-pair per line ("st/op/pe/d/wi/th"). A grid whose track count must be kept in sync by hand
+   with a template's child count is a trap that renders perfectly in every unit test and is
+   unreadable on screen. Flex wrapping cannot fall out of step: children take the room they need,
+   and the two full-width rows say so themselves. */
 .row {
-  display: grid;
-  grid-template-columns: 16px minmax(0, auto) auto minmax(0, 1fr);
-  gap: 6px; align-items: baseline;
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 3px 6px;
   padding: 3px 10px; cursor: pointer;
 }
+.mark { flex: none; width: 16px; text-align: center; }
+.stamp, .role { flex: none; }
+/* The explanation and the actions each own a line, indented past the mark so the row reads as one
+   block rather than three columns fighting for a 299px sidebar. */
+.note, .acts { flex: 1 1 100%; padding-left: 22px; }
 /* The same word the world stamps on paper, in the same accent — a list row cannot tilt a ribbon
    without looking silly, so it borrows the vocabulary and leaves the idiom alone. */
 .stamp {
@@ -143,7 +194,7 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 /* Actions sit on the row itself. They are filtered to the ones that would WORK, so nothing here
    is ever a dead control — a dead menu item teaches you the whole menu is untrustworthy. */
-.acts { grid-column: 1 / -1; display: flex; gap: 2px; padding: 2px 0 0 22px; }
+.acts { display: flex; gap: 2px; padding-top: 2px; }
 .act {
   font: inherit; line-height: 1; padding: 1px 5px;
   border: 1px solid transparent; border-radius: 4px;
@@ -152,7 +203,7 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 .act:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
   color: var(--vscode-foreground); border-color: var(--vscode-panel-border, transparent); }
 .act:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-.who { font-weight: 500; overflow-wrap: break-word; }
+.who { font-weight: 500; overflow-wrap: anywhere; min-width: 0; flex: 1 1 auto; }
 /* A report is indented under the lead that sent it, so the roster reads as a company rather than
    a flat list — you can see who is driving what. */
 .row[data-report] { padding-left: 26px; }
@@ -165,7 +216,7 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
   color: var(--vscode-foreground);
   border: 1px solid var(--vscode-panel-border, var(--vscode-descriptionForeground));
 }
-.note { color: ${DIM}; overflow-wrap: break-word; }
+.note { color: ${DIM}; overflow-wrap: anywhere; }
 /* Attention reads by SHAPE first; colour only reinforces it. One accent per row, supplied by the
    shared vocabulary — six near-identical rules here were how the two surfaces drifted apart. */
 .mark { color: var(--accent, var(--vscode-foreground)); }
@@ -174,19 +225,28 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 </head>
 <body>
 <div class="rail">
-  <div><span class="scope">${esc(rail.header.scope || "all workspaces")}</span><span
+  <div><button class="scope" data-command="interact.agents.workspace"
+    title="Show agents from another project">${esc(rail.header.scope || "all workspaces")}</button><span
     class="counts">${esc(headerLine(rail.header))}</span></div>
   <div class="chips">${chips}</div>
+  ${rail.filter ? `<div class="crumbs"><button class="crumb" data-agent="">‹ Team</button>` +
+    `<span class="crumbSep">/</span><span class="crumbNow">${esc(rail.filter)}</span></div>` : ""}
 </div>
 ${empty}
 <ul class="runs">${rows}</ul>
 <script nonce="${nonce}">
   const api = acquireVsCodeApi();
-  document.querySelectorAll(".chip").forEach((b) => {
+  document.querySelectorAll(".chip, .scope").forEach((b) => {
     b.addEventListener("click", () => api.postMessage({ type: "command", command: b.dataset.command }));
   });
   document.querySelectorAll(".row").forEach((r) => {
     r.addEventListener("click", () => api.postMessage({ type: "open", runId: r.dataset.run }));
+  });
+  document.querySelectorAll(".role, .crumb").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();  // going to the agent must not also open the conversation under it
+      api.postMessage({ type: "agent", id: b.dataset.agent });
+    });
   });
   document.querySelectorAll(".act").forEach((b) => {
     b.addEventListener("click", (e) => {

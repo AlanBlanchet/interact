@@ -11,6 +11,7 @@
  *  messages — which is itself split out as `railRoute` so it can be tested without a host.
  */
 import { voiceOf } from "./statusLanguage";
+import { conversationTitle, roleOf } from "./roster";
 import * as vscode from "vscode";
 
 import { readAgentActivity, readAgentRuns } from "./agents";
@@ -25,6 +26,8 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "interactAgents.rail";
 
   private view: vscode.WebviewView | undefined;
+  /** The agent whose conversations you are looking at, if you have gone into one. */
+  private inside: string | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly onOpen: (runId: string) => void) {}
@@ -38,6 +41,9 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
         open: (runId) => this.onOpen(runId),
         // A row action names the agent it acts on, so the command operates on the character you
         // clicked rather than on whatever happened to be selected elsewhere.
+        // An agent is a role you can hold many conversations with; going into one narrows the
+        // roster to its conversations, and the breadcrumb comes back out.
+        agent: (id) => { this.inside = id; this.render(); },
         act: (command, runId) => {
           const run = readAgentRuns().find((r) => r.run_id === runId);
           if (run) void vscode.commands.executeCommand(command, { run });
@@ -72,6 +78,8 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       // Idleness is time since the run was last OBSERVED doing something — not since it started,
       // which would mark every long-running agent as stalled the moment it got going.
       (run) => Math.max(0, now - (lastObservedAt(readAgentActivity(run.run_id, 40)) ?? now)),
+      undefined,
+      this.inside ? { agent: this.inside, roleOf: (r) => roleOf(r as never).id } : undefined,
     );
     this.view.webview.html = railHtml(
       rail,
@@ -80,6 +88,9 @@ export class RailViewProvider implements vscode.WebviewViewProvider {
       Math.random().toString(36).slice(2) + Date.now().toString(36),
       // The one vocabulary both surfaces speak — the rail prints the word the world stamps.
       voiceOf,
+      // A conversation is what it is DOING; the role is a tooltip, not the headline.
+      (run) => conversationTitle(run as never),
+      (run) => roleOf(run as never).id,
       // What each row offers, filtered to what would actually work on that agent — so no control
       // drawn here is ever dead.
       (run) => actionsFor(run as never),

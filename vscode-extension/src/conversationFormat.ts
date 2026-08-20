@@ -240,6 +240,13 @@ export interface ChatRun {
 }
 
 export interface ChatDocument {
+  /** The conversation that SPAWNED this one, when there is one.
+   *
+   *  "go back to the parent if there is one." A sub-agent's transcript is unreadable without the
+   *  errand it was sent on — the question lives in the caller's conversation, and until now there
+   *  was no way from the answer back to the question. Passed in resolved (id + title) so this
+   *  module keeps no runtime import. */
+  parent?: { runId: string; title: string } | null;
   /** What the whole team is costing and this agent's share. Passed in for the same reason the
    *  commands are: this module stays import-free so its test can load it directly. */
   spend?: { total: number; agents: number; running: number; sharePercent: number | null };
@@ -293,10 +300,15 @@ export function transcriptFragment(
 }
 
 export function chatDocument(
-  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend }: ChatDocument,
+  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend, parent }: ChatDocument,
 ): string {
+  const up = parent
+    ? `<button class="back" id="up" data-run="${escapeHtml(parent.runId)}"` +
+      ` title="Go to the conversation that started this one">↑ ${escapeHtml(parent.title)}</button>`
+    : "";
   const header = name
-    ? `<header><span class="who">${escapeHtml(name)}</span>` +
+    ? `<header><button class="back" id="back" title="Back to the team">← Team</button>${up}` +
+      `<span class="who">${escapeHtml(name)}</span>` +
       `<span class="status">${escapeHtml(status ?? "")}</span></header>`
     : "";
   const pending = awaitingReply
@@ -347,6 +359,13 @@ ${header}
 ${composer}
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
+  {
+    // Leaving a conversation is one click, and the panel gives the column back to the roster.
+    const back = document.getElementById("back");
+    if (back) back.addEventListener("click", () => vscode.postMessage({ type: "back" }));
+    const up = document.getElementById("up");
+    if (up) up.addEventListener("click", () => vscode.postMessage({ type: "openRun", runId: up.dataset.run }));
+  }
 
 // "about this agent" holds the session id, the working directory and the path to the system
 // prompt — the first things wanted when something looks wrong. The document is rebuilt on every
@@ -532,7 +551,27 @@ const STYLE = `
          color: var(--wp-fg); background: var(--wp-bg); }
 
   /* The sign over the door, exactly as a room wears it. */
-  header { display: flex; align-items: center; gap: .5em; margin: .7em .8em .4em;
+  .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Nothing in this header may make the document scroll sideways. */
+  body { overflow-x: hidden; }
+  .back {
+    font: inherit; cursor: pointer; padding: 1px 7px; border-radius: 4px; white-space: nowrap;
+    /* A parent conversation is titled by its task, which can be a sentence. Bound it here or the
+       header scrolls sideways and the way back leaves the screen. */
+    max-width: 11em; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
+    /* --wp-dim, never the raw token: Light ships descriptionForeground at 4.28:1, under AA. */
+    color: var(--wp-dim);
+    background: transparent;
+    border: 1px solid var(--vscode-panel-border, transparent);
+  }
+  .back:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+  .back:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+  /* WRAPS. Capping the one worst child was not enough: "back" + a maxed up-button + the name +
+     the status sum to ~420px against ~278px of a 299px sidebar, so the header grew a real
+     horizontal scrollbar and pushed the conversation's own name off screen. A header must budget
+     its TOTAL width, not its worst element — so the controls hold the first line and the name and
+     status fall to the next rather than sliding out of view. */
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: .35em .5em; margin: .7em .8em .4em;
            padding: 3px 9px; background: var(--wp-plate); color: var(--wp-bg);
            border: 1px solid var(--wp-ink); box-shadow: 2px 2px 0 0 var(--wp-ink);
            align-self: flex-start; }

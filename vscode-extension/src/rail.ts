@@ -98,6 +98,10 @@ export interface Rail {
   header: RailHeader;
   chips: RailChip[];
   runs: RailRun[];
+  /** The agent whose conversations you are looking at, if you have gone into one. An agent is a
+   *  ROLE — you can hold many conversations with it — so "inside tester" is a real place in this
+   *  panel, and the breadcrumb is how you leave it. Absent means the whole team. */
+  filter?: string;
 }
 
 const NOTES: Record<Attention, string> = {
@@ -137,8 +141,12 @@ export function buildRail(
   scope: string,
   idleOf: (run: AgentRun) => number,
   awaitingReply: (run: AgentRun) => boolean = () => false,
+  /** Narrow to one agent's conversations. Applied FIRST, so counts, leads and reports all describe
+   *  the thing you are actually looking at rather than the team behind it. */
+  filter?: { agent: string; roleOf: (run: AgentRun) => string },
 ): Rail {
-  const rows: RailRun[] = runs.map((run) => {
+  const inScope = filter ? runs.filter((r) => filter.roleOf(r) === filter.agent) : runs;
+  const rows: RailRun[] = inScope.map((run) => {
     const attention = attentionOf(run, idleOf(run), awaitingReply(run));
     return { run, attention, depth: 0, brain: false, note: NOTES[attention] };
   });
@@ -193,6 +201,7 @@ export function buildRail(
     },
     chips: CHIPS,
     runs: rows,
+    filter: filter?.agent,
   };
 }
 
@@ -221,13 +230,24 @@ export type RailAction =
   /** A per-row action: run this command AGAINST this agent. Carries the run id because the
    *  commands it names all operate on one agent, and the panel must not act on whichever
    *  happened to be selected. */
-  | { kind: "act"; command: string; runId: string };
+  | { kind: "act"; command: string; runId: string }
+  /** Go to an agent's conversations, or back to the whole team when the id is empty. */
+  | { kind: "agent"; id: string | null };
+
+/** Changing which project you are looking at. Not a destination chip — the chips are capped to
+ *  what fits a narrow sidebar, and this belongs on the scope label itself, which is the thing that
+ *  states the answer it changes. Allow-listed here so the webview can ask for it by name. */
+export const SCOPE_COMMAND = "interact.agents.workspace";
 
 export function railAction(message: unknown): RailAction | null {
   if (!message || typeof message !== "object") return null;
   const msg = message as { type?: unknown; command?: unknown; runId?: unknown };
+  if (msg.type === "agent") {
+    const id = typeof (msg as { id?: unknown }).id === "string" ? (msg as { id: string }).id : "";
+    return { kind: "agent", id: id || null };
+  }
   if (msg.type === "command" && typeof msg.command === "string") {
-    const offered = CHIPS.some((c) => c.command === msg.command);
+    const offered = CHIPS.some((c) => c.command === msg.command) || msg.command === SCOPE_COMMAND;
     return offered ? { kind: "command", command: msg.command } : null;
   }
   if (msg.type === "open" && typeof msg.runId === "string" && msg.runId) {
@@ -253,6 +273,9 @@ export interface RailHandlers {
   run: (command: string) => void;
   open: (runId: string) => void;
   act: (command: string, runId: string) => void;
+  /** Go to one agent's conversations, or back to the whole team when null. Optional so a host that
+   *  does not offer the drill-in simply does not wire it, rather than crashing on a message. */
+  agent?: (id: string | null) => void;
 }
 
 export function railRoute(message: unknown, handlers: RailHandlers): void {
@@ -260,5 +283,6 @@ export function railRoute(message: unknown, handlers: RailHandlers): void {
   if (!action) return;
   if (action.kind === "command") handlers.run(action.command);
   else if (action.kind === "act") handlers.act(action.command, action.runId);
+  else if (action.kind === "agent") handlers.agent?.(action.id);
   else handlers.open(action.runId);
 }

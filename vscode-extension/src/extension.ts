@@ -386,6 +386,16 @@ export async function activate(
   // Clicking somebody in the rail aims the chat at them, exactly as clicking a tree row does —
   // one behaviour, so the two surfaces cannot teach different things.
   const railProvider = new RailViewProvider((runId) => chatProvider.show(runId));
+
+  // The way back out of a conversation. Clearing the context key un-hides the roster views, and
+  // focusing the rail puts you where you were — so "open a conversation" and "see the team" are
+  // one column used two ways rather than three panes fighting over it.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("interact.agents.backToTeam", () => {
+      void vscode.commands.executeCommand("setContext", "interact.inConversation", false);
+      void vscode.commands.executeCommand("interactAgents.rail.focus");
+    }),
+  );
   context.subscriptions.push(
     agentsProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider),

@@ -15,6 +15,7 @@ import * as vscode from "vscode";
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
+import { conversationTitle } from "./roster";
 import { teamSpend } from "./teamSpend";
 import { scopeStore } from "./scopeStore";
 import { interactCli } from "./interactCli";
@@ -24,6 +25,17 @@ import { agentsDir } from "./paths";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "interactAgents.chat";
+
+  /** Set while a conversation is open. The roster views' `when` clauses watch it, so the column
+   *  belongs to whichever of the two you are actually using. */
+  public static readonly IN_CONVERSATION = "interact.inConversation";
+
+  /** Hand the column back to the roster. */
+  public static leaveConversation(): void {
+    void vscode.commands.executeCommand(ChatViewProvider.IN_CONVERSATION_CLEAR);
+  }
+
+  private static readonly IN_CONVERSATION_CLEAR = "interact.agents.backToTeam";
 
   private view: vscode.WebviewView | undefined;
   private runId: string | undefined;
@@ -41,18 +53,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    *  like the click missed.
    */
   public show(runId: string): void {
+    void this.reveal(runId);
+  }
+
+  /** Awaited, because the Chat view now carries `when: interact.inConversation` — it does not
+   *  exist to focus until that key is actually set, and `setContext` is asynchronous. Firing both
+   *  and hoping is how a click lands on nothing. */
+  private async reveal(runId: string): Promise<void> {
     this.runId = runId;
     this.render();
+    // "The chat page shouldn't be small... i'm having to close the menus for team and agent."
+    // The roster views' `when` clauses watch this key, so opening a conversation gives it the whole
+    // column with nobody collapsing anything by hand.
+    //
+    // FIRST, and unconditionally. This lived inside the `!this.view` branch below and was therefore
+    // dead in every normal open: the Chat webview has no `when` of its own, so it resolves as soon
+    // as the container is visible and `this.view` is already truthy the first time anyone clicks a
+    // row. A visual-critic round reproduced it live in both themes — the Team list simply never
+    // stepped aside.
+    await vscode.commands.executeCommand("setContext", ChatViewProvider.IN_CONVERSATION, true);
     if (this.view) {
       // Reveal only on an explicit pick, so following a live run never steals the side bar.
       void this.view.show?.(true);
       return;
     }
-    void vscode.commands.executeCommand("interactAgents.chat.focus");
+    await vscode.commands.executeCommand("interactAgents.chat.focus");
   }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    // This view now carries `when: interact.inConversation`, so VS Code DISPOSES it every time the
+    // clause goes false — and a disposed webview whose reference we kept throws on the next write.
+    // That made the SECOND conversation you opened blank the whole sidebar with no visible way
+    // back: `Error: Webview is disposed` out of render(), sidebar chrome and nothing in it.
+    // Forget it here and the next show() resolves a fresh one. `railView.ts` has always guarded
+    // this; this file never needed to until the `when` clause made it disposable.
+    // Paint when it actually becomes visible. render() now refuses to write to a hidden view, and
+    // a `when`-gated view can resolve a moment before VS Code shows it — without this the first
+    // conversation of a session could resolve to an empty panel.
+    view.onDidChangeVisibility(() => { if (view.visible) this.render(); });
+    view.onDidDispose(() => {
+      if (this.view === view) this.view = undefined;
+      this.rendered = undefined;  // the next view starts empty; a stale id would skip the paint
+    });
     // Asked once, not per render: the answer only changes when the CLI is upgraded, and a panel
     // that shells out on every repaint is a panel that stutters while an agent is working. The
     // memoisation lives in knownModes(), shared with the spawn picker and the workspace default —
@@ -63,6 +106,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true, enableCommandUris: true };
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
+      if (msg?.type === "back") void ChatViewProvider.leaveConversation();
+      // Walking UP the tree: the errand that produced this answer.
+      if (msg?.type === "openRun" && typeof msg.runId === "string") this.show(msg.runId);
       if (msg?.type === "open" && typeof msg.path === "string") void this.open(msg.path);
       // A command from the slash menu. Checked against the declared list rather than executed as
       // given: the webview renders agent output, so anything arriving from it is untrusted, and
@@ -96,7 +142,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private modes: PermissionMode[] = [];
 
   private render(): void {
-    if (!this.view) return;
+    // `visible` as well as present: a view can be resolved and hidden, and writing to one VS Code
+    // has already torn down throws rather than no-ops.
+    if (!this.view?.visible) return;
     const current = this.run();
     if (current && this.rendered === current.run_id) {
       // Same agent, more to say: patch the transcript and leave the rest of the view alone.
@@ -114,7 +162,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.rendered = current?.run_id;
     const run = this.run();
     const turns = run ? readAgentActivity(run.run_id, 300) : [];
+    // Who sent this one on its errand. Resolved here (the renderer stays import-free) and named by
+    // what the caller is DOING, so "↑ parent" reads as a place rather than an id.
+    const all = readAgentRuns();
+    const mine = all.find((r) => r.run_id === this.runId);
+    const parentRun = mine?.parent_run_id ? all.find((r) => r.run_id === mine.parent_run_id) : undefined;
     this.view.webview.html = chatDocument({
+      parent: parentRun ? { runId: parentRun.run_id, title: conversationTitle(parentRun as never) } : null,
       // A fresh nonce per render: the CSP admits only scripts carrying it, so nothing that
       // arrives in an agent's output can execute even if the escaping were ever wrong.
       nonce: Math.random().toString(36).slice(2) + Date.now().toString(36),

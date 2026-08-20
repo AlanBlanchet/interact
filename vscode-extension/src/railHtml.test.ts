@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { buildRail } from "./rail.ts";
 import { railHtml, headerLine } from "./railHtml.ts";
 import { voiceOf } from "./statusLanguage.ts";
+import { conversationTitle, roleOf } from "./roster.ts";
 import { actionsFor } from "./agentActions.ts";
 
 const run = (over: Record<string, unknown> = {}) => ({
@@ -17,7 +18,8 @@ const run = (over: Record<string, unknown> = {}) => ({
 }) as never;
 
 const html = (runs: unknown[] = [run()], scope = "interact") =>
-  railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE", voiceOf, (r) => actionsFor(r as never));
+  railHtml(buildRail(runs as never[], scope, () => 0), "N0NCE", voiceOf,
+    (r) => conversationTitle(r as never), (r) => roleOf(r as never).id, (r) => actionsFor(r as never));
 
 test("every destination is in the document at rest, with its word", () => {
   // The defect this replaces: VS Code renders a view's title actions only while the pointer is in
