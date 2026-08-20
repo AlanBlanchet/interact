@@ -36,6 +36,7 @@ async def agent_spawn(
     model: str | None = None,
     cwd: str | None = None,
     permission_mode: str | None = None,
+    profile: str | None = None,
 ) -> str:
     """Start another agent to work alongside you, and return its run id immediately.
 
@@ -45,6 +46,12 @@ async def agent_spawn(
 
     Returns as soon as the agent is alive, not when it finishes — use agent_list / agent_events
     to watch it, and agent_stop to end it.
+
+    profile: one of the OPERATOR's own named profiles (INTERACT_PROFILE_* in ~/.interact/config.env)
+        deciding what this agent runs on — e.g. a local Ollama model for a cheap critic while a
+        reviewer stays on a frontier one. A profile resolves to a fixed, allow-listed set of
+        variables; you cannot pass an environment, and an unknown name is refused rather than
+        silently ignored.
 
     task: what the agent should do — write it as a complete brief; the agent cannot ask you.
     provider: which CLI to run ("claude", "codex"). Only installed ones can be used.
@@ -96,6 +103,7 @@ async def agent_spawn(
         handle = await run_agent(
             prov, task, name=name or agent or prov.name, cwd=cwd or os.getcwd(),
             agent=agent, model=model, permission_mode=permission_mode,
+        profile=profile,
         )
     except ValueError as e:  # an unknown permission mode, refused before it reaches a shell
         return f"ERROR: {e}"

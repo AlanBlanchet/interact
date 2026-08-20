@@ -14,6 +14,7 @@ import sys
 import uuid
 from dataclasses import dataclass, field
 
+from interact.agents.profiles import overlay_for, profiles_from
 from interact.agents import registry as reg
 from interact.agents.providers import AgentProvider
 
@@ -133,12 +134,19 @@ async def run_agent(
     model: str | None = None,
     parent_run_id: str | None = None,
     permission_mode: str | None = None,
+    profile: str | None = None,
     mesh: bool = True,
 ) -> RunHandle:
     """Spawn an agent run and register it, returning as soon as it is alive.
 
     Returns immediately by design: the supervisor's whole value is watching work in flight, so
     the run must be visible in the registry before it finishes.
+
+    ``profile`` names one of the OPERATOR's own profiles (``INTERACT_PROFILE_*`` in config), which
+    decides what this agent runs on — so the critic can sit on a local model while the reviewer
+    stays on a frontier one. It resolves through :mod:`interact.agents.profiles` to a fixed,
+    allow-listed overlay; a caller cannot hand over an environment, because a model that can set
+    ``LD_PRELOAD`` or ``PATH`` on the process it spawns has escaped every other guard here.
 
     ``parent_run_id`` defaults to ``INTERACT_PARENT_RUN_ID`` — set on a spawned agent's own MCP
     server by :func:`mesh_config` — so an agent that spawns an agent produces a connected tree
@@ -163,6 +171,20 @@ async def run_agent(
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
     # otherwise a grandchild would inherit its grandparent's id and the tree would be wrong.
     env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
+    # What this agent runs on, decided BEFORE the call. The overlay is allow-listed by construction
+    # (see profiles.ALLOWED_ENV) — an unknown profile name is refused rather than silently ignored,
+    # because "it quietly ran on the wrong model" is the failure nobody notices.
+    if profile:
+        known = profiles_from(dict(os.environ))
+        if profile not in known:
+            raise RuntimeError(
+                f"no such profile {profile!r}. Define it in ~/.interact/config.env as "
+                f"INTERACT_PROFILE_{profile.upper()}=<provider>/<model>; "
+                f"known: {', '.join(sorted(known)) or 'none'}"
+            )
+        overlay = overlay_for(known[profile], dict(os.environ))
+        env.update(overlay)
+        model = model or overlay.get("ANTHROPIC_MODEL")
     # The child writes its OWN stream straight to disk. Piping it through a coroutine tied the
     # events to the caller's event loop: a caller that spawned and returned lost every event, and
     # the run then looked HEALTHY — status done, exit 0, no cost, no activity — which is worse
