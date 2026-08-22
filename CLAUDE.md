@@ -137,6 +137,27 @@ servers the user runs are fixed". Before claiming a fix delivered:
 ## Testing
 
 - Bug fix → write the failing test first.
+
+## Per-developer prompts
+
+Agent / instruction / prompt / skill customizations (the `librarian`-governed prompt corpus)
+are **per-developer**, never committed. VS Code discovers workspace-level customizations from
+`.github/{agents,instructions,prompts,skills}/`; those four folders are gitignored, and each
+developer materializes THEIR OWN set from their own prompts store:
+
+```bash
+python scripts/sync_prompts.py                      # default: ~/.config/Code/User/prompts
+python scripts/sync_prompts.py --dry-run            # report what would land, write nothing
+python scripts/sync_prompts.py --source ~/dev/ai-prompts/agents --ext .md --into agents
+```
+
+The maintainer's source of truth stays the `ai-prompts` repo (`~/dev/ai-prompts`, synced to
+`~/.config/Code/User/prompts` by its own `sync.sh`) — this repo only *mirrors* it into the
+overlay so the workspace sees it. After the librarian edits a prompt in `ai-prompts` and runs
+its `sync.sh`, re-run `scripts/sync_prompts.py` here to refresh the overlay (a sync manifest
+is written to `.github/agents/.sync-prompts.json`). Another contributor installs interact,
+runs the same command against THEIR store, and gets theirs — the repo ships no one's.
+
 - Desktop tests use the **nested** sandbox (isolated, free, non-intrusive). The local uinput
   path is system-wide and can't be isolated, so its rich e2e is opt-in (`INTERACT_LOCAL_E2E=1`).
 - **Never spend on models in unit tests.** A conftest fixture blocks real `litellm` calls in
