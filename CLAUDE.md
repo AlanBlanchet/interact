@@ -145,8 +145,14 @@ are **per-developer**, never committed. VS Code discovers workspace-level custom
 `.github/{agents,instructions,prompts,skills}/`; those four folders are gitignored, and each
 developer materializes THEIR OWN set from their own prompts store:
 
+It refuses to duplicate. VS Code discovers customizations from your OWN prompts store **and** from
+the workspace's `.github`, and does not deduplicate between them — so mirroring what your store
+already serves lists every agent twice (observed: 31 agents, each appearing twice in Copilot). The
+importer skips anything your store already provides, and REMOVES it from the overlay if an earlier
+run put it there. `--allow-duplicates` overrides, and says why you would not want to.
+
 ```bash
-python scripts/sync_prompts.py                      # default: ~/.config/Code/User/prompts
+python scripts/sync_prompts.py                      # default: this machine's VS Code prompts store
 python scripts/sync_prompts.py --dry-run            # report what would land, write nothing
 python scripts/sync_prompts.py --source ~/dev/ai-prompts/agents --ext .md --into agents
 ```
