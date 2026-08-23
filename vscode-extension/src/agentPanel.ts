@@ -81,7 +81,7 @@ export function agentView(who: AgentIdentity, tasks: AgentTask[], nonce: string)
   <div class="chips">
     <button class="chip" data-action="model" data-agent="${esc(who.id)}"
       title="Choose the model ${esc(who.id)} runs on">◈ ${esc(modelText)}<span class="sub">${esc(modelNote)}</span></button>
-    ${file ? `<button class="chip" data-action="definition" data-path="${esc(file)}"
+    ${file ? `<button class="chip" data-action="definition" data-agent="${esc(who.id)}" data-path="${esc(file)}"
       title="Open the file that defines ${esc(who.id)}">◱ ${esc(fileName)}</button>` : ""}
   </div>
   <h3 class="tasks-title">Tasks it was given</h3>

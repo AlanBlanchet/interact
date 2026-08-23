@@ -39,6 +39,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand(ChatViewProvider.IN_CONVERSATION_CLEAR);
   }
 
+  /** Leave whatever depth you are at and return to the team.
+   *
+   *  The command used to only flip a context key and re-reveal the Team tab. That worked when the
+   *  key HID the roster view — but the roster moved to the big panel and the key now gates
+   *  nothing, so "back" became a button that did nothing at every depth, with no way out of a
+   *  conversation except clicking a different agent. State has to be cleared and the panel
+   *  repainted; a context key is not navigation.
+   */
+  /** Repaint the agent depth if it is what you are looking at.
+   *
+   *  Choosing a model wrote the file and toasted, but the open panel kept showing the old one until
+   *  you navigated away and back — which defeats the reason the override is rendered at all: a
+   *  choice you cannot see is one you forget you made. */
+  public repaintAgent(agent: string): void {
+    if (this.agentId === agent) this.render();
+  }
+
+  public backToTeam(): void {
+    this.agentId = null;
+    this.runId = undefined;
+    this.rendered = undefined;
+    this.render();
+  }
+
   private static readonly IN_CONVERSATION_CLEAR = "interact.agents.backToTeam";
 
   private view: vscode.WebviewView | undefined;

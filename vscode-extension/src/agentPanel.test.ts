@@ -78,3 +78,17 @@ test("everything from the outside is escaped", () => {
   assert.ok(!html.includes("<img"), "identity is not escaped");
   assert.ok(!html.includes("<script>bad"), "task text is not escaped");
 });
+
+test("every chip carries the agent it acts on", () => {
+  /* The definition chip shipped with `data-path` and no `data-agent`, while the host's handler
+     gated on the agent being present before running EITHER chip's action — so the branch never
+     ran and the chip was dead. A chip that looks live and does nothing is the exact defect this
+     project keeps re-shipping, so the contract is pinned here rather than trusted. */
+  const html = agentView(who, [], "N");
+  const chips = html.match(/<button class="chip"[^>]*>/g) ?? [];
+  assert.ok(chips.length >= 2, `expected the model and definition chips, got ${chips.length}`);
+  for (const chip of chips) {
+    assert.match(chip, /data-action="/, `a chip with no action: ${chip}`);
+    assert.match(chip, /data-agent="researcher"/, `a chip that does not say who it acts on: ${chip}`);
+  }
+});

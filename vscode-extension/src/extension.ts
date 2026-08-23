@@ -400,8 +400,23 @@ export async function activate(
     // from the prompt repo — so a choice made here is stored beside interact's own state, where no
     // generator owns it, and shown as overriding rather than replacing the declaration.
     // The middle depth: an agent and the tasks it was given.
-    vscode.commands.registerCommand("interact.agents.agent", (arg?: string | { run?: { agent?: string } }) => {
-      const agent = typeof arg === "string" ? arg : arg?.run?.agent;
+    vscode.commands.registerCommand("interact.agents.agent", async (arg?: string | { run?: { agent?: string } }) => {
+      let agent = typeof arg === "string" ? arg : arg?.run?.agent;
+      if (!agent) {
+        // Called with nothing: offer the whole company. Until now the only door into an agent was a
+        // role chip on one of its OWN runs, so a teammate that had never been asked for anything was
+        // unreachable — declared in the company file, present in the room, and impossible to open.
+        const org = readOrg();
+        const picked = await vscode.window.showQuickPick(
+          (org?.agents ?? []).map((a) => ({
+            label: a.name,
+            description: a.title ?? "",
+            detail: [a.department, a.model].filter(Boolean).join(" · "),
+          })),
+          { title: "Which agent?", placeHolder: "Every agent in the company, whether or not it has run" },
+        );
+        agent = picked?.label;
+      }
       if (agent) chatProvider.showAgent(agent);
     }),
     vscode.commands.registerCommand("interact.agents.model", async (arg?: string | { run?: { agent?: string } }) => {
@@ -415,17 +430,21 @@ export async function activate(
 
       const declared = org?.agents.find((a) => a.name === agent)?.model ?? "inherit";
       const current = modelChosenFor(agent);
-      const { loadCatalog } = await import("./catalog");
-      const cat = await loadCatalog().catch(() => null);
-      const models = cat?.models ?? [];
-      const items: vscode.QuickPickItem[] = [
-        { label: "$(discard) Use the company file", description: `declared: ${declared}`,
-          detail: current ? `clears your choice of ${current}` : "no choice is set" },
-        ...models.map((m) => ({
-          label: m.id,
-          description: m.id === current ? "current choice" : m.id === declared ? "declared" : "",
-        })),
-      ];
+      // Handed a PROMISE on purpose: the first open can spend fifteen seconds fetching the model
+      // catalog, and VS Code renders its own loading state for a pending item list. Awaiting first
+      // showed nothing at all for that whole window, which reads as a dead control.
+      const items: Promise<vscode.QuickPickItem[]> = (async () => {
+        const { loadCatalog } = await import("./catalog");
+        const cat = await loadCatalog().catch(() => null);
+        return [
+          { label: "$(discard) Use the company file", description: `declared: ${declared}`,
+            detail: current ? `clears your choice of ${current}` : "no choice is set" },
+          ...(cat?.models ?? []).map((m) => ({
+            label: m.id,
+            description: m.id === current ? "current choice" : m.id === declared ? "declared" : "",
+          })),
+        ];
+      })();
       const pick = await vscode.window.showQuickPick(items, {
         title: `Model for ${agent}`,
         placeHolder: current ? `currently ${current}` : `currently ${declared} (from the company file)`,
@@ -440,9 +459,16 @@ export async function activate(
         void vscode.window.showWarningMessage(`${pick.label} is not a model id interact will store.`);
       }
       refreshWorkplace();
+      // And the panel you are looking at, or the override you just set stays invisible until you
+      // navigate away and back — which defeats the reason it is rendered at all.
+      chatProvider.repaintAgent(agent);
     }),
     vscode.commands.registerCommand("interact.agents.backToTeam", () => {
       void vscode.commands.executeCommand("setContext", "interact.inConversation", false);
+      // Clear the panel's own depth and repaint it. Flipping the key alone left every "back"
+      // control inert once the roster moved out of the side bar and the key stopped gating
+      // anything — a context key is not navigation.
+      chatProvider.backToTeam();
       // The team lives in the big panel now, so this reveals the room rather than a side-bar view.
       void vscode.commands.executeCommand("interact.agents.team");
     }),
