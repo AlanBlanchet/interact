@@ -59,7 +59,13 @@ export class WorkplacePanel {
       railRoute(msg, {
         run: (command) => void vscode.commands.executeCommand(command),
         open: (id) => void vscode.commands.executeCommand("interact.agents.chat", id),
-        agent: (id) => { this.inside = id; this.pushRoster(); },
+        agent: (id) => {
+          this.inside = id;
+          this.pushRoster();
+          // "on the sidepanel, we should be able to view what TASKS an agent was given" — clicking
+          // the role opens that depth beside the room rather than only narrowing the list here.
+          if (id) void vscode.commands.executeCommand("interact.agents.agent", id);
+        },
         act: (command, id) => {
           const run = readAgentRuns().find((r) => r.run_id === id);
           if (run) void vscode.commands.executeCommand(command, { run });

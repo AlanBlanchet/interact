@@ -143,16 +143,37 @@ def test_saying_something_makes_the_sender_walk(page):
 #   - a streaming update must not rebuild the document under someone who is mid-sentence.
 
 
+
+@pytest.fixture(scope="session")
+def panel_pages(tmp_path_factory):
+    """Render the side panel's documents from source, once per session.
+
+    The generator lives IN the repo (`vscode-extension/webview/dev/panels.ts`). It used to be a
+    hand-written file in /tmp, so when /tmp was cleaned these tests reported "fixture is not
+    present" and skipped — silently, which reads as a deliberate skip rather than a guard that has
+    gone. A fixture outside the repo is a test that stops guarding without telling anyone.
+    """
+    ext = Path(__file__).resolve().parent.parent / "vscode-extension"
+    out = tmp_path_factory.mktemp("panels")
+    bundle = out / "panels.js"
+    build = subprocess.run(
+        ["npx", "esbuild", "webview/dev/panels.ts", "--bundle", f"--outfile={bundle}",
+         "--format=cjs", "--platform=node", "--target=es2022"],
+        cwd=ext, capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        pytest.skip(f"could not build the panel fixture: {build.stderr[-300:]}")
+    run = subprocess.run(["node", str(bundle), str(out)], capture_output=True, text=True)
+    if run.returncode != 0:
+        pytest.skip(f"could not render the panel fixture: {run.stderr[-300:]}")
+    return out
+
+
 @pytest.fixture(scope="module")
-def chat_page(browser):
+def chat_page(browser, panel_pages):
     """The chat document, rendered from source with the host's API stubbed."""
-    render = Path("/tmp/chatrender.ts")
-    if not render.exists():
-        pytest.skip("the chat render fixture is not present")
-    subprocess.run(["node", "--experimental-strip-types", str(render)],
-                   check=True, capture_output=True)
     pg = browser.new_page(viewport={"width": 420, "height": 600})
-    pg.goto("file:///tmp/chat/dark.html")
+    pg.goto((panel_pages / "chat" / "dark.html").as_uri())
     pg.wait_for_timeout(300)
     yield pg
     pg.close()
@@ -277,16 +298,14 @@ def test_every_word_in_the_world_is_readable(scene, browser, theme):
 
 
 @pytest.mark.parametrize("theme", ["dark", "light"])
-def test_the_rail_stays_readable_too(browser, theme):
+def test_the_rail_stays_readable_too(browser, panel_pages, theme):
     """The same measurement, on the panel rather than the world.
 
     The rail grew two new text roles after its last contrast check — the per-row action glyphs
     and the brain badge — which is exactly how a surface drifts under a floor: not in one big
     change, but one small addition at a time, each looking fine against a dark backdrop.
     """
-    fixture = Path("/tmp/rail") / f"{theme}.html"
-    if not fixture.exists():
-        pytest.skip("the rail render fixture is not present")
+    fixture = panel_pages / "rail" / f"{theme}.html"
     pg = browser.new_page(viewport={"width": 292, "height": 460})
     pg.goto(fixture.as_uri())
     pg.wait_for_timeout(250)

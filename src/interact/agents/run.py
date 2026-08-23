@@ -19,6 +19,28 @@ from interact.agents import registry as reg
 from interact.agents.providers import AgentProvider
 
 
+
+def resolve_model(model: str | None, env: dict[str, str]) -> tuple[dict[str, str], str | None]:
+    """Split a model id into (env overlay, what the vendor CLI should be asked for).
+
+    A `provider/name` id says two different things at once: WHERE to send the request, and WHICH
+    model to ask for. The CLI only understands the second — hand it `ollama/deepseek-v4-pro:cloud`
+    and it cannot resolve anything, which is why a company file that declared exactly that made
+    every researcher dispatch die at startup and got reverted with the cause recorded as somebody
+    else's configuration. It was ours: only a NAMED profile ever went through this split.
+
+    Anything unrecognised is returned untouched, deliberately: a bare `claude-sonnet-5` means the
+    vendor's own endpoint, and guessing an endpoint for an unknown prefix would send the operator's
+    credentials somewhere nobody chose.
+    """
+    if not model:
+        return {}, None
+    overlay = overlay_for(model, env)
+    if not overlay:
+        return {}, model
+    return overlay, overlay.get("ANTHROPIC_MODEL", model)
+
+
 def _interact_command() -> tuple[str, list[str]]:
     """How a spawned agent should launch interact's MCP server. Prefer the installed console
     script; fall back to this very interpreter so a checkout without a console script still
@@ -185,6 +207,11 @@ async def run_agent(
         overlay = overlay_for(known[profile], dict(os.environ))
         env.update(overlay)
         model = model or overlay.get("ANTHROPIC_MODEL")
+    else:
+        # No named profile, but the model id may still carry its own routing — a company file or the
+        # panel can declare `ollama/deepseek-v4-pro:cloud` directly.
+        routed, model = resolve_model(model, dict(os.environ))
+        env.update(routed)
     # The child writes its OWN stream straight to disk. Piping it through a coroutine tied the
     # events to the caller's event loop: a caller that spawned and returned lost every event, and
     # the run then looked HEALTHY — status done, exit 0, no cost, no activity — which is worse

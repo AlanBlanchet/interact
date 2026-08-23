@@ -102,3 +102,48 @@ async def test_a_defined_profile_reaches_the_spawn(monkeypatch):
     monkeypatch.setattr(srv.tools_agents, "run_agent", fake_run, raising=False)
     await srv.agent_spawn("do a thing", profile="cheap")
     assert seen.get("profile") == "cheap", f"the profile never reached the spawn: {seen}"
+
+
+def test_a_provider_prefixed_model_routes_even_without_a_named_profile(monkeypatch):
+    """The gap that made "researcher runs on DeepSeek V4" untrue in practice.
+
+    A named profile (INTERACT_PROFILE_X=ollama/model) got the env overlay AND a bare model name for
+    the CLI. But a `provider/name` id declared in the company file — or chosen in the panel — was
+    handed to the vendor CLI verbatim, which cannot resolve `ollama/deepseek-v4-pro:cloud`, so every
+    dispatch died at startup. The pin was then reverted with the cause recorded as "routing config
+    is Alan's side"; it was interact's side.
+    """
+    from interact.agents.run import resolve_model
+
+    env = {"OLLAMA_API_BASE": "http://localhost:11434"}
+    overlay, cli_model = resolve_model("ollama/deepseek-v4-pro:cloud", env)
+    assert overlay["ANTHROPIC_BASE_URL"] == "http://localhost:11434"
+    assert overlay["ANTHROPIC_MODEL"] == "deepseek-v4-pro:cloud"
+    assert cli_model == "deepseek-v4-pro:cloud", (
+        "the CLI must be handed the BARE name; the prefix says where to send it, not what to ask for"
+    )
+
+
+def test_a_vendor_model_is_left_completely_alone():
+    """`claude-sonnet-5` means the vendor's own default endpoint. Redirecting it would send the
+    operator's credentials somewhere nobody chose."""
+    from interact.agents.run import resolve_model
+
+    overlay, cli_model = resolve_model("claude-sonnet-5", {})
+    assert overlay == {}
+    assert cli_model == "claude-sonnet-5"
+
+
+def test_an_unroutable_prefix_is_left_alone_rather_than_guessed():
+    """A provider with no known endpoint must not be invented — refusing to act is safe here."""
+    from interact.agents.run import resolve_model
+
+    overlay, cli_model = resolve_model("whoknows/some-model", {})
+    assert overlay == {}
+    assert cli_model == "whoknows/some-model"
+
+
+def test_no_model_asked_for_means_no_opinion():
+    from interact.agents.run import resolve_model
+
+    assert resolve_model(None, {}) == ({}, None)

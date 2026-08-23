@@ -7,6 +7,7 @@ import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
 import { readOrg, spawnArgs, spawnChoices } from "./org";
+import { chooseModel, clearChoice, modelChosenFor } from "./agentModels";
 import { knownModes, modeChoices } from "./permissionModes";
 import {
   KeyManager,
@@ -395,6 +396,51 @@ export async function activate(
   // focusing the rail puts you where you were — so "open a conversation" and "see the team" are
   // one column used two ways rather than three panes fighting over it.
   context.subscriptions.push(
+    // Choosing what runs on what. The company file DECLARES a model per agent, but it is generated
+    // from the prompt repo — so a choice made here is stored beside interact's own state, where no
+    // generator owns it, and shown as overriding rather than replacing the declaration.
+    // The middle depth: an agent and the tasks it was given.
+    vscode.commands.registerCommand("interact.agents.agent", (arg?: string | { run?: { agent?: string } }) => {
+      const agent = typeof arg === "string" ? arg : arg?.run?.agent;
+      if (agent) chatProvider.showAgent(agent);
+    }),
+    vscode.commands.registerCommand("interact.agents.model", async (arg?: string | { run?: { agent?: string } }) => {
+      const org = readOrg();
+      const named = typeof arg === "string" ? arg : arg?.run?.agent ?? undefined;
+      const agent = named ?? (await vscode.window.showQuickPick(
+        org?.agents.map((a) => ({ label: a.name, description: a.title ?? "" })) ?? [],
+        { title: "Which agent?", placeHolder: "Pick the agent whose model you want to change" },
+      ))?.label;
+      if (!agent) return;
+
+      const declared = org?.agents.find((a) => a.name === agent)?.model ?? "inherit";
+      const current = modelChosenFor(agent);
+      const { loadCatalog } = await import("./catalog");
+      const cat = await loadCatalog().catch(() => null);
+      const models = cat?.models ?? [];
+      const items: vscode.QuickPickItem[] = [
+        { label: "$(discard) Use the company file", description: `declared: ${declared}`,
+          detail: current ? `clears your choice of ${current}` : "no choice is set" },
+        ...models.map((m) => ({
+          label: m.id,
+          description: m.id === current ? "current choice" : m.id === declared ? "declared" : "",
+        })),
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        title: `Model for ${agent}`,
+        placeHolder: current ? `currently ${current}` : `currently ${declared} (from the company file)`,
+      });
+      if (!pick) return;
+      if (pick.label.startsWith("$(discard)")) {
+        clearChoice(agent);
+        void vscode.window.showInformationMessage(`${agent} follows the company file again (${declared}).`);
+      } else if (chooseModel(agent, pick.label)) {
+        void vscode.window.showInformationMessage(`${agent} will run on ${pick.label}.`);
+      } else {
+        void vscode.window.showWarningMessage(`${pick.label} is not a model id interact will store.`);
+      }
+      refreshWorkplace();
+    }),
     vscode.commands.registerCommand("interact.agents.backToTeam", () => {
       void vscode.commands.executeCommand("setContext", "interact.inConversation", false);
       // The team lives in the big panel now, so this reveals the room rather than a side-bar view.
@@ -536,7 +582,11 @@ export async function activate(
         }
       }
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const args = spawnArgs({ task, agent: picked.label, cwd, org: readOrg(), permissionMode });
+      const args = spawnArgs({
+        task, agent: picked.label, cwd, org: readOrg(), permissionMode,
+        // Whatever you chose for this agent in the editor; absent, the company file decides.
+        model: modelChosenFor(picked.label),
+      });
       execFile("interact", args, (err, stdout, stderr) => {
         const said = (stdout || stderr || "").trim();
         if (err) {

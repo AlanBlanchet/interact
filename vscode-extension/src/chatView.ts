@@ -16,6 +16,10 @@ import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
 import { conversationTitle } from "./roster";
+import { agentDocument, agentView } from "./agentPanel";
+import { DIM_FOREGROUND } from "./themeTokens";
+import { modelChosenFor } from "./agentModels";
+import { definitionFile, readOrg } from "./org";
 import { teamSpend } from "./teamSpend";
 import { scopeStore } from "./scopeStore";
 import { interactCli } from "./interactCli";
@@ -53,7 +57,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    *  like the click missed.
    */
   public show(runId: string): void {
+    this.agentId = null;  // opening a conversation leaves the agent depth
     void this.reveal(runId);
+  }
+
+  /** The middle depth: an agent, its identity, and the tasks it was given.
+   *
+   *  "on the sidepanel, we should be able to view what TASKS an agent was given, and then proceed
+   *  to view the conversation we want" — this is that view, and the place the two things you
+   *  MANAGE about an agent live: its definition file and the model it runs on.
+   */
+  public showAgent(agent: string): void {
+    this.agentId = agent;
+    this.runId = undefined;
+    this.rendered = undefined;
+    void this.revealAgent();
+  }
+
+  private async revealAgent(): Promise<void> {
+    this.render();
+    await vscode.commands.executeCommand("setContext", ChatViewProvider.IN_CONVERSATION, true);
+    if (this.view) { void this.view.show?.(true); }
+    await vscode.commands.executeCommand("interactAgents.chat.focus");
+    this.render();
   }
 
   /** Awaited, because the Chat view now carries `when: interact.inConversation` — it does not
@@ -106,7 +132,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true, enableCommandUris: true };
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
-      if (msg?.type === "back") void ChatViewProvider.leaveConversation();
+      if (msg?.type === "back") { this.agentId = null; void ChatViewProvider.leaveConversation(); }
+      // The two things you MANAGE about an agent, from the depth where the agent IS the subject.
+      if (msg?.type === "agentAction" && typeof msg.agent === "string") {
+        if (msg.action === "model") void vscode.commands.executeCommand("interact.agents.model", msg.agent);
+        if (msg.action === "definition" && typeof msg.path === "string") {
+          void vscode.window.showTextDocument(vscode.Uri.file(msg.path));
+        }
+      }
       // Walking UP the tree: the errand that produced this answer.
       if (msg?.type === "openRun" && typeof msg.runId === "string") this.show(msg.runId);
       if (msg?.type === "open" && typeof msg.path === "string") void this.open(msg.path);
@@ -137,14 +170,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Which run the live document was built for. A different agent needs a new document; the SAME
    *  agent going on working needs only its transcript swapped. */
   private rendered: string | undefined;
+  /** When set, the panel is at the AGENT depth: who this is, and the tasks it was given. The
+   *  conversation is one level deeper. */
+  private agentId: string | null = null;
   /** The autonomy levels this machine's CLI offers, read once — turning an id recorded on a run
    *  ("acceptEdits") into the words somebody chose it by ("May edit files"). */
   private modes: PermissionMode[] = [];
+
+  /** The agent depth. Identity from the company file, tasks from the registry. */
+  private renderAgent(agent: string): void {
+    if (!this.view) return;
+    const org = readOrg();
+    const declared = org?.agents.find((a) => a.name === agent);
+    const tasks = readAgentRuns().filter((r) => (r.agent ?? "") === agent);
+    const body = agentView(
+      {
+        id: agent,
+        title: declared?.title ?? null,
+        department: declared?.department ?? null,
+        model: modelChosenFor(agent),
+        declaredModel: declared?.model ?? null,
+        // Resolved, not the raw relative string the company file records — an unresolved path
+        // opens nothing and the chip would look live while doing nothing.
+        definitionPath: definitionFile(agent, org)
+          ?? tasks.find((t) => t.definition_path)?.definition_path ?? null,
+      },
+      tasks as never[],
+      "N",
+    );
+    const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    this.view.webview.html = agentDocument(nonce, body, DIM_FOREGROUND);
+    this.rendered = undefined;  // the next conversation must repaint, not be skipped as unchanged
+  }
 
   private render(): void {
     // `visible` as well as present: a view can be resolved and hidden, and writing to one VS Code
     // has already torn down throws rather than no-ops.
     if (!this.view?.visible) return;
+    if (this.agentId) { this.renderAgent(this.agentId); return; }
     const current = this.run();
     if (current && this.rendered === current.run_id) {
       // Same agent, more to say: patch the transcript and leave the rest of the view alone.

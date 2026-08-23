@@ -71,3 +71,17 @@ test("the brain can be spoken to like anyone else", () => {
   // the whole team.
   assert.ok(ids(worker({ brain: true })).includes("message"));
 });
+
+test("you can choose the model from the row that IS the agent", () => {
+  /* "find a way that we could easily chose what models are ran for what." Reachable where you are
+     already looking at the agent, not only from a settings page elsewhere. */
+  assert.ok(ids(worker({ status: "running", agent: "researcher" })).includes("model"));
+});
+
+test("a run with no definition has nothing to remember a model against", () => {
+  /* The preference is stored per DEFINITION — you are choosing what `researcher` runs on, not what
+     one errand runs on — so a bare session cannot offer it. */
+  assert.ok(!ids(worker({ status: "running", agent: null })).includes("model"));
+  assert.ok(!ids(worker({ status: "foreign", agent: "researcher" })).includes("model"),
+    "and interact cannot change what one of your own editor windows runs");
+});

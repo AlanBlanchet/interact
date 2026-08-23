@@ -11,11 +11,11 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readOrg, orgTree, spawnChoices, modelFor, spawnArgs, type Org } from "./org.ts";
+import { readOrg, orgTree, spawnChoices, modelFor, spawnArgs, definitionFile, type Org } from "./org.ts";
 
 const ORG: Org = {
   coordinator: { id: "main", title: "Main thread — session coordinator" },
@@ -183,4 +183,53 @@ test("the permission flag is spelled exactly as the CLI parses it", () => {
   const args = spawnArgs({ task: "t", agent: "claude", cwd: null, org: ORG, permissionMode: "plan" });
   assert.ok(args.includes("--permission-mode"), "the literal flag the CLI declares");
   assert.equal(args[args.indexOf("--permission-mode") + 1], "plan");
+});
+
+test("a model you chose in the editor beats the company file", () => {
+  /* The company file is generated from the prompt repo; a preference set in the editor lives
+     outside it, or the next sync silently erases the choice. */
+  assert.equal(modelFor("researcher", ORG, "ollama/deepseek-v4-pro:cloud"), "ollama/deepseek-v4-pro:cloud");
+  assert.equal(modelFor("researcher", ORG), ORG.agents.find((a) => a.name === "researcher")?.model ?? null,
+    "with no choice, the company file still decides");
+  assert.equal(modelFor("researcher", ORG, "inherit"), ORG.agents.find((a) => a.name === "researcher")?.model ?? null,
+    "'inherit' means do not override, exactly as it does in the file");
+});
+
+test("the chosen model reaches the spawn arguments", () => {
+  const args = spawnArgs({ task: "t", agent: "researcher", org: ORG, model: "ollama/deepseek-v4-pro:cloud" });
+  const i = args.indexOf("--model");
+  assert.ok(i >= 0 && args[i + 1] === "ollama/deepseek-v4-pro:cloud", args.join(" "));
+});
+
+test("a definition path resolves against wherever the company file really lives", () => {
+  /* `def` is recorded RELATIVE to the prompt repo ("agents/researcher.md"), and `~/.claude/org.json`
+     is a symlink INTO that repo. Opening the relative string as a file URI would silently open
+     nothing — a control that looks live and does nothing, which is worse than no control. */
+  const dir = mkdtempSync(join(tmpdir(), "org-"));
+  const repo = join(dir, "prompt-repo");
+  mkdirSync(join(repo, "agents"), { recursive: true });
+  const defFile = join(repo, "agents", "researcher.md");
+  writeFileSync(defFile, "# researcher");
+  const orgFile = join(repo, "org.json");
+  writeFileSync(orgFile, JSON.stringify({ coordinator: { id: "main" }, providers: {}, departments: [],
+    agents: [{ name: "researcher", def: "agents/researcher.md" }] }));
+
+  assert.equal(definitionFile("researcher", readOrg(orgFile), orgFile), defFile);
+});
+
+test("an agent with no declared file resolves to nothing, rather than to a guess", () => {
+  const dir = mkdtempSync(join(tmpdir(), "org-"));
+  const orgFile = join(dir, "org.json");
+  writeFileSync(orgFile, JSON.stringify({ coordinator: { id: "main" }, providers: {}, departments: [],
+    agents: [{ name: "researcher" }] }));
+  assert.equal(definitionFile("researcher", readOrg(orgFile), orgFile), null);
+  assert.equal(definitionFile("nobody", readOrg(orgFile), orgFile), null);
+});
+
+test("an absolute definition path is left as it is", () => {
+  const dir = mkdtempSync(join(tmpdir(), "org-"));
+  const orgFile = join(dir, "org.json");
+  writeFileSync(orgFile, JSON.stringify({ coordinator: { id: "main" }, providers: {}, departments: [],
+    agents: [{ name: "r", def: "/somewhere/else/r.md" }] }));
+  assert.equal(definitionFile("r", readOrg(orgFile), orgFile), "/somewhere/else/r.md");
 });

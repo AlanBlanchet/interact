@@ -29,6 +29,9 @@ export interface ActionSubject {
   status: string;
   /** Present only when this run IS a definition — a plain `claude` run has no prompt to open. */
   definition_path?: string | null;
+  /** The DEFINITION this run is. A model preference is stored per definition, not per run: you are
+   *  choosing what `researcher` runs on, not what this one errand runs on. */
+  agent?: string | null;
   faculties?: string[];
   brain?: boolean;
 }
@@ -54,6 +57,15 @@ const ALL: (AgentAction & { when: (s: ActionSubject) => boolean })[] = [
     id: "prompt", label: "See their instructions", mark: "◱",
     command: "interact.agents.openConversation",
     when: (s) => Boolean(s.definition_path),
+  },
+  {
+    // "find a way that we could easily chose what models are ran for what" — reachable from the row
+    // that IS the agent, rather than only from a settings page somewhere else.
+    id: "model", label: "Choose the model it runs on", mark: "◈",
+    command: "interact.agents.model",
+    // Only where there is an agent to key the choice by: the preference is stored per DEFINITION,
+    // so a run with no definition has nothing to remember it against.
+    when: (s) => Boolean(s.agent) && s.status !== "foreign",
   },
   {
     id: "events", label: "Raw stream", mark: "⋮",

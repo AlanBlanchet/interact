@@ -197,7 +197,31 @@ export function companyOf(org: Org | null): { coordinator: { id: string; title: 
   };
 }
 
-export function modelFor(agent: string, org: Org | null): string | null {
+/** Where an agent's system prompt actually lives on disk.
+ *
+ *  The company file records `def` RELATIVE to the prompt repo ("agents/researcher.md"), and
+ *  `~/.claude/org.json` is a symlink INTO that repo — so the relative string only means anything
+ *  once resolved against the file's REAL location. Opening it unresolved silently opens nothing,
+ *  which is the dead-control failure this project keeps guarding against.
+ *
+ *  Null when the company file names no definition: better no chip than a chip that does nothing.
+ */
+export function definitionFile(agent: string, org: Org | null, orgPath_: string = orgPath()): string | null {
+  const rel = org?.agents.find((a) => a.name === agent)?.def;
+  if (!rel) return null;
+  if (path.isAbsolute(rel)) return rel;
+  try {
+    return path.resolve(path.dirname(fs.realpathSync(orgPath_)), rel);
+  } catch {
+    return path.resolve(path.dirname(orgPath_), rel);  // unreadable link: the literal path still helps
+  }
+}
+
+export function modelFor(agent: string, org: Org | null, chosen?: string | null): string | null {
+  // A choice made in the editor beats the company file, which is GENERATED and would otherwise be
+  // the only answer — see `agentModels.ts`. Passed in rather than imported: this module is loaded
+  // directly by the test runner, which cannot resolve an extensionless sibling.
+  if (chosen && chosen !== "inherit" && chosen !== "default") return chosen;
   const model = org?.agents.find((a) => a.name === agent)?.model;
   if (!model || model === "inherit" || model === "default") return null;
   return model;
@@ -216,11 +240,13 @@ export function spawnArgs(
     org: Org | null;
     /** How much autonomy to grant. Null/absent leaves the CLI's own default alone. */
     permissionMode?: string | null;
+    /** The model YOU chose for this agent, overriding the company file's declaration. */
+    model?: string | null;
   },
 ): string[] {
   const args = ["agents", "spawn", opts.task];
   if (opts.agent !== "claude") args.push("--agent", opts.agent);
-  const model = modelFor(opts.agent, opts.org);
+  const model = modelFor(opts.agent, opts.org, opts.model);
   if (model) args.push("--model", model);
   if (opts.cwd) args.push("--cwd", opts.cwd);
   if (opts.permissionMode) args.push("--permission-mode", opts.permissionMode);
