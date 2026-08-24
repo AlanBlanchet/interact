@@ -9,6 +9,7 @@ The harness is the extension's own preview build (the same document, CSP and the
 panel ships), so a pass here is a pass on what the panel renders.
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,7 +39,7 @@ COLOUR_PROPS_JS = """(el) => {
 def scene(tmp_path_factory):
     """The real preview pages, built from source."""
     if not PREVIEW.exists() or shutil.which("npx") is None:
-        pytest.skip("the extension's webview toolchain is not available here")
+        _unavailable("the extension's webview toolchain is not available here")
     out = tmp_path_factory.mktemp("workplace")
     bundle = out / "preview.js"
     build = subprocess.run(
@@ -144,6 +145,21 @@ def test_saying_something_makes_the_sender_walk(page):
 
 
 
+
+def _unavailable(why: str) -> None:
+    """Skip locally, FAIL in CI.
+
+    Skipping locally is fine — not every machine has the webview toolchain. Skipping in CI makes
+    the guard decorative exactly where it is the only thing watching: a probe that silently does
+    not run is a note, not an invariant, and this file has already shipped that failure once (four
+    tests reported "fixture is not present" for weeks after /tmp was cleaned). `test_paths.py`
+    already draws this line; these fixtures did not.
+    """
+    if os.environ.get("CI"):
+        pytest.fail(f"{why} — this must not skip in CI, it is the only thing checking this")
+    pytest.skip(why)
+
+
 @pytest.fixture(scope="session")
 def panel_pages(tmp_path_factory):
     """Render the side panel's documents from source, once per session.
@@ -162,10 +178,10 @@ def panel_pages(tmp_path_factory):
         cwd=ext, capture_output=True, text=True,
     )
     if build.returncode != 0:
-        pytest.skip(f"could not build the panel fixture: {build.stderr[-300:]}")
+        _unavailable(f"could not build the panel fixture: {build.stderr[-300:]}")
     run = subprocess.run(["node", str(bundle), str(out)], capture_output=True, text=True)
     if run.returncode != 0:
-        pytest.skip(f"could not render the panel fixture: {run.stderr[-300:]}")
+        _unavailable(f"could not render the panel fixture: {run.stderr[-300:]}")
     return out
 
 
@@ -279,7 +295,7 @@ def test_every_word_in_the_world_is_readable(scene, browser, theme):
     """
     page_file = scene / f"{theme}.html"
     if not page_file.exists():
-        pytest.skip(f"{theme}.html was not built")
+        _unavailable(f"{theme}.html was not built")
     pg = browser.new_page(viewport={"width": 1400, "height": 900})
     pg.goto(page_file.as_uri())
     pg.wait_for_timeout(800)
@@ -349,7 +365,7 @@ def test_no_two_words_in_the_world_are_drawn_on_top_of_each_other(scene, browser
     """
     page_file = scene / f"{theme}.html"
     if not page_file.exists():
-        pytest.skip(f"{theme}.html was not built")
+        _unavailable(f"{theme}.html was not built")
     pg = browser.new_page(viewport={"width": 1400, "height": 900})
     pg.goto(page_file.as_uri())
     pg.wait_for_timeout(2500)          # let the cast settle where it actually stands
@@ -519,7 +535,7 @@ def test_every_standing_place_has_the_thing_it_belongs_to_behind_it(tmp_path_fac
     """
     probe = EXT / "webview" / "workplace" / "dev" / "placement.ts"
     if not probe.exists() or shutil.which("npx") is None:
-        pytest.skip("the extension's webview toolchain is not available here")
+        _unavailable("the extension's webview toolchain is not available here")
     out = tmp_path_factory.mktemp("placement") / "placement.js"
     build = subprocess.run(
         ["npx", "esbuild", str(probe), "--bundle", f"--outfile={out}",
@@ -552,7 +568,7 @@ def test_a_shadow_starts_at_the_foot_and_is_thrown_away_from_the_light(tmp_path_
     """
     probe = EXT / "webview" / "workplace" / "dev" / "shadows.ts"
     if not probe.exists() or shutil.which("npx") is None:
-        pytest.skip("the extension's webview toolchain is not available here")
+        _unavailable("the extension's webview toolchain is not available here")
     out = tmp_path_factory.mktemp("shadows") / "shadows.js"
     build = subprocess.run(
         ["npx", "esbuild", str(probe), "--bundle", f"--outfile={out}",
@@ -584,7 +600,7 @@ def test_nobodys_line_hangs_off_the_edge_of_the_panel(scene, browser):
     """
     page_file = scene / "live.html"
     if not page_file.exists():
-        pytest.skip("live.html was not built")
+        _unavailable("live.html was not built")
     pg = browser.new_page(viewport={"width": 400, "height": 900}, reduced_motion="no-preference")
     pg.goto(page_file.as_uri())
     pg.wait_for_timeout(2000)
