@@ -58,6 +58,41 @@ function live(base: string, vars: string, klass: string, every = 7000): string {
   return themed(base, vars, klass).replace("</body>", `${driver}</body>`);
 }
 
+/** The whole of one element, balanced. The map nests an `svg` per floor pattern and the sprite
+ *  sheet nests one per tile, so the first `</svg>` after either opening tag is somebody else's. */
+function element(doc: string, start: number, tag: string): string {
+  const re = new RegExp(`<${tag}\\b|</${tag}>`, "g");
+  re.lastIndex = start;
+  let depth = 0;
+  for (let m = re.exec(doc); m; m = re.exec(doc)) {
+    depth += m[0][1] === "/" ? -1 : 1;
+    if (depth === 0) return doc.slice(start, m.index + tag.length + 3);
+  }
+  throw new Error(`unbalanced <${tag}> at ${start}`);
+}
+
+/** The map and the sheet it draws from, on a page with no viewport, no camera and no motion.
+ *
+ *  The product's own pages cannot answer "is this thing's shade in the right place": the camera is
+ *  over somewhere else, the zoom is a variable, and the ambient animation moves the canopies
+ *  between two captures so a difference image comes back contaminated. Here the map is at its
+ *  natural size at the origin, so tile (x, y) is at (24x, 24y) on every screenshot and two builds
+ *  crop identically. Same document, same stylesheet, same theme variables — only the window is
+ *  gone. */
+function flat(vars: string, klass: string): string {
+  const doc = renderWorkplace(fixture(), "devnonce123");
+  const style = doc.slice(doc.indexOf("<style"), doc.indexOf("</style>") + 8);
+  const sheet = element(doc, doc.indexOf('<svg class="wp-defs"'), "svg");
+  const map = element(doc, doc.indexOf('<svg class="wp-map"'), "svg");
+  return (
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><style>:root{${vars}}</style>${style}` +
+    `<style>html,body{margin:0;padding:0;background:var(--vscode-editor-background)}` +
+    `.wp{position:static;width:auto;height:auto;overflow:visible}svg.wp-map{display:block}` +
+    `*{animation:none !important;transition:none !important}</style></head>` +
+    `<body class="${klass}"><div class="wp" data-zoom="1">${sheet}${map}</div></body></html>`
+  );
+}
+
 function main(): void {
   const out = process.argv[2] || ".";
   mkdirSync(out, { recursive: true });
@@ -84,6 +119,14 @@ function main(): void {
       DARK, "vscode-dark",
     )],
     ["live-light.html", live(renderWorkplace(fixture(), "devnonce123"), LIGHT, "vscode-light")],
+    // THE WHOLE MAP AT 1:1, WITH NO CAMERA ON IT. Every other page here is the product, which
+    // means a viewport somewhere over a building that is deliberately bigger than it — fine for
+    // judging the product and useless for judging the GROUND, because the thing you want to look
+    // at is usually off screen and the two things you want to compare are never in frame at once.
+    // Shadows were checked three times against pages like that. This one is the map alone, so a
+    // crop is a fixed tile rectangle and a before/after is two files.
+    ["flat-dark.html", flat(DARK, "vscode-dark")],
+    ["flat-light.html", flat(LIGHT, "vscode-light")],
   ];
   for (const [name, html] of pages) {
     writeFileSync(join(out, name), html, "utf8");

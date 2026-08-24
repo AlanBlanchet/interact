@@ -728,8 +728,9 @@ const STYLE = `
      its TOTAL width, not its worst element — so the controls hold the first line and the name and
      status fall to the next rather than sliding out of view. */
   header { display: flex; flex-wrap: wrap; align-items: center; gap: .35em .5em; margin: .7em .8em .4em;
-           padding: 3px 9px; background: var(--wp-plate); color: var(--wp-bg);
-           border: 1px solid var(--wp-ink); box-shadow: 2px 2px 0 0 var(--wp-ink);
+           padding: 5px 12px; background: var(--wp-plate); color: var(--wp-bg);
+           border: 1px solid color-mix(in srgb, var(--wp-ink) 45%, transparent);
+           border-radius: 999px; box-shadow: var(--wp-lift);
            align-self: flex-start; }
   .who { font-weight: 700; letter-spacing: .18em; font-size: 11px; text-transform: uppercase; }
   /* No opacity. The header is a light plate carrying background-coloured letters, so fading the
@@ -775,6 +776,19 @@ const STYLE = `
     flex: 1 1 auto; min-width: 0; margin: 0;
     font-family: var(--vscode-editor-font-family); font-size: .9em;
     white-space: pre-wrap; overflow-wrap: break-word; background: none; border: 0; padding: 0;
+  }
+  /* Corners and elevation, once.
+     Rejected three times as "too square, corners and integrations". The cause was not one hard
+     element but a FAMILY: header, speech bubble and button all carried square corners plus a hard
+     "2px 2px 0 0" offset — a deliberate comic-plate look — and softening the new tool card alone
+     left one round component sitting in an otherwise rectangular, hard-shadowed panel. So the
+     radius and the elevation are declared here and used everywhere, and the offset becomes a soft
+     low shadow that reads as depth rather than as a printed outline. */
+  :root, body {
+    --wp-r: 10px;
+    --wp-r-sm: 6px;
+    --wp-lift: 0 1px 2px color-mix(in srgb, var(--wp-ink) 22%, transparent),
+               0 2px 8px color-mix(in srgb, var(--wp-ink) 12%, transparent);
   }
   .turn { margin: 0 0 .7em; line-height: 1.45; }
   .turn .who { font-weight: 600; letter-spacing: .1em; font-size: 10px; text-transform: uppercase;
@@ -883,7 +897,7 @@ const STYLE = `
            background: color-mix(in srgb, var(--vscode-focusBorder, #4f9cf5) 10%, var(--wp-bg));
            border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, #4f9cf5) 34%, var(--wp-bg));
            border-left-width: 3px;
-           box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .4em .6em; }
+           border-radius: var(--wp-r); box-shadow: var(--wp-lift); padding: .5em .75em; }
   .turn-message .who, .turn-prompt .who {
            color: color-mix(in srgb, var(--vscode-focusBorder, #4f9cf5) 62%, var(--wp-fg)); }
   /* The fold on a long block: a quiet control, not another plate. */
@@ -894,14 +908,15 @@ const STYLE = `
      panel, so a list that opened downward would be off-screen. */
   #composer { position: relative; }
   .controls { display: flex; gap: .4em; align-self: flex-end; align-items: stretch; }
-  #cmds { min-width: 34px; padding: .6em .7em; font-weight: 700;
+  #cmds { min-width: 34px; padding: .6em .7em; font-weight: 700; border-radius: 999px;
           background: var(--wp-wall); color: var(--wp-fg); }
   #palette { position: absolute; bottom: 100%; left: 0; right: 0; margin: 0 0 .4em; padding: .2em;
              list-style: none; z-index: 5; max-height: 46vh; overflow-y: auto;
-             background: var(--wp-bg); border: 1px solid var(--wp-ink);
-             box-shadow: 2px 2px 0 0 var(--wp-ink); }
+             background: var(--wp-bg);
+             border: 1px solid color-mix(in srgb, var(--wp-ink) 40%, transparent);
+             border-radius: var(--wp-r); box-shadow: var(--wp-lift); }
   #palette li { display: grid; grid-template-columns: auto 1fr; gap: 0 .5em; padding: .3em .45em;
-                cursor: pointer; align-items: baseline; }
+                cursor: pointer; align-items: baseline; border-radius: var(--wp-r-sm); }
   #palette li b { font-family: var(--vscode-editor-font-family); color: var(--wp-fg); }
   #palette li span { font-weight: 600; }
   #palette li i { grid-column: 2; font-style: normal; font-size: .88em; color: var(--wp-dim); }
@@ -937,16 +952,18 @@ const STYLE = `
               border-top: 1px solid var(--wp-line); }
   textarea { resize: vertical; font: inherit; color: var(--vscode-input-foreground);
              background: var(--vscode-input-background);
-             border: 1px solid var(--wp-line); padding: .4em; }
+             border: 1px solid var(--wp-line); border-radius: var(--wp-r); padding: .55em .7em; }
   /* Measured at 55x19px, which is under every published hit-target floor. A mouse-driven desktop
      surface makes that low-stakes rather than harmless — it is still the control this panel exists
      to be used through. */
-  button { align-self: flex-end; font: inherit; cursor: pointer; border: 1px solid var(--wp-ink);
-           box-shadow: 2px 2px 0 0 var(--wp-ink); padding: .6em 1.2em; min-height: 32px;
+  button { align-self: flex-end; font: inherit; cursor: pointer;
+           border: 1px solid color-mix(in srgb, var(--wp-ink) 40%, transparent);
+           border-radius: 999px; box-shadow: var(--wp-lift); padding: .6em 1.3em; min-height: 32px;
            color: var(--vscode-button-foreground); background: var(--vscode-button-background);
            letter-spacing: .08em; text-transform: uppercase; font-size: 11px; font-weight: 600; }
   button:hover { background: var(--vscode-button-hoverBackground); }
-  button:active { box-shadow: 0 0 0 0 var(--wp-ink); transform: translate(2px, 2px); }
+  /* Pressed reads as settling, not as a stamp sliding off its own outline. */
+  button:active { box-shadow: none; transform: translateY(1px); }
 `;
 
 

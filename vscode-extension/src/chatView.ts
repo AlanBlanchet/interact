@@ -15,11 +15,11 @@ import * as vscode from "vscode";
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
-import { conversationTitle } from "./roster";
+import { conversationTitle, roleOf } from "./roster";
 import { agentDocument, agentView } from "./agentPanel";
 import { DIM_FOREGROUND } from "./themeTokens";
 import { modelChosenFor } from "./agentModels";
-import { definitionFile, readOrg } from "./org";
+import { companyOf, definitionFile, readOrg } from "./org";
 import { teamSpend } from "./teamSpend";
 import { scopeStore } from "./scopeStore";
 import { interactCli } from "./interactCli";
@@ -206,7 +206,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.view) return;
     const org = readOrg();
     const declared = org?.agents.find((a) => a.name === agent);
-    const tasks = readAgentRuns().filter((r) => (r.agent ?? "") === agent);
+    // Resolved identity, NOT the literal field. A definition-less run's `agent` is null and its id
+    // ("main", the coordinator) exists only through roleOf's fallback — so filtering on the raw
+    // field showed "No tasks yet" for the coordinator while five of its errands were visibly
+    // failing in the room. That was precisely the case this whole change was written for.
+    const company = companyOf(readOrg()) ?? undefined;
+    const tasks = readAgentRuns().filter((r) => roleOf(r as never, company).id === agent);
     const body = agentView(
       {
         id: agent,

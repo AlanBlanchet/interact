@@ -34,21 +34,46 @@
  *  lies north or west of that foot; it touches what casts it; and a taller thing throws further
  *  than a shorter one, or height is not being expressed at all.
  *
- *  Plus the one thing the tiles cannot say on their own: a shadow now lands on the tile in FRONT
- *  of its caster, so the paint order became load-bearing. Every shadow in a group must be emitted
- *  before every body in it, or a tree's shade paints over the canopy of whoever stands one tile
- *  downhill — and a copse is trees in touching cells, so that is most of the wood.
+ *  ── AND THEN A FOURTH AND A FIFTH, both of which THIS FILE COULD NOT SEE ────────────────────
  *
- *  Prints one line per tile and exits non-zero on any violation, so it can be run by hand or by
- *  the suite, exactly like `dev/placement.ts`:
+ *  The three above are properties of one tile's ART, and a per-tile check is the right instrument
+ *  for them. The next two are properties of the DOCUMENT, and a per-tile check is structurally
+ *  blind to both — which is exactly the gap a fourth report was going to arrive in.
+ *
+ *    4. INDOOR PROPS SHOWED NO SHADOW AT ALL. Not detached: absent, on a pixel scan of the floor
+ *       under a potted tree — and a small conifer on a flat grey floor with no shade is the most
+ *       literal floating in the whole picture. The art was right and the DOM was right; the INK
+ *       was `--wp-ink` at 44%, and `--wp-ink` is the same near-black an unlit room's floor already
+ *       is. Measured: floor 0.079 luminance, its shadow 0.074. A shadow painted in the colour of
+ *       the thing it falls on cannot be seen, and no invariant over a grid of "#" can tell.
+ *       Two ways in for a probe that never opens a pixel: every standing prop must OWN a drop in
+ *       the rendered document (a whole class silently casting nothing shows up as a count), and
+ *       the ink must be OPAQUE with the strength carried as a ratio on the layer.
+ *    5. THE SHADE LAYER PAINTED OVER EVERY BODY ON THE MAP. Shadows were emitted before bodies
+ *       WITHIN each room's group — correct locally, useless globally, because the document then
+ *       read `roomA casts, roomA bodies, roomB casts, …, grounds casts, grounds bodies` and the
+ *       grounds hold 243 of them and come last. A bush one tile north of a conifer smeared a band
+ *       across its canopy. That is a z-order bug, not a tree bug: any prop set denser than this
+ *       forest reproduces it. So the check is on the whole map, not inside one group.
+ *
+ *  And one measurement rather than a rule, because "reads as a bar" is not a boolean: the longest
+ *  UNBROKEN run of shade anywhere on the site. A copse used to lay 32 cells of it end to end (the
+ *  55px slab an independent critic measured under two trunks); solid-is-contact-and-thrown-is-
+ *  dapple takes it to 15, and nothing on the site now runs longer than two tiles.
+ *
+ *  Prints one line per tile plus the document checks, and exits non-zero on any violation, so it
+ *  can be run by hand or by the suite, exactly like `dev/placement.ts`:
  *
  *      node out-shadows.js
  */
-import { FLAT } from "../scene";
+import { FLAT, worldFor } from "../scene";
 import { renderWorkplace } from "../index";
+import { STYLE } from "../style";
 import { footRow, project, shadowReach } from "../light";
 import { TILES, TILE_CELLS } from "../tiles";
 import type { TileId } from "../tiles";
+import { WALL_FIXTURES } from "../world";
+import type { Prop, Room } from "../world";
 import { fixture } from "./fixture";
 
 interface Box {
@@ -105,6 +130,28 @@ function touches(art: readonly string[], cast: readonly string[]): boolean {
 function column(h: number): string[] {
   return Array.from({ length: TILE_CELLS }, (_, r) => (r >= TILE_CELLS - h ? "...#...." : "........"));
 }
+
+/** How many cells of unbroken shade stop reading as several things' shade and start reading as one
+ *  bar. Two tiles: a tree's own throw is a little over one, so anything past two is two casters
+ *  fused. The measured slab was four. */
+const SLAB = TILE_CELLS * 2;
+
+/** The whole of one element, balanced — the map nests the pattern svgs and the shade layers nest
+ *  nothing, but a bare indexOf of the closing tag lands inside the first nested one either way. */
+function balanced(doc: string, start: number, open: RegExp, close: string): string {
+  const re = new RegExp(`${open.source}|${close}`, "g");
+  re.lastIndex = start;
+  let depth = 0;
+  for (let m = re.exec(doc); m; m = re.exec(doc)) {
+    depth += m[0] === close ? -1 : 1;
+    if (depth === 0) return doc.slice(start, m.index + close.length);
+  }
+  throw new Error(`unbalanced ${close} from ${start}`);
+}
+
+const svgAt = (doc: string, at: number): string => balanced(doc, at, /<svg\b/, "</svg>");
+const svgGroupAt = (doc: string, at: number): string => balanced(doc, at, /<g\b/, "</g>");
+const count = (s: string, re: RegExp): number => [...s.matchAll(re)].length;
 
 function main(): void {
   const faults: string[] = [];
@@ -167,24 +214,130 @@ function main(): void {
       `${TILE_CELLS} cells -> ${tallCast.b - (TILE_CELLS - 1)} south / ${tallCast.r - 3} east.`,
   );
 
-  /* ── AND THE PAINT ORDER ───────────────────────────────────────────────────────────────────
-     A shadow lands on the tile in FRONT of its caster now, so an interleaved `cast, body, cast,
-     body` emission paints a tree's shade straight over its neighbour's canopy. Checked on the
-     real document rather than on the function that writes it: inside the group that holds the
-     grounds, every shadow must come before every body. */
   const doc = renderWorkplace(fixture(), "devnonce123");
-  const loose = doc.slice(doc.indexOf('<g class="wp-loose">'));
-  const uses = [...loose.slice(0, loose.indexOf("</g>")).matchAll(/<use\b[^>]*>/g)].map((m) => m[0]);
-  const lastDrop = uses.map((u) => u.includes("wp-drop")).lastIndexOf(true);
-  const firstBody = uses.findIndex((u) => !u.includes("wp-drop"));
-  if (lastDrop >= 0 && firstBody >= 0 && lastDrop > firstBody) {
-    faults.push(
-      `the grounds interleave shadows with bodies: body #${firstBody} is emitted before shadow #${lastDrop} ` +
-        `of ${uses.length} — a shadow will paint over the prop in front of it`,
+  const map = svgAt(doc, doc.indexOf('<svg class="wp-map"'));
+  const world = worldFor(fixture().workers as never);
+  const rooms: Room[] = [...world.rooms];
+  const flag = (why: string): void => { faults.push(why); };
+
+  /* ── 1. THE PAINT ORDER, ACROSS THE WHOLE MAP ──────────────────────────────────────────────
+     A shadow lands on the tile in FRONT of its caster, so shade has to be UNDER everything that
+     stands up — not merely under the bodies of the same room. The old check read one group and
+     passed while 243 grounds shadows painted over the entire building, because "before every body
+     in this group" is true of a group that is itself painted last. So: every drop in the document
+     lives in a shade layer, and every shade layer closes before the first thing that stands up. */
+  const firstStanding = map.indexOf('<g class="wp-rm wp-bu');
+  const drops = [...map.matchAll(/<use class="wp-drop"[^>]*>/g)];
+  const strays = drops.filter((m) => (m.index ?? 0) > firstStanding);
+  if (strays.length) {
+    flag(
+      `${strays.length} of ${drops.length} shadows are emitted AFTER the first prop body on the map — ` +
+        `they will paint over whatever is standing in front of them`,
     );
   }
+  const layers = [...map.matchAll(/<g class="wp-shadow ([^"]*)">/g)];
+  const inLayers = layers.reduce((n, m) => n + count(svgGroupAt(map, m.index ?? 0), /<use class="wp-drop"/g), 0);
+  if (inLayers !== drops.length) {
+    flag(`${drops.length - inLayers} shadows are outside the shade layers — those cannot union or be dimmed as one`);
+  }
   console.log(
-    `paint order: ${uses.length} nodes in the grounds, ${lastDrop + 1} shadows, all before the first body.`,
+    `\npaint order: ${drops.length} shadows in ${layers.length} layers ` +
+      `(${layers.map((m) => m[1]).join(", ")}), all before the first body at ${firstStanding}.`,
+  );
+
+  /* ── 2. THE STRENGTH IS A RATIO ON THE LAYER, NOT AN ALPHA ON THE INK ──────────────────────
+     Both of the round-four defects live here. A translucent ink cannot be seen on a floor its own
+     colour (the potted trees, in every unlit room), and translucent inks STACK, which is what a
+     copse's overlaps were doing before the layer existed. Opaque children under a group opacity
+     fixes both at once and neither can regress silently: the ink must have no alpha, and each
+     layer must carry one. */
+  for (const m of STYLE.matchAll(/--wp-drop:\s*([^;]+);/g)) {
+    const ink = m[1].trim();
+    if (/transparent|rgba|hsla|\/\s*[\d.]+/.test(ink)) {
+      flag(`--wp-drop is translucent (${ink}) — a per-element alpha stacks where two shadows cross, and vanishes on a floor its own colour`);
+    }
+  }
+  const strengths = [...STYLE.matchAll(/\.wp-shadow\.(is-in|is-out)\s*\{[^}]*opacity:\s*([\d.]+)/g)];
+  for (const m of layers) {
+    const cls = m[1].trim();
+    if (!strengths.some((s) => s[1] === cls)) flag(`the ${cls} shade layer has no opacity — its shadows will paint at full ink`);
+  }
+  console.log(`strength: ${strengths.map((s) => "." + s[1] + " " + s[2]).join(", ")} of the surface's own light, ink opaque.`);
+
+  /* ── 3. EVERY STANDING PROP CASTS, INDOORS AS WELL AS OUT ──────────────────────────────────
+     The defect this replaces was invisible to a per-tile check because the tiles were fine: the
+     renderer simply never showed what they drew. Counted from the built world rather than from
+     the list of things that ought to cast, and reported PER ROOM, so a whole interior quietly
+     casting nothing is one line rather than a number nobody can place.
+     A prop that does not cast has to be one of exactly two DECISIONS — it lies on the ground, or
+     it hangs on a wall — never an omission. */
+  const groups: { name: string; props: readonly Prop[] }[] = [
+    ...rooms.map((r) => ({ name: (r.outdoor ? "yard " : "") + (r.id || "lobby"), props: r.props })),
+    { name: "hall", props: world.hallProps },
+    { name: "grounds", props: world.scenery },
+  ];
+  let expected = 0;
+  console.log("\nwhere                 props  cast  flat (ground / hung)");
+  for (const g of groups) {
+    const castable = g.props.filter((p) => !FLAT.has(p.tile));
+    const hung = g.props.filter((p) => WALL_FIXTURES.has(p.tile));
+    const ground = g.props.length - castable.length - hung.length;
+    expected += castable.length;
+    if (g.props.length && !castable.length) {
+      flag(`${g.name} has ${g.props.length} props and casts nothing at all — an interior with no shade is furniture on a printed floor`);
+    }
+    console.log(
+      `${g.name.padEnd(20)} ${String(g.props.length).padStart(5)} ${String(castable.length).padStart(5)} ` +
+        `${String(ground).padStart(6)} / ${hung.length}`,
+    );
+  }
+  if (expected !== drops.length) {
+    flag(`the world has ${expected} standing props but the document draws ${drops.length} shadows`);
+  }
+
+  /* ── 4. AND NO SLAB ────────────────────────────────────────────────────────────────────────
+     Not a rule but a measurement, because "reads as one bar rather than per-tree shade" is not a
+     boolean. Every cast rasterised into the world's own cells: how deep the deepest overlap is
+     (the union makes the DRAWN answer 1 whatever this says, but a rising number means the layout
+     is crowding), and the longest unbroken horizontal run of shade anywhere. A row of trees used
+     to butt their solid contact bands end to end for 32 cells — four tiles of continuous ink, and
+     the 55px bar a critic measured under two trunks. Solid-is-contact / thrown-is-dapple is what
+     holds this down, and it is the number that says so. */
+  const C = TILE_CELLS;
+  const cover = new Int16Array(world.cols * C * world.rows * C);
+  const W = world.cols * C;
+  for (const g of groups) {
+    for (const p of g.props) {
+      if (FLAT.has(p.tile)) continue;
+      const grid = project(TILES[p.tile].grid, !!TILES[p.tile].leafy);
+      grid.forEach((row, y) => {
+        for (let x = 0; x < row.length; x++) {
+          if (row[x] !== "#") continue;
+          const X = p.x * C + x;
+          const Y = p.y * C + y;
+          if (X >= 0 && X < W && Y >= 0 && Y < world.rows * C) cover[Y * W + X]++;
+        }
+      });
+    }
+  }
+  let longest = 0;
+  let deepest = 0;
+  let where = "";
+  for (let y = 0; y < world.rows * C; y++) {
+    let run = 0;
+    for (let x = 0; x <= W; x++) {
+      const v = x < W ? cover[y * W + x] : 0;
+      if (!v) { run = 0; continue; }
+      if (v > deepest) deepest = v;
+      if (++run > longest) { longest = run; where = `row ${y} (tile y ${Math.floor(y / C)})`; }
+    }
+  }
+  if (longest > SLAB) {
+    flag(`${longest} cells of unbroken shade at ${where} — over ${SLAB} it stops reading as several things' shade and becomes one bar`);
+  }
+  console.log(
+    `\nno slab: longest unbroken run ${longest} cells (${(longest / C).toFixed(1)} tiles, limit ${SLAB}); ` +
+      `deepest geometric overlap ${deepest}, drawn as ${deepest ? 1 : 0} by the layer's own union.`,
   );
 
   const cast = shadowReach(TILE_CELLS);
@@ -194,7 +347,7 @@ function main(): void {
     for (const f of faults) console.log("  " + f);
     process.exit(1);
   }
-  console.log("Every shadow starts one cell below its own foot and is thrown away from the light.");
+  console.log("Every shadow starts one cell below its own foot, is thrown away from the light, and lies under everything standing.");
 }
 
 main();

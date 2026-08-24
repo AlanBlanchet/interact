@@ -315,12 +315,22 @@ export function project(grid: readonly string[], leafy = false): string[] {
     for (let c = 0; c < row.length; c++) {
       if (row[c] === "." || row[c] === " ") continue;
       const x = c + dx;
-      /* DAPPLE, past the contact. The two cells nearest the foot stay solid — that is the part
-         that says the thing is standing ON something — and everything the canopy throws beyond
-         them is a checkerboard, which is what leaf shade looks like and, more to the point, what
-         stops two neighbouring trees' shadows from merging into one continuous bar. In a scene
-         made of hard pixels a dither IS the soft edge; a blur would not be. */
-      if (leafy && dx > FOOT_X + 1 && (x + y) % 2 === 1) continue;
+      /* SOLID IS CONTACT; THROWN IS DAPPLE.
+         The old rule kept everything within two cells of the foot solid, which sounds like the
+         same thing and is not: a tree's widest rows are down there, so each one laid a six-cell
+         solid bar, and trees in touching cells laid theirs END TO END. Measured across the whole
+         site that came out as 32 cells of continuous ink — four tiles — which is the 55px bar an
+         independent critic measured under two trunks, reading as one dark stripe rather than as
+         two trees' shade. It is the fourth thing on this view that reads as floating.
+         So the solid part is now only what actually TOUCHES the ground: the art's own base row,
+         at its own width. Everything above the base is thrown, and thrown shade is a
+         checkerboard. The tile pitch is even, so two neighbours' checkerboards land in the same
+         phase and union instead of filling in — a wood shades at ONE density however many trees
+         are in it, and each trunk keeps a small hard patch at its foot saying it is standing on
+         something. In a scene made of hard pixels a dither IS the soft edge; a blur would not be.
+         Longest unbroken run over the built site: 32 cells before, 15 after. `dev/shadows.ts`
+         measures it, because "reads as a bar" is a length and not a boolean. */
+      if (leafy && high > 0 && (x + y) % 2 === 1) continue;
       out[y][x] = "#";
     }
   }

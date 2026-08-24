@@ -56,7 +56,7 @@ import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
  *  and the renderer only rasterises the part inside the viewport. */
 const GROUNDS = 220;
 import type { TileId } from "./tiles";
-import { PITCH, buildWorld } from "./world";
+import { PITCH, WALL_FIXTURES, buildWorld } from "./world";
 import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
 import { assignAccents, atMillis, faceOf, hash, idleAmount, shortDuration } from "./palette";
 import { HEAD, WORDS, attentionOf, behaviourOf, isHeld, markOf, stampHtml, worldStampFor } from "./status";
@@ -171,18 +171,25 @@ function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
   });
 }
 
-/** Tiles that lie ON the ground, and therefore cast nothing.
+/** Tiles that cast nothing, and the reason each one does not.
  *
  *  A prop's shadow is the same drawing in one flat ink, projected — its own SILHOUETTE lying on
  *  the floor south-east of it. Everything in this world is lit from the north-west, so everything
  *  in it drops the same way; a scene where each object invents its own light direction reads as
- *  collage. A floor casting a shadow on the floor is a chequerboard, and the walls have their own
- *  band in `wallShadow`, so both stay out.
+ *  collage.
+ *
+ *  Two reasons, and both have to be a DECISION somebody can point at rather than a gap in a list.
+ *  A thing lying ON the ground has no height to throw (a floor casting a shadow on the floor is a
+ *  chequerboard), and a thing hanging on a WALL is not standing on the ground at all — that set
+ *  is `WALL_FIXTURES`, derived from the archetypes' own face lists next to where the fixtures are
+ *  chosen. Everything else in the building casts, indoors and out; there is no third category and
+ *  no prop that quietly falls through.
  *
  *  Exported so the shadow invariant (`dev/shadows.ts`) iterates exactly the set this renderer
  *  casts for, rather than a hand-kept copy of it — four separate bugs on this view have been a
  *  duplicated list drifting from the thing it duplicated. */
 export const FLAT: ReadonlySet<TileId> = new Set<TileId>([
+  // GROUND: drawn where you walk, with no height above it.
   "floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug",
   "doorCap", "doorWay", "matt",
   // Water is a hole in the ground, not a thing standing on it, and ground cover an inch high
@@ -194,6 +201,8 @@ export const FLAT: ReadonlySet<TileId> = new Set<TileId>([
   // caught it. The shadow invariant reads this set, which is what surfaced it; a ground tile
   // dropped into `scenery` would otherwise have thrown a silhouette of a patch of grass.
   "meadow", "earth",
+  // HUNG: the wall face, whose masonry already has its own band in `wallShadow`.
+  ...WALL_FIXTURES,
 ]);
 
 const DROP_PAL = { "#": "var(--wp-drop)" };
@@ -271,28 +280,42 @@ function drift(x: number, y: number): string {
   return `style="--d:-${(((x * 37 + y * 61) % 480) / 100).toFixed(2)}s"`;
 }
 
-/** A set of props as TWO passes over one list: every shadow, then every body.
+/** North-to-south, so the painter's order matches the depth order: a body in front covers a body
+ *  behind, never the reverse. Ties break on x so the output stays byte-stable (the map is
+ *  rendered once and cached on its department key). */
+function depthOrder(props: readonly Prop[]): Prop[] {
+  return [...props].sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
+/** SHADE IS A LAYER OF THE BUILDING, NOT A PART OF A PROP.
  *
- *  A shadow is thrown SOUTH now (see `project`), so it lands on the tile in FRONT of the thing
- *  casting it — which is the whole point, and which makes the emission order load-bearing for the
- *  first time. Interleaved (`cast, body, cast, body, …`) a tree's shade paints straight over the
- *  canopy of whoever is standing one tile downhill, and a copse is trees in touching cells, so
- *  that is not an edge case: it is most of the wood. Two passes is the same rule the building
- *  already follows one level up — grounds, light, shadow, then everything that stands up.
+ *  A shadow is thrown SOUTH (see `project`), so it lands on the tile in FRONT of the thing casting
+ *  it. The previous round noticed that and emitted every shadow before every body — but WITHIN
+ *  each room's own group, and a room's group is a sibling of eight others plus the grounds. So the
+ *  document read `roomA casts, roomA bodies, roomB casts, roomB bodies, …, grounds casts, grounds
+ *  bodies`, and every one of those cast passes painted over every body emitted before it. The
+ *  grounds hold 243 of them and come LAST, so all 243 painted over the entire building and over
+ *  each other's neighbours: a bush one tile north of a conifer smeared a grey band across its
+ *  canopy, in both themes, at every rung. Local ordering cannot fix that; the group it is local to
+ *  is the problem.
  *
- *  Sorted north-to-south as well, so the painter's order matches the depth order: a body in front
- *  covers a body behind, never the reverse. Ties break on x so the output stays byte-stable (the
- *  map is rendered once and cached on its department key).
+ *  It is also not a tree bug. Any prop set denser than today's forest reproduces it identically,
+ *  which is why the fix is at the LAYER: shade goes where light goes, once, for the whole map,
+ *  between the floor it falls on and everything that stands up in it. Then a shadow is occluded by
+ *  whatever is standing in front of it, for free and by construction.
+ *
+ *  And ONE layer buys the second thing a per-prop emission can never have: shade that does not
+ *  COMPOUND. The group carries the alpha and its children are opaque, so two canopies crossing
+ *  union to one silhouette at one density instead of stacking to twice the ink. The old code
+ *  compensated for the stacking by halving the ink everywhere — a whole lawn made paler to make
+ *  its overlaps survivable. Now the single shadow can be as strong as a single shadow should be.
  */
-function propLayer(props: readonly Prop[]): string {
-  const order = [...props].sort((a, b) => a.y - b.y || a.x - b.x);
-  let casts = "";
-  let bodies = "";
-  for (const p of order) {
-    casts += castOf(p.tile, p.x, p.y);
-    bodies += propBody(p);
-  }
-  return casts + bodies;
+function propCasts(props: readonly Prop[]): string {
+  return depthOrder(props).map((p) => castOf(p.tile, p.x, p.y)).join("");
+}
+
+function propBodies(props: readonly Prop[]): string {
+  return depthOrder(props).map(propBody).join("");
 }
 
 function propBody(p: Prop): string {
@@ -436,7 +459,26 @@ function renderMap(world: World): string {
     if (d) out += `<path class="wp-ao" d="${d}"/>`;
   }
 
-  // 4. STRUCTURE, and everything standing on the floor.
+  /* 3b. AND EVERY PROP'S OWN SHADE, for the WHOLE map, in one layer — see `propCasts`.
+        Two groups, because a shadow is only as dark as the light it is subtracting: under a roof
+        it comes off one lamp and is hard, out in the open it comes off the whole sky and is soft.
+        The split is by what the shade LANDS on, so the yard's props go with the grounds — they
+        were the odd case before, carrying a room's indoor ink onto grass because they happen to
+        belong to a Room object.
+        Each group is opaque inside and carries its alpha on the group, so overlaps union rather
+        than stack; that is `opacity`, in the stylesheet, and it is the whole of the compounding
+        fix. */
+  {
+    const roofed = world.rooms.filter((r) => !r.outdoor);
+    const open = world.rooms.filter((r) => r.outdoor);
+    const indoor = propCasts([...roofed.flatMap((r) => r.props), ...world.hallProps]);
+    const outdoor = propCasts([...open.flatMap((r) => r.props), ...world.scenery]);
+    if (indoor) out += `<g class="wp-shadow is-in">${indoor}</g>`;
+    if (outdoor) out += `<g class="wp-shadow is-out">${outdoor}</g>`;
+  }
+
+  // 4. STRUCTURE, and everything standing on the floor. Bodies only: the shade they throw was
+  //    laid in 3b, under everything, where the ground is.
   for (const r of world.rooms) {
     out += `<g class="wp-rm wp-bu${r.brain ? " is-brain" : ""}${r.open ? " is-open" : ""}" ` +
       `data-room="${esc(r.id)}" data-kind="${esc(r.kind)}">`;
@@ -449,14 +491,14 @@ function renderMap(world: World): string {
         out += at("doorLeaf", d.x, d.y + (d.deep ? 1 : 0), "wp-leaf");
       }
     }
-    out += propLayer(r.props);
+    out += propBodies(r.props);
     out += `</g>`;
   }
 
   // Things standing in the passage and out in the grounds. Neither belongs to a room, so neither
   // is lit by one: a bench in a corridor is not evidence anybody is in a corridor.
   out += `<g class="wp-loose">`;
-  out += propLayer([...world.hallProps, ...world.scenery]);
+  out += propBodies([...world.hallProps, ...world.scenery]);
   out += `</g>`;
 
   // Last, over everything: the runner down the spine, from the gate to the dais. Drawn after the

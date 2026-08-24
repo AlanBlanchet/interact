@@ -312,6 +312,31 @@ const COMMONS: Archetype = {
   feature: "coffee",
 };
 
+/** EVERYTHING THAT HANGS ON A WALL, and therefore stands on nothing.
+ *
+ *  A poster, a window, a clock, a pinboard and a wall lamp are placed on the FACE row — the
+ *  masonry, not the floor — and every one of them is drawn as a full eight-by-eight solid tile.
+ *  Cast like a standing thing, each threw a full-width slab of shade onto the floor in front of
+ *  it, on top of the band `wallShadow` already lays there for the wall itself. Twice-darkened
+ *  masonry with a hard edge a tile out from the wall is not a shadow of anything; it is the same
+ *  "a shape of ink where the ground is" defect as a floating tree, arriving from the other side.
+ *  A wall lamp is worse than wrong — it is the light SOURCE, throwing its own shadow.
+ *
+ *  So they are DELIBERATELY FLAT, and this is where that decision is written down rather than
+ *  being an omission somebody has to infer. In a north-west light a poster's own shade falls on
+ *  the wall it is screwed to, a lip perhaps one cell wide; at three device pixels a cell that is
+ *  not a shadow, it is a smudge.
+ *
+ *  DERIVED from the archetypes rather than hand-listed, because a hand-kept copy of a list is how
+ *  four earlier bugs on this view happened: add a fixture to any room's `face` and it is flat the
+ *  same minute, with nobody having to remember this set exists. */
+export const WALL_FIXTURES: ReadonlySet<TileId> = new Set<TileId>([
+  ...Object.values(ARCHETYPES).flatMap((a) => a.face),
+  ...COMMONS.face,
+  // Always hung, never listed in an archetype: every room gets one lamp on its face.
+  "lamp",
+]);
+
 /** The plants and screens the stylesheet is asked to animate. Kept here so a prop cannot acquire
  *  ambient motion by accident: a tile is alive because the plan said so. */
 const LIVE_OF: Partial<Record<TileId, LiveId>> = {

@@ -8,6 +8,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { agentView, type AgentIdentity } from "./agentPanel.ts";
+import { roleOf } from "./roster.ts";
 
 const who: AgentIdentity = {
   id: "researcher", title: "Researcher", department: "research",
@@ -91,4 +92,23 @@ test("every chip carries the agent it acts on", () => {
     assert.match(chip, /data-action="/, `a chip with no action: ${chip}`);
     assert.match(chip, /data-agent="researcher"/, `a chip that does not say who it acts on: ${chip}`);
   }
+});
+
+test("an agent's tasks are found by resolved identity, not by a raw field", () => {
+  /* The blocking defect: clicking the coordinator showed "No tasks yet" while five of its errands
+     were visibly failing in the same room. A definition-less run's `agent` is null — its id
+     ("main") exists only through roleOf's fallback — so filtering on the literal field found
+     nothing for exactly the case the change was written for. Pinned as a rule about WHICH runs
+     belong to an agent, since the renderer takes them already filtered. */
+  const bare = [
+    { run_id: "c1", provider: "claude", name: "claude", agent: null, task: "one", status: "failed" },
+    { run_id: "c2", provider: "claude", name: "claude", agent: null, task: "two", status: "done" },
+  ];
+  const company = { coordinator: { id: "main", title: "Main thread" }, binaries: ["claude"] };
+  const mine = bare.filter((r) => roleOf(r as never, company).id === "main");
+  assert.equal(mine.length, 2, "the coordinator's own errands must resolve to it");
+
+  const html = agentView({ id: "main", title: "Main thread" }, mine as never[], "N");
+  assert.ok(html.includes("one") && html.includes("two"));
+  assert.ok(!/no tasks/i.test(html), "it has tasks; saying otherwise is the defect");
 });

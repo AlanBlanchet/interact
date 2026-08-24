@@ -143,12 +143,23 @@ body {
   --l-edge: color-mix(in srgb, var(--wp-ink) 30%, transparent);
   --l-unlit: color-mix(in srgb, var(--wp-ink) 58%, transparent);
   --l-ao: color-mix(in srgb, var(--wp-ink) 50%, transparent);
-  /* A CAST SHADOW IS PRICED BY ITS AREA, and the area just tripled. project() now throws south,
-     onto the open floor IN FRONT of a prop, where before most of it landed behind the silhouette
-     that cast it and was never seen. Same alpha, three times the coverage: measured 57.8% of the
-     floor's luminance gone under every desk, which is a hole in the floor rather than a shadow on
-     it. Re-derived on the rendered room, not on paper. */
-  --wp-drop: color-mix(in srgb, var(--wp-ink) 44%, transparent);
+  /* A SHADOW IS A FRACTION OF THE LIGHT ON THE SURFACE IT LANDS ON, NEVER A FIXED INK.
+     This was '--wp-ink' at 44%, and '--wp-ink' is #14101c — the same near-black as an UNLIT room's
+     floor. Measured under a potted tree in a dark room: floor 0.079 luminance, its shade 0.074.
+     Five thousandths. A shadow painted in the floor's own colour is invisible by construction, and
+     that is why the indoor plants read as standing on nothing while the same code outdoors read
+     fine: grass is at 0.28, so there was a gap for the ink to eat into.
+     So the ink goes to near-black and the STRENGTH moves to '.wp-shadow''s opacity, where it is a
+     RATIO. Black at alpha a leaves a surface at (1 - a) of whatever it was: the same visible
+     fraction on a dark room floor, on a lit pool, on a lawn — which is what shade does. The
+     residual hue is the theme's, kept because shade in the dark theme is cool, not grey. */
+  --wp-drop: #05040d;
+  /* A BODY'S CONTACT PATCH IS THE SAME PHYSICAL THING AS A PROP'S, so it takes the same ratio.
+     It cannot take it the same WAY: the patch is a CSS box under the sprite, not a node in the
+     map's shade layer, so its alpha has to be spelled on the colour rather than on a group. Same
+     number as '.wp-shadow.is-in' — a person and a plant standing on one floor casting two
+     different densities is exactly the collage this layer exists to avoid. */
+  --wp-foot: color-mix(in srgb, var(--wp-drop) 30%, transparent);
 
   --stamp-ink: var(--wp-fg);
   --stamp-quiet: var(--wp-dim);
@@ -221,9 +232,10 @@ body.vscode-high-contrast-light .wp {
   --l-edge: color-mix(in srgb, #2b3348 15%, transparent);
   --l-unlit: color-mix(in srgb, #2b3348 30%, transparent);
   --l-ao: color-mix(in srgb, #232a3d 30%, transparent);
-  /* Same re-pricing as the dark theme, and re-derived here rather than scaled from it — the same
-     alpha buys about four times the ink on a light substrate. */
-  --wp-drop: color-mix(in srgb, #232a3d 25%, transparent);
+  /* Near-black with the theme's own cool bias, for the same reason as the dark theme: the ink
+     stops carrying the strength so that the strength can be a ratio of the surface. */
+  --wp-drop: #060a14;
+  --wp-foot: color-mix(in srgb, var(--wp-drop) 24%, transparent);
 }
 
 /* ── the window ────────────────────────────────────────────────────────────────────────────
@@ -614,17 +626,32 @@ body.vscode-high-contrast-light .wp {
    shadow wearing it appears earlier in the document, so querySelector('.wp-cast') found a desk's
    shadow instead of the cast. */
 .wp-drop { pointer-events: none; }
-/* OUTDOORS IS NOT A ROOM. The same ink that reads as a hard contact shadow on an interior floor
-   is a black bar on a lawn — and the projection made every shadow bigger, so the alpha that was
-   tuned for a translated copy is now three times the coverage. Halved for everything standing in
-   the grounds and the passage, which is where the light comes from a sky rather than a lamp. */
-/* Lighter than a single shadow strictly needs to be, because outdoors they OVERLAP: two dappled
-   canopy shadows crossing compose to roughly double the ink, and at 30% that lands back on the
-   flat slab the dappling exists to prevent — visible in the dark theme, where the substrate has
-   less room underneath it to absorb the second layer. */
-.wp-loose { --wp-drop: color-mix(in srgb, var(--wp-ink) 18%, transparent); }
-body.vscode-light .wp .wp-loose,
-body.vscode-high-contrast-light .wp .wp-loose { --wp-drop: color-mix(in srgb, #232a3d 15%, transparent); }
+
+/* ALL OF IT, IN ONE LAYER, AND THE ALPHA ON THE GROUP.
+   Two things follow from that and neither is available to a shadow drawn per prop.
+
+   It is UNDER everything that stands up. Shade used to be emitted inside each room's own group,
+   which meant the document read 'roomA casts, roomA bodies, roomB casts, …, grounds casts, grounds
+   bodies' — so the grounds' 243 shadows, being last, painted over every prop in the building and
+   over each other's neighbours. One group between the floor and the furniture and a shadow is
+   occluded by whatever is standing in front of it, for nothing.
+
+   And overlaps UNION instead of stacking. The children are opaque and the group carries the alpha,
+   so a rasteriser composites the silhouettes together first and dims the union ONCE: two canopies
+   crossing are exactly as dark as one canopy, which is how the copse stops fusing into a slab. The
+   old code paid for the stacking by making every shadow on the site paler — a whole lawn dimmed to
+   make its overlaps survivable — so a single shadow can now be as dark as a single shadow wants.
+
+   The numbers are RATIOS of the surface's own luminance (the ink is near-black), measured on the
+   rendered map rather than chosen: indoors a lamp throws a hard shadow, outdoors the sky fills it
+   in. 'isolation' so the group composites against the map and not the panel behind it. */
+.wp-shadow { isolation: isolate; pointer-events: none; }
+.wp-shadow.is-in { opacity: .30; }
+.wp-shadow.is-out { opacity: .20; }
+body.vscode-light .wp .wp-shadow.is-in,
+body.vscode-high-contrast-light .wp .wp-shadow.is-in { opacity: .24; }
+body.vscode-light .wp .wp-shadow.is-out,
+body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .17; }
 
 /* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
    every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */
@@ -808,7 +835,7 @@ body.vscode-high-contrast-light .wp .wp-loose { --wp-drop: color-mix(in srgb, #2
   bottom: -5px;
   width: 32px;
   height: 8px;
-  background: var(--wp-drop);
+  background: var(--wp-foot);
   /* A cast shadow is a drawing, never a target. It is 32px wide against a 36px body and it sits
      down and to the RIGHT of the person it belongs to, so it overhangs the neighbour's tool
      glyphs — and it was catching their clicks: a pointer at a glyph's own centre resolved to the
