@@ -40,7 +40,8 @@
   "contributes": {
     "mcpServerDefinitionProviders": [
       {
-        "id": "interact"
+        "id": "interact",
+        "label": "Interact"
       }
     ],
     "configuration": {
