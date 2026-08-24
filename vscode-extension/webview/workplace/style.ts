@@ -159,7 +159,7 @@ body {
      map's shade layer, so its alpha has to be spelled on the colour rather than on a group. Same
      number as '.wp-shadow.is-in' — a person and a plant standing on one floor casting two
      different densities is exactly the collage this layer exists to avoid. */
-  --wp-foot: color-mix(in srgb, var(--wp-drop) 30%, transparent);
+  --wp-foot: color-mix(in srgb, var(--wp-drop) 36%, transparent);
 
   --stamp-ink: var(--wp-fg);
   --stamp-quiet: var(--wp-dim);
@@ -235,7 +235,7 @@ body.vscode-high-contrast-light .wp {
   /* Near-black with the theme's own cool bias, for the same reason as the dark theme: the ink
      stops carrying the strength so that the strength can be a ratio of the surface. */
   --wp-drop: #060a14;
-  --wp-foot: color-mix(in srgb, var(--wp-drop) 24%, transparent);
+  --wp-foot: color-mix(in srgb, var(--wp-drop) 28%, transparent);
 }
 
 /* ── the window ────────────────────────────────────────────────────────────────────────────
@@ -644,14 +644,25 @@ body.vscode-high-contrast-light .wp {
 
    The numbers are RATIOS of the surface's own luminance (the ink is near-black), measured on the
    rendered map rather than chosen: indoors a lamp throws a hard shadow, outdoors the sky fills it
-   in. 'isolation' so the group composites against the map and not the panel behind it. */
+   in. 'isolation' so the group composites against the map and not the panel behind it.
+
+   TUNED AT THE ZOOM SOMEBODY ACTUALLY LOOKS AT, which is not the zoom it is easiest to measure at.
+   An independent read of .30 called the interior shade "clear at 3x, marginal at whole floor" — and
+   whole floor is precisely the rung a screenshot of "is anything on fire" gets taken at, where a
+   room's shadow is three cells of an eight-pixel tile. A ratio that reads at arm's length has to be
+   bigger than one that reads with your nose against it. Raised until an unlit room's floor loses a
+   third of its light (0.079 -> 0.050, a shade you can see at a glance) and stopped well short of
+   the 43% that was measured as a HOLE in the floor rather than a shadow on it. */
 .wp-shadow { isolation: isolate; pointer-events: none; }
-.wp-shadow.is-in { opacity: .30; }
+.wp-shadow.is-in { opacity: .36; }
 .wp-shadow.is-out { opacity: .20; }
 body.vscode-light .wp .wp-shadow.is-in,
-body.vscode-high-contrast-light .wp .wp-shadow.is-in { opacity: .24; }
+body.vscode-high-contrast-light .wp .wp-shadow.is-in { opacity: .28; }
+/* The light theme's outdoor shade was the faintest of the four combinations by a clear margin and
+   read as a different decision rather than as the same one under a different sky. Same shade in
+   both themes, give or take what a brighter substrate needs. */
 body.vscode-light .wp .wp-shadow.is-out,
-body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .17; }
+body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
 
 /* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
    every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */
