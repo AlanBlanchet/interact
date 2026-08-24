@@ -209,21 +209,40 @@ export function inkPalette(pal: Readonly<Record<string, string>>): Record<string
 /** How far a standing thing's shadow is thrown, in cells. Matches the wall band's direction. */
 export const CAST = { dx: 2, dy: 2 };
 
-/** THE SHADOW IS PROJECTED ONTO THE GROUND, never translated.
+/** THE SHADOW IS PROJECTED ONTO THE GROUND, IN FRONT OF THE THING THAT CASTS IT.
  *
- *  This is the mechanism behind "floating trees", and it was not only the art. A prop's shadow
- *  was the prop's own grid drawn in one ink and moved two cells down and right — which is a
- *  correct-looking contact patch for something FLAT on the floor and completely wrong for
- *  anything TALL. A tree's canopy lives in the top rows of its tile, so the copy of that canopy
- *  landed two cells below the canopy: a dark shape hanging in the air beside a green one, with
- *  nothing touching the ground anywhere. The eye reads that as two objects floating, and it is
- *  exactly what a translated silhouette must produce for every tall thing in the building.
+ *  Third report of "floating trees", and the two earlier fixes were each half of the answer. The
+ *  first replaced a TRANSLATED copy with a real projection (a copy of a canopy moved two cells
+ *  down is a dark canopy hanging in the air beside a green one). The second stepped the whole
+ *  thing off the object's own foot, so a pine's skirt stopped swallowing its own shade. Both were
+ *  right. Both left the third defect untouched, and it is the one that mattered:
  *
- *  A real cast shadow is the object SEEN FROM THE SUN and laid flat. So each source pixel is
- *  moved by how far it is ABOVE the base: the higher it sits, the further along the ground its
- *  shadow falls, and the whole thing is squashed toward the base row. A pixel standing on the
- *  floor does not move at all, which is what makes the shadow touch what casts it — the single
- *  property the old one could never have.
+ *      THE PROJECTION RAN NORTH — TOWARD THE SUN.
+ *
+ *  `wallShadow` above drops its band SOUTH and EAST of every wall, `CAST` is `+2,+2`, the
+ *  character's contact patch is thrown down and right, and this file's own header says the light
+ *  comes from the north-west. This function disagreed with all four: a pixel `h` cells above the
+ *  base landed `h * SQUASH` cells UP the screen, so the far end of a tree's shadow — the canopy,
+ *  the biggest part — came to rest BEHIND the trunk, hidden by the very silhouette that cast it.
+ *  What escaped was a thin bar level with the trunk, sticking out to the right, and nothing at all
+ *  on the open ground in front. A tree with clear grass under its foot and a dark dash beside its
+ *  waist is a tree standing on nothing. That is what he kept seeing, in both themes, at every
+ *  zoom, on every tall thing in the picture.
+ *
+ *  It was invisible to the two rounds that came before because the compression hid it: at eight
+ *  rows the whole shadow was three cells deep, so it never got far enough north to look wrong on
+ *  its own — it just sat under the object like a stain, and every check asked "does it touch?"
+ *  rather than "which way does it go?".
+ *
+ *  So the model is stated once, positively, and checked mechanically (`dev/shadows.ts`):
+ *
+ *    - the sun is in the NORTH-WEST for everything in this world;
+ *    - a pixel `h` cells above the base is thrown `h * SHEAR` east and `h * SQUASH` SOUTH;
+ *    - the base is the art's OWN lowest pixel, never the tile's bottom row, so a prop drawn short
+ *      of its cell (a chair, a crate, a sofa — sixteen of the fifty-two are) has its shadow at its
+ *      feet instead of a cell and a half below them;
+ *    - one cell down and one cell right of that base before anything else, so a thing that is
+ *      widest at the ground still shows its own shade.
  *
  *  Done to the GRID rather than with a transform, because a CSS skew would resample every hard
  *  edge in a scene whose whole substrate is hard edges.
@@ -233,30 +252,65 @@ export const CAST = { dx: 2, dy: 2 };
    lie, because the same ink now covers three times the area the translated copy did. Shorter,
    and the outdoor group dims its own ink further (a lawn in daylight is not a room). */
 const SHEAR = 0.45;
-const SQUASH = 0.3;
+const SQUASH = 0.34;
 /* AND THE WHOLE SHADOW STEPS OFF THE OBJECT'S OWN FOOT.
    Shear alone moves a pixel by how far it is ABOVE the base, so a pixel standing ON the base does
    not move at all — which is exactly right for the contact point and exactly wrong for anything
    whose widest part is DOWN THERE. A conifer's skirt and a shrub are widest at their feet, so the
    entire projection landed underneath the canopy that cast it and both read, again, as having no
-   ground contact: the same symptom the projection was written to fix, surviving in the half of the
-   wood that is pines. One cell down and one cell right of the base puts the shadow out from under
-   every silhouette regardless of its shape, and it is where a low sun in the north-west puts it. */
+   ground contact. One cell down and one cell right of the base puts the shadow out from under
+   every silhouette regardless of its shape, and it is where a sun in the north-west puts it. */
 const FOOT_X = 1;
 const FOOT_Y = 1;
+
+/** How far a full-height tile's shadow actually reaches, in CELLS, east and south.
+ *
+ *  Exported because the site plans around it: nothing tall may stand where its shade would land
+ *  on the water, and a hand-kept number for that is a hand-kept copy of this projection. The last
+ *  one said five cells EAST while the projection reached four east and none south, and it went on
+ *  saying it after the throw direction changed — a keep-back that is a constant rather than a
+ *  consequence is how a tree ends up laying a slab across the pond again.
+ *
+ *  A tile is `TILE_CELLS` tall, so the worst case is a prop drawn to the top of its cell. Reported
+ *  in TILES, which is what a planner works in, rounded up. */
+export function shadowReach(cells: number): { east: number; south: number } {
+  const high = cells - 1;
+  return {
+    east: Math.ceil((FOOT_X + Math.round(high * SHEAR)) / cells),
+    south: Math.ceil((FOOT_Y + Math.round(high * SQUASH)) / cells),
+  };
+}
+
+/** The art's own lowest pixel: where the thing actually meets the ground.
+ *
+ *  Sixteen of the fifty-two drawn props stop a row or more short of their cell — a chair, a sofa,
+ *  a crate, a printer, the door leaf. Measuring height and contact from `grid.length - 1` puts
+ *  their shadow that far below their feet, which is a gap, which is the whole complaint. Returns
+ *  -1 for a grid with nothing in it. */
+export function footRow(grid: readonly string[]): number {
+  for (let r = grid.length - 1; r >= 0; r--) {
+    const row = grid[r];
+    for (let c = 0; c < row.length; c++) if (row[c] !== "." && row[c] !== " ") return r;
+  }
+  return -1;
+}
 
 export function project(grid: readonly string[], leafy = false): string[] {
   const rows = grid.length;
   if (!rows) return [];
+  const base = footRow(grid);
+  if (base < 0) return [];
   const cols = Math.max(...grid.map((r) => r.length));
-  const reach = Math.round((rows - 1) * SHEAR) + FOOT_X;
-  const tall = rows + FOOT_Y;
+  const reach = Math.round(base * SHEAR) + FOOT_X;
+  const tall = base + FOOT_Y + Math.round(base * SQUASH) + 1;
   const out: string[][] = Array.from({ length: tall }, () => new Array(cols + reach).fill("."));
-  for (let r = 0; r < rows; r++) {
+  for (let r = 0; r <= base; r++) {
     const row = grid[r];
-    const high = rows - 1 - r;
+    const high = base - r;
     const dx = FOOT_X + Math.round(high * SHEAR);
-    const y = rows - 1 - Math.round(high * SQUASH) + FOOT_Y;
+    // SOUTH, away from the light. The far end of a tall thing's shadow is the end nearest the
+    // viewer — that is what makes the ground in front of it read as ground it is standing on.
+    const y = base + FOOT_Y + Math.round(high * SQUASH);
     if (y < 0 || y >= tall) continue;
     for (let c = 0; c < row.length; c++) {
       if (row[c] === "." || row[c] === " ") continue;

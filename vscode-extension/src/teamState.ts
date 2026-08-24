@@ -141,6 +141,10 @@ export function activityOf(step: Step | undefined): string {
   return said ? clip(said) : "waiting";
 }
 
+/** Which state most needs you, worst first. A character with a failed errand and two finished ones
+ *  is not "done" — the eye has to land on the one that needs him. */
+const NEEDS_YOU: readonly string[] = ["error", "running", "done", "foreign"];
+
 const VERBS: Record<string, string> = {
   Read: "reading",
   Edit: "editing",
@@ -289,9 +293,34 @@ export function buildTeam(
   /** The department an agent definition is filed under, resolved by the caller from the company
    *  file. Injected for the same reason as the faculties: this module reads no files. */
   departmentFor: (agent: string) => { id: string; room?: string | null } | null = () => null,
+  /** WHO a run was held with — the role's stable id and what to call it.
+   *
+   *  The world drew one body per RUN, so an agent given three errands stood in the room three
+   *  times and every definition-less session rendered as another identical "claude". An agent is a
+   *  PERSON; the errands are what it was given. Injected for the same reason as the others: this
+   *  module reads no files, and the coordinator resolution lives in `roster.ts`. */
+  identify: (run: RunLike) => { id: string; label: string } =
+    (run) => ({ id: run.agent ?? run.name, label: run.name || run.run_id.slice(0, 8) }),
 ): TeamState {
   const brainId = brainOf(runs);
-  const workers: Worker[] = runs.map((run) => {
+  // One body per AGENT. The errands stay with it as a count and as the run it opens; the roster
+  // and the side panel are where you read them individually.
+  const byAgent = new Map<string, RunLike[]>();
+  for (const run of runs) {
+    const { id } = identify(run);
+    const held = byAgent.get(id);
+    if (held) held.push(run); else byAgent.set(id, [run]);
+  }
+  const workers: Worker[] = [...byAgent.values()].map((held) => {
+    // Two different questions, so two different answers. WHICH errand the character opens is the
+    // orchestrating one where this agent holds it (otherwise the rail and the building would crown
+    // the same agent through different runs); WHAT the character shows is whichever errand most
+    // needs you, because an agent with one failure and two successes is not "done".
+    const byNeed = [...held].sort((a, b) =>
+      NEEDS_YOU.indexOf(floorStatus(a.status)) - NEEDS_YOU.indexOf(floorStatus(b.status))
+      || (b.started_at ?? 0) - (a.started_at ?? 0));
+    const worst = byNeed[0];
+    const run = held.find((r) => r.run_id === brainId) ?? worst;
     const steps = recentSteps(run.run_id);
     const step = latestMeaningful(steps);
     // Idleness is time since the last thing this agent was OBSERVED doing — not time since it
@@ -307,11 +336,13 @@ export function buildTeam(
       : run.finished_at ?? run.started_at ?? now;
     return {
       run_id: run.run_id,
-      name: run.name || run.run_id.slice(0, 8),
+      name: identify(run).label,
+      /** How many errands this agent was given — the roster and the side panel list them. */
+      tasks: held.length,
       agent: run.agent ?? null,
-      status: floorStatus(run.status),
+      status: floorStatus(worst.status),
       faculties: safeFaculties(run, facultiesFor),
-      brain: run.run_id === brainId,
+      brain: held.some((r) => r.run_id === brainId),
       ...placeByDomain(run.agent, departmentFor),
       // The whole window, not one step: a finished worker keeps the room it last worked in.
       zone: zoneOfSteps(steps, run.status, run.agent ?? null),

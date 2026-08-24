@@ -285,12 +285,35 @@ function messageLabel(turn: Turn): string {
 
 /** One turn as HTML. A tool call leads with its NAME and carries its arguments beneath, because
  *  the name alone ("used Bash") is the status line the tree already shows. */
+/** A command and what it returned, as ONE box.
+ *
+ *  "We can't see IN/OUT when an agent uses a command like in claude code in a box." They used to
+ *  render as two unrelated blocks — a wrench and some arguments, then, somewhere below, a separate
+ *  block of output with nothing saying it was the answer to the first, and nothing naming which
+ *  was which.
+ *
+ *  Both halves stay VERBATIM inside `<pre>`: a command is not prose, and tool output is some
+ *  program's bytes, where `# comment` is a shell comment and a pipe-shaped line is not a table.
+ */
+function toolBox(call: Turn, answer: Turn | undefined): string {
+  const name = escapeHtml(call.tool || "tool");
+  const input = (call.tool_input ?? "").trim();
+  const out = (answer?.text ?? "").trim();
+  const io = (tag: string, body: string) =>
+    `<div class="io"><span class="io-tag">${tag}</span>` +
+    `<pre class="io-body">${escapeHtml(body)}</pre></div>`;
+  return `<div class="turn turn-tool"><div class="who">🔧 ${name}</div>` +
+    (input ? io("IN", input) : "") +
+    // No OUT until there IS one: a command still running has no answer, and drawing an empty one
+    // would claim it finished.
+    (out ? io("OUT", out) : "") +
+    `</div>`;
+}
+
 export function renderTurn(turn: Turn): string {
   const cls = turnClass(turn.kind);
   if (turn.kind === "tool") {
-    const name = escapeHtml(turn.tool || "tool");
-    const args = turn.tool_input ? `<pre class="args">${escapeHtml(turn.tool_input)}</pre>` : "";
-    return `<div class="${cls}"><div class="who">🔧 ${name}</div>${args}</div>`;
+    return toolBox(turn, undefined);
   }
   if (NOT_A_TURN.has(turn.kind)) return ""; // run infrastructure, not something the agent said
   const label = turn.kind === "message"
@@ -316,7 +339,22 @@ export function renderTurn(turn: Turn): string {
 /** The whole transcript, oldest first — a conversation reads top to bottom, unlike the tree's
  *  newest-first tail. Empty turns are dropped so system noise doesn't pad it out. */
 export function renderTranscript(turns: Turn[]): string {
-  const html = turns.map(renderTurn).filter(Boolean).join("\n");
+  // A tool result belongs to the call above it, so they are rendered TOGETHER and the result is
+  // not emitted again on its own. An orphan result (a truncated transcript) still renders, because
+  // dropping output nobody can explain is worse than showing it unattached.
+  const parts: string[] = [];
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    if (turn.kind === "tool") {
+      const next = turns[i + 1];
+      const answer = next && next.kind === "tool_result" ? next : undefined;
+      if (answer) i++;
+      parts.push(toolBox(turn, answer));
+      continue;
+    }
+    parts.push(renderTurn(turn));
+  }
+  const html = parts.filter(Boolean).join("\n");
   return html || '<div class="turn turn-other"><div class="body">No activity recorded yet.</div></div>';
 }
 
@@ -673,7 +711,7 @@ const STYLE = `
   /* Nothing in this header may make the document scroll sideways. */
   body { overflow-x: hidden; }
   .back {
-    font: inherit; cursor: pointer; padding: 1px 7px; border-radius: 4px; white-space: nowrap;
+    font: inherit; cursor: pointer; padding: 1px 9px; border-radius: 999px; white-space: nowrap;
     /* A parent conversation is titled by its task, which can be a sentence. Bound it here or the
        header scrolls sideways and the way back leaves the screen. */
     max-width: 11em; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
@@ -714,6 +752,30 @@ const STYLE = `
   .pending::after { content: ""; animation: blink 1.2s steps(1) infinite; }
   @keyframes blink { 50% { opacity: .4 } }
 
+  /* A command and its answer, as one box.
+     "It's too square, corners and integrations" — so this is a soft card rather than a stack of
+     right-angled slabs: one rounded container, the two halves separated by a hairline instead of
+     a border each, and the whole thing tinted just enough to read as machinery rather than speech. */
+  .turn-tool {
+    border: 1px solid var(--vscode-panel-border, transparent);
+    border-radius: 10px; overflow: hidden;
+    background: color-mix(in srgb, var(--vscode-editorWidget-background, transparent) 60%, transparent);
+    margin: 0 0 .8em;
+  }
+  .turn-tool .who { padding: .4em .7em .25em; }
+  .turn-tool .io { display: flex; align-items: flex-start; gap: .55em; padding: .3em .7em .45em; }
+  .turn-tool .io + .io { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
+  .turn-tool .io-tag {
+    flex: 0 0 auto; font-size: 9px; font-weight: 700; letter-spacing: .1em;
+    padding: 2px 6px; border-radius: 999px; margin-top: .15em;
+    color: var(--wp-dim);
+    border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 70%, transparent);
+  }
+  .turn-tool .io-body {
+    flex: 1 1 auto; min-width: 0; margin: 0;
+    font-family: var(--vscode-editor-font-family); font-size: .9em;
+    white-space: pre-wrap; overflow-wrap: break-word; background: none; border: 0; padding: 0;
+  }
   .turn { margin: 0 0 .7em; line-height: 1.45; }
   .turn .who { font-weight: 600; letter-spacing: .1em; font-size: 10px; text-transform: uppercase;
                color: var(--wp-dim); }
@@ -773,10 +835,10 @@ const STYLE = `
     font-weight: 600; color: var(--vscode-editor-foreground);
     background: var(--vscode-editorWidget-background, transparent);
   }
-  .turn .body code { font-family: var(--vscode-editor-font-family); font-size: .92em;
+  .turn .body code { border-radius: 5px; font-family: var(--vscode-editor-font-family); font-size: .92em;
                      background: var(--wp-wall); border: 1px solid var(--wp-line);
                      padding: 0 .25em; }
-  .turn .body pre.code { font-family: var(--vscode-editor-font-family); white-space: pre-wrap;
+  .turn .body pre.code { border-radius: 8px; font-family: var(--vscode-editor-font-family); white-space: pre-wrap;
                          overflow-wrap: break-word; background: var(--wp-wall);
                          border: 1px solid var(--wp-line); padding: .4em .6em; margin: .3em 0; }
   .turn .body strong { font-weight: 700; color: var(--wp-fg); }

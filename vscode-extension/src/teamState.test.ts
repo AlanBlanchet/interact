@@ -524,3 +524,61 @@ test("a resolver that throws leaves the character unplaced, never crashes the bu
   ).workers;
   assert.equal(worker.department, undefined);
 });
+
+test("one character per agent, not one per errand", () => {
+  /* His words: "Interact Team still does not have the correct or all the agents. I can see multiple
+     'claude' agents... They're all duplicates or don't have the correct name."
+
+     The world drew one body per RUN, so an agent asked to do three things stood in the room three
+     times, and the five bare sessions in his registry all rendered as identical "claude" figures.
+     An agent is a PERSON; the errands are what it was given. The roster already made that
+     distinction; the world had not. */
+  const runs = [
+    { run_id: "r1", name: "researcher", agent: "researcher", status: "done", started_at: 10 },
+    { run_id: "r2", name: "researcher", agent: "researcher", status: "running", started_at: 20 },
+    { run_id: "r3", name: "researcher", agent: "researcher", status: "done", started_at: 30 },
+    { run_id: "t1", name: "tester", agent: "tester", status: "done", started_at: 5 },
+  ];
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    (r) => ({ id: (r as { agent?: string | null }).agent ?? "main", label: (r as { agent?: string | null }).agent ?? "main" }));
+  assert.deepEqual(team.workers.map((w) => w.name).sort(), ["researcher", "tester"]);
+  const who = team.workers.find((w) => w.name === "researcher")!;
+  assert.equal(who.tasks, 3, "the character should carry how many errands it was given");
+});
+
+test("bare sessions collapse into the one colleague they actually are", () => {
+  /* Five runs recorded as `claude` with no definition are not five teammates — they are the
+     coordinator, five times. */
+  const runs = [1, 2, 3, 4, 5].map((n) => ({
+    run_id: `c${n}`, name: "claude", agent: null, status: "done", started_at: n,
+  }));
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    () => ({ id: "main", label: "Main thread" }));
+  assert.equal(team.workers.length, 1, "five identical figures is what he is looking at");
+  assert.equal(team.workers[0].name, "Main thread");
+  assert.equal(team.workers[0].tasks, 5);
+});
+
+test("the character shows the state that most needs you", () => {
+  /* An agent with a failed errand and two finished ones is not "done" — the eye must land on the
+     one that needs him. */
+  const runs = [
+    { run_id: "a", name: "x", agent: "x", status: "done", started_at: 1 },
+    { run_id: "b", name: "x", agent: "x", status: "failed", started_at: 2 },
+    { run_id: "c", name: "x", agent: "x", status: "done", started_at: 3 },
+  ];
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    () => ({ id: "x", label: "x" }));
+  assert.equal(team.workers.length, 1);
+  assert.equal(team.workers[0].status, "error");
+});
+
+test("a character opens the agent, so its run_id is one of its own errands", () => {
+  const runs = [
+    { run_id: "a", name: "x", agent: "x", status: "done", started_at: 1 },
+    { run_id: "b", name: "x", agent: "x", status: "running", started_at: 2 },
+  ];
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    () => ({ id: "x", label: "x" }));
+  assert.ok(["a", "b"].includes(team.workers[0].run_id));
+});

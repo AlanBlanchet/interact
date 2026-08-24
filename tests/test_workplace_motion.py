@@ -533,6 +533,39 @@ def test_every_standing_place_has_the_thing_it_belongs_to_behind_it(tmp_path_fac
         "somebody is standing where nothing is:\n" + run.stdout + run.stderr)
 
 
+def test_a_shadow_starts_at_the_foot_and_is_thrown_away_from_the_light(tmp_path_factory):
+    """Alan reported floating trees THREE times.
+
+    The first two rounds fixed real things — grounds furnished from the indoor kit, a shadow that
+    was the prop's grid merely translated rather than projected — and neither was the cause. The
+    third mechanism was the SIGN: `project()` threw the shadow NORTH, toward the light, so a
+    canopy's shade came to rest behind its own trunk and only a bar at the waist escaped. Every
+    earlier check asked "does it touch?" and none asked "which way does it go?".
+
+    It survived two rounds because the symptom compresses: a 3-row glow and an 8-row tree threw the
+    IDENTICAL 3-row shadow. When a table reads the same for every row, the quantity is not being
+    expressed at all.
+
+    So the rule is checked against the built art, where it is one line, and it is checked HERE
+    because a probe nothing runs is a note, not an invariant — which is precisely how a fourth
+    report stays possible.
+    """
+    probe = EXT / "webview" / "workplace" / "dev" / "shadows.ts"
+    if not probe.exists() or shutil.which("npx") is None:
+        pytest.skip("the extension's webview toolchain is not available here")
+    out = tmp_path_factory.mktemp("shadows") / "shadows.js"
+    build = subprocess.run(
+        ["npx", "esbuild", str(probe), "--bundle", f"--outfile={out}",
+         "--format=cjs", "--platform=node", "--target=es2022"],
+        cwd=EXT, capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        pytest.fail(f"the shadow probe would not build:\n{build.stderr}")
+    run = subprocess.run(["node", str(out)], capture_output=True, text=True)
+    assert run.returncode == 0, (
+        "a shadow is detached, or thrown the wrong way:\n" + run.stdout + run.stderr)
+
+
 def test_nobodys_line_hangs_off_the_edge_of_the_panel(scene, browser):
     """At the width this actually ships in: a VS Code side bar.
 

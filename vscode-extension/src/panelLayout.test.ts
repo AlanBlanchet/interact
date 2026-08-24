@@ -77,3 +77,36 @@ test("a view that VS Code can dispose is never written to afterwards", () => {
      hides, and this file cost a blanked sidebar once already. The guard is cheap; rediscovering it
      is not. */
 });
+
+test("you cannot prompt an agent from the command palette", () => {
+  /* "Remove from everywhere the fact that we can prompt from the vscode CTRL+P box at the top.
+     Everything should be in the dashboard."
+
+     Giving an agent work is the panel's job. A palette entry that opens an input box is a second,
+     hidden way in — with none of the context the panel has about who is free, what they cost, or
+     what they are already doing. */
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+  const hidden = new Set(
+    (manifest.contributes.menus?.commandPalette ?? [])
+      .filter((e: { when?: string }) => e.when === "false")
+      .map((e: { command: string }) => e.command),
+  );
+  for (const cmd of ["interact.agents.spawn", "interact.agents.send", "interact.agents.broadcast"]) {
+    assert.ok(hidden.has(cmd), `${cmd} prompts, so it must not be reachable from the palette`);
+  }
+});
+
+test("no command that needs a subject is offered where it has none", () => {
+  /* These take a {run}; invoked from the palette they silently do nothing, which teaches you the
+     whole list is untrustworthy. */
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+  const hidden = new Set(
+    (manifest.contributes.menus?.commandPalette ?? [])
+      .filter((e: { when?: string }) => e.when === "false")
+      .map((e: { command: string }) => e.command),
+  );
+  for (const cmd of ["interact.agents.stop", "interact.agents.showEvents",
+                     "interact.agents.openConversation"]) {
+    assert.ok(hidden.has(cmd), `${cmd} needs a subject and would no-op from the palette`);
+  }
+});

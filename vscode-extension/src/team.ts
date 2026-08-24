@@ -45,6 +45,8 @@ export interface Worker {
   /** The name on the badge — the agent definition where there is one. */
   name: string;
   agent: string | null;
+  /** How many errands this agent was given. One body stands for all of them. */
+  tasks?: number;
   status: "running" | "done" | "error" | "foreign";
   zone: ZoneId;
   /** What they are doing, in words a person would say: "reading registry.py". */

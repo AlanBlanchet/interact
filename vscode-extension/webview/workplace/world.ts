@@ -28,6 +28,8 @@
  *  keyed to a department NAME, so a company file with different departments furnishes itself.
  */
 import type { TileId } from "./tiles";
+import { TILE_CELLS } from "./tiles";
+import { shadowReach } from "./light";
 
 /* ── the measure ─────────────────────────────────────────────────────────────────────────────
    Every number here is in TILES. A bay is one back-wall prop, one desk under it and two standing
@@ -1272,10 +1274,17 @@ export function buildWorld(
         }
       }
     }
-    // How far a trunk must keep back: one cell more than a canopy's shadow reaches.
-    const KEEP = 5;
+    /* How far a trunk must keep back, DERIVED from the projection rather than remembered.
+       A canopy at the top of its cell throws `shadowReach` tiles east and south, so the water is
+       shaded from the WEST and from the NORTH — and the previous constant went on saying "five
+       cells to the right" after the throw gained a southward component, which is exactly how a
+       tree ends up laying a hard slab across flat blue again. The bank is then widened past that
+       minimum on purpose: a pond wants an open shore, not trunks at the waterline. */
+    const cast = shadowReach(TILE_CELLS);
+    const KEEP = Math.max(5, cast.east + 1);
+    const RIM = Math.max(2, cast.south + 1);
     for (const [x, y] of water) {
-      for (let dy = -2; dy <= 2; dy++) {
+      for (let dy = -RIM; dy <= RIM; dy++) {
         for (let dx = -KEEP; dx <= 1; dx++) wet.add(x + dx + ":" + (y + dy));
       }
     }

@@ -385,6 +385,40 @@
           "when": "view == interactAgents.board && viewItem =~ /interact(Running)?Run/",
           "group": "inline@1"
         }
+      ],
+      "commandPalette": [
+        {
+          "command": "interact.agents.spawn",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.send",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.broadcast",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.stop",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.showEvents",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.openConversation",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.refresh",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.groupBy",
+          "when": "false"
+        }
       ]
     }
   },

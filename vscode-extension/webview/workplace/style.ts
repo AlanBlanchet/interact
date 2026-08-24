@@ -143,7 +143,12 @@ body {
   --l-edge: color-mix(in srgb, var(--wp-ink) 30%, transparent);
   --l-unlit: color-mix(in srgb, var(--wp-ink) 58%, transparent);
   --l-ao: color-mix(in srgb, var(--wp-ink) 50%, transparent);
-  --wp-drop: color-mix(in srgb, var(--wp-ink) 62%, transparent);
+  /* A CAST SHADOW IS PRICED BY ITS AREA, and the area just tripled. project() now throws south,
+     onto the open floor IN FRONT of a prop, where before most of it landed behind the silhouette
+     that cast it and was never seen. Same alpha, three times the coverage: measured 57.8% of the
+     floor's luminance gone under every desk, which is a hole in the floor rather than a shadow on
+     it. Re-derived on the rendered room, not on paper. */
+  --wp-drop: color-mix(in srgb, var(--wp-ink) 44%, transparent);
 
   --stamp-ink: var(--wp-fg);
   --stamp-quiet: var(--wp-dim);
@@ -216,7 +221,9 @@ body.vscode-high-contrast-light .wp {
   --l-edge: color-mix(in srgb, #2b3348 15%, transparent);
   --l-unlit: color-mix(in srgb, #2b3348 30%, transparent);
   --l-ao: color-mix(in srgb, #232a3d 30%, transparent);
-  --wp-drop: color-mix(in srgb, #232a3d 34%, transparent);
+  /* Same re-pricing as the dark theme, and re-derived here rather than scaled from it — the same
+     alpha buys about four times the ink on a light substrate. */
+  --wp-drop: color-mix(in srgb, #232a3d 25%, transparent);
 }
 
 /* ── the window ────────────────────────────────────────────────────────────────────────────
@@ -615,9 +622,9 @@ body.vscode-high-contrast-light .wp {
    canopy shadows crossing compose to roughly double the ink, and at 30% that lands back on the
    flat slab the dappling exists to prevent — visible in the dark theme, where the substrate has
    less room underneath it to absorb the second layer. */
-.wp-loose { --wp-drop: color-mix(in srgb, var(--wp-ink) 22%, transparent); }
+.wp-loose { --wp-drop: color-mix(in srgb, var(--wp-ink) 18%, transparent); }
 body.vscode-light .wp .wp-loose,
-body.vscode-high-contrast-light .wp .wp-loose { --wp-drop: color-mix(in srgb, #232a3d 18%, transparent); }
+body.vscode-high-contrast-light .wp .wp-loose { --wp-drop: color-mix(in srgb, #232a3d 15%, transparent); }
 
 /* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
    every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */

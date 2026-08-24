@@ -124,7 +124,7 @@ export const AGENT_STYLE = `
 }
 .agent .task:hover { background: var(--vscode-list-hoverBackground); }
 .agent .task:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-.agent .task-what { overflow-wrap: anywhere; }
+.agent .task-what { overflow-wrap: break-word; }
 .agent .task-state { color: var(--wp-dim); font-size: .85em; white-space: nowrap; }
 .agent .none { color: var(--wp-dim); }
 `;

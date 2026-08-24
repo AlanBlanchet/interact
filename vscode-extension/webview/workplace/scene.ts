@@ -41,10 +41,20 @@ import {
 } from "./art";
 import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
 
-/** How far the ground runs past the built world, in tiles. Forty covers the worst aspect
- *  mismatch the panel can be given (a tall side bar at the bottom rung of the scale ladder)
- *  without ever showing the edge of the drawing. */
-const GROUNDS = 40;
+/** How far the ground runs past the built world, in tiles.
+ *
+ *  Forty was derived for a TALL, NARROW panel and does not survive a WIDE one. At the bottom rung
+ *  a tile is eight device pixels, so the whole 67-tile site is 536px across — narrower than any
+ *  editor pane — and forty tiles of margin buys 320px a side. Measured in a 1394px viewport:
+ *  105px of bare panel showing on the left and 72 on the right. The edge of the drawing, which is
+ *  precisely what this constant exists to prevent, and it only appears at the rung that was added
+ *  after this number was last checked.
+ *
+ *  Sized from the WORST case instead of from one panel: a 4K-wide pane at the bottom rung wants
+ *  (3840 - 536) / 2 / 8 ≈ 207 tiles a side. It costs ONE `rect` with a pattern fill whatever the
+ *  number is — the pattern tiles from the origin, so any whole number of tiles out is seamless,
+ *  and the renderer only rasterises the part inside the viewport. */
+const GROUNDS = 220;
 import type { TileId } from "./tiles";
 import { PITCH, buildWorld } from "./world";
 import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
@@ -161,19 +171,29 @@ function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
   });
 }
 
-/** The same drawing, in one flat ink, offset — a prop's own SILHOUETTE lying on the floor beside
- *  it. Everything in the building is lit from the north-west, so everything in the building drops
- *  the same way; a scene where each object invents its own light direction reads as collage.
+/** Tiles that lie ON the ground, and therefore cast nothing.
  *
- *  Ground tiles do not cast (a floor casting a shadow on the floor is a chequerboard) and neither
- *  do the walls, which have their own band in `wallShadow`. */
-const FLAT: ReadonlySet<TileId> = new Set<TileId>([
+ *  A prop's shadow is the same drawing in one flat ink, projected — its own SILHOUETTE lying on
+ *  the floor south-east of it. Everything in this world is lit from the north-west, so everything
+ *  in it drops the same way; a scene where each object invents its own light direction reads as
+ *  collage. A floor casting a shadow on the floor is a chequerboard, and the walls have their own
+ *  band in `wallShadow`, so both stay out.
+ *
+ *  Exported so the shadow invariant (`dev/shadows.ts`) iterates exactly the set this renderer
+ *  casts for, rather than a hand-kept copy of it — four separate bugs on this view have been a
+ *  duplicated list drifting from the thing it duplicated. */
+export const FLAT: ReadonlySet<TileId> = new Set<TileId>([
   "floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug",
   "doorCap", "doorWay", "matt",
   // Water is a hole in the ground, not a thing standing on it, and ground cover an inch high
   // throws nothing you could see — drawn, its shadows are the dark specks that made the lawn
   // look littered rather than textured.
   "pond", "tuft", "blooms",
+  // Meadow and bare earth are GROUND, and were missing from this list purely because they only
+  // ever arrive as terrain runs rather than as props today — so nothing cast them and nothing
+  // caught it. The shadow invariant reads this set, which is what surfaced it; a ground tile
+  // dropped into `scenery` would otherwise have thrown a silhouette of a patch of grass.
+  "meadow", "earth",
 ]);
 
 const DROP_PAL = { "#": "var(--wp-drop)" };
@@ -251,8 +271,28 @@ function drift(x: number, y: number): string {
   return `style="--d:-${(((x * 37 + y * 61) % 480) / 100).toFixed(2)}s"`;
 }
 
-function propHtml(p: Prop): string {
-  return castOf(p.tile, p.x, p.y) + propBody(p);
+/** A set of props as TWO passes over one list: every shadow, then every body.
+ *
+ *  A shadow is thrown SOUTH now (see `project`), so it lands on the tile in FRONT of the thing
+ *  casting it — which is the whole point, and which makes the emission order load-bearing for the
+ *  first time. Interleaved (`cast, body, cast, body, …`) a tree's shade paints straight over the
+ *  canopy of whoever is standing one tile downhill, and a copse is trees in touching cells, so
+ *  that is not an edge case: it is most of the wood. Two passes is the same rule the building
+ *  already follows one level up — grounds, light, shadow, then everything that stands up.
+ *
+ *  Sorted north-to-south as well, so the painter's order matches the depth order: a body in front
+ *  covers a body behind, never the reverse. Ties break on x so the output stays byte-stable (the
+ *  map is rendered once and cached on its department key).
+ */
+function propLayer(props: readonly Prop[]): string {
+  const order = [...props].sort((a, b) => a.y - b.y || a.x - b.x);
+  let casts = "";
+  let bodies = "";
+  for (const p of order) {
+    casts += castOf(p.tile, p.x, p.y);
+    bodies += propBody(p);
+  }
+  return casts + bodies;
 }
 
 function propBody(p: Prop): string {
@@ -409,15 +449,14 @@ function renderMap(world: World): string {
         out += at("doorLeaf", d.x, d.y + (d.deep ? 1 : 0), "wp-leaf");
       }
     }
-    for (const p of r.props) out += propHtml(p);
+    out += propLayer(r.props);
     out += `</g>`;
   }
 
   // Things standing in the passage and out in the grounds. Neither belongs to a room, so neither
   // is lit by one: a bench in a corridor is not evidence anybody is in a corridor.
   out += `<g class="wp-loose">`;
-  for (const p of world.hallProps) out += propHtml(p);
-  for (const p of world.scenery) out += propHtml(p);
+  out += propLayer([...world.hallProps, ...world.scenery]);
   out += `</g>`;
 
   // Last, over everything: the runner down the spine, from the gate to the dais. Drawn after the

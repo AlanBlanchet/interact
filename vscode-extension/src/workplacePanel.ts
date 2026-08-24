@@ -18,14 +18,13 @@ import { renderScene, renderWorkplace } from "./workplaceView";
 import type { TeamState } from "./team";
 import { scopeStore } from "./scopeStore";
 import { facultiesOf, parseCapabilities } from "./capabilities";
-import { readOrg } from "./org";
+import { companyOf, readOrg } from "./org";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 import { buildRail, railRoute } from "./rail";
 import { railBody, railScript, railStyle } from "./railHtml";
 import { actionsFor } from "./agentActions";
 import { agentLabel, conversationTitle, roleOf } from "./roster";
 import { voiceOf } from "./statusLanguage";
-import { companyOf } from "./org";
 import { lastObservedAt } from "./teamState";
 import { describeScope, projectFor } from "./workspaceScope";
 
@@ -50,7 +49,13 @@ export class WorkplacePanel {
       // all — the hook was there, the two halves just never agreed on the word.
       const runId = selectedRunId(msg);
       if (runId) {
-        void vscode.commands.executeCommand("interact.agents.chat", runId);
+        // A character IS an agent now, so clicking one opens that agent and the errands it was
+        // given, rather than dropping you into whichever single run happened to speak for it.
+        const run = readAgentRuns().find((r) => r.run_id === runId);
+        const company = companyOf(readOrg()) ?? undefined;
+        const who = run ? roleOf(run as never, company) : null;
+        if (who && !who.plain) void vscode.commands.executeCommand("interact.agents.agent", who.id);
+        else void vscode.commands.executeCommand("interact.agents.chat", runId);
         return;
       }
       // The roster shares this document now, so its buttons arrive here too. Routed through the
@@ -111,6 +116,17 @@ export class WorkplacePanel {
       // Quality & Critics, Production & Makers, Research, Records, the Wealth Desk — and nothing
       // placed anybody by them, so a finance agent stood among the code reviewers.
       (agent) => WorkplacePanel.departmentOf(agent),
+      // WHO each run was held with. One body per agent: five sessions recorded as `claude` are the
+      // coordinator five times, not five teammates, and an agent given three errands is one
+      // colleague — which is what "I can see multiple 'claude' agents... they're all duplicates"
+      // was looking at.
+      (run) => {
+        const company = companyOf(readOrg()) ?? undefined;
+        return {
+          id: roleOf(run as never, company).id,
+          label: agentLabel(run as never, company),
+        };
+      },
     );
   }
 
