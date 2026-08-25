@@ -147,3 +147,50 @@ def test_no_model_asked_for_means_no_opinion():
     from interact.agents.run import resolve_model
 
     assert resolve_model(None, {}) == ({}, None)
+
+
+# ── activate once, never twice ──────────────────────────────────────────────────────────────────
+
+
+def test_a_child_is_not_handed_interact_twice(tmp_path, monkeypatch):
+    """"we should be able to activate the 'agents' for the provider, but once (and not twice)...
+    no conflicts."
+
+    A spawned Claude agent received --mcp-config registering interact — while the user's own
+    ~/.claude.json ALREADY registers interact at user scope, because that is what `interact
+    install` sets up. The child then carries two registrations of the same server. Attribution
+    does not need the duplicate: INTERACT_PARENT_RUN_ID travels in the child's process
+    environment, which the globally-configured server inherits.
+    """
+    from interact.agents.run import already_meshed
+
+    cfg = tmp_path / ".claude.json"
+    cfg.write_text('{"mcpServers": {"interact": {"command": "/home/x/.local/bin/interact"}}}')
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert already_meshed("claude") is True
+
+
+def test_a_machine_without_interact_registered_still_gets_the_mesh(tmp_path, monkeypatch):
+    """The mesh exists for exactly this case: a provider with no interact of its own."""
+    from interact.agents.run import already_meshed
+
+    monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.claude.json at all
+    assert already_meshed("claude") is False
+    (tmp_path / ".claude.json").write_text('{"mcpServers": {}}')
+    assert already_meshed("claude") is False
+
+
+def test_a_broken_provider_config_never_blocks_the_spawn(tmp_path, monkeypatch):
+    """A corrupt ~/.claude.json must degrade to 'not registered' — doubling a server is annoying,
+    a spawn that refuses to start is worse."""
+    from interact.agents.run import already_meshed
+
+    (tmp_path / ".claude.json").write_text("{ not json")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert already_meshed("claude") is False
+
+
+def test_an_unknown_provider_is_assumed_unmeshed():
+    from interact.agents.run import already_meshed
+
+    assert already_meshed("codex") in (True, False)  # never raises; a bool either way

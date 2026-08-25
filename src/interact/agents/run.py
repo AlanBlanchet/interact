@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from interact.agents.profiles import overlay_for, profiles_from
@@ -49,6 +50,34 @@ def _interact_command() -> tuple[str, list[str]]:
     if exe:
         return exe, ["mcp"]
     return sys.executable, ["-m", "interact", "mcp"]
+
+
+def already_meshed(provider: str) -> bool:
+    """Whether this provider's OWN configuration already registers interact as an MCP server.
+
+    "activate the agents for the provider, but once (and not twice)... no conflicts." `interact
+    install` registers interact in the provider's user-scope config — so handing a spawned child
+    `--mcp-config` with a second interact registration doubles the server in that session. The
+    mesh exists for machines where the provider has NO interact of its own; where it does,
+    attribution still flows, because INTERACT_PARENT_RUN_ID rides the child's process environment
+    and the globally-configured server inherits it.
+
+    Reads only; a corrupt or absent config means "not registered" — doubling a server is annoying,
+    a spawn that refuses to start over a config file is worse.
+    """
+    checks = {
+        "claude": Path.home() / ".claude.json",
+        "cursor": Path.home() / ".cursor" / "mcp.json",
+    }
+    path = checks.get(provider)
+    if path is None:
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    servers = data.get("mcpServers")
+    return isinstance(servers, dict) and "interact" in servers
 
 
 def mesh_config(*, run_id: str) -> str:
@@ -187,7 +216,9 @@ async def run_agent(
     label = name or agent or provider.name
     argv = provider.command(
         task, cwd=cwd, model=model,
-        mcp_config=mesh_config(run_id=run_id) if mesh else None,
+        # Once, never twice: skip the mesh when the provider's own config already registers
+        # interact — the child would otherwise carry two registrations of the same server.
+        mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name) else None,
         run_id=run_id, agent=agent, permission_mode=permission_mode,
     )
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
