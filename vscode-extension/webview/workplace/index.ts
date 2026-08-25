@@ -3,9 +3,10 @@
  *      renderWorkplace(state, nonce) -> a complete HTML document
  *
  *  Hand it a `TeamState` and the webview's nonce; assign the result to `webview.html`. Nothing
- *  else is needed: the art, the stylesheet and the one script are generated into the document, so
- *  there is no bundle to build, no asset to resolve through `asWebviewUri`, and no request that
- *  could ever leave the machine.
+ *  else is needed: the art (a data-URI atlas of the CC0 Kenney tiles), the stylesheet and the one
+ *  script are generated into the document, so there is no bundle to build, no asset to resolve
+ *  through `asWebviewUri`, and no request that could ever leave the machine — the CSP allows
+ *  `img-src data:` and nothing else.
  *
  *  Render it ONCE, then keep it. The engine inside is a running simulation with its own clock, so
  *  the way to update it is to post the next scene rather than to reassign the document:
@@ -60,7 +61,7 @@ export function renderWorkplace(state: TeamState, nonce: string, aside?: Workpla
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
+      content="default-src 'none'; img-src data:; font-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The team</title>
 <style>${STYLE}</style>

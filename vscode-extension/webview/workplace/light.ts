@@ -30,8 +30,9 @@
  */
 import type { Rect, Room, World } from "./world";
 
-/** Cells per tile. The map's user units are cells; a tile is eight of them. */
-const C = 8;
+/** Cells per tile. The map's user units are cells; a tile is sixteen of them now that the
+ *  substrate is 16x16 Kenney art. */
+const C = 16;
 
 /** Where light comes from in a room. Radius is in TILES. */
 export interface Lamp {
@@ -155,9 +156,9 @@ export function runPath(runs: readonly Rect[]): string {
   return runs.map((r) => `M${r.x * C} ${r.y * C}h${r.w * C}v${r.h * C}h-${r.w * C}z`).join("");
 }
 
-/** How deep a wall's shadow falls onto the floor beside it, in CELLS out of eight. Three is a
- *  visible band at every zoom this view uses and still leaves five clear cells of floor. */
-const DROP = 3;
+/** How deep a wall's shadow falls onto the floor beside it, in CELLS out of sixteen. Five is
+ *  the same visible band the 8-cell tile had, at the new pitch. */
+const DROP = 5;
 
 /** Every wall in the building, casting.
  *
@@ -193,163 +194,14 @@ export function wallShadow(world: World): string {
   return d;
 }
 
-/** The palette a shadow is drawn with: the same grid, every colour replaced by one ink.
+/* The per-prop shadow PROJECTION system ends here, deliberately.
  *
- *  Re-drawing through the sheet rather than blurring or filtering keeps the shadow a PIXEL shape —
- *  it is the prop's own silhouette, one flat tone, offset. A CSS filter would have produced the
- *  same picture at a per-element compositing cost and, worse, would have been a smooth alpha ramp
- *  around the edges of an otherwise hard-edged scene.
+ *  It existed because the hand-drawn tiles carried no grounding of their own — six rounds of
+ *  "floating trees" were fought with projected silhouettes, dapple rules and contact invariants.
+ *  The Kenney art bakes its grounding INTO the sprite (a tree's bottom tile is trunk, skirt and
+ *  its own contact shading; furniture carries feet and base shadows), and the reference register
+ *  this view is now held to — the packs' own sample scenes — draws NO thrown prop shadows at all.
+ *  Re-projecting silhouettes over art that already sits down would double-ground everything and
+ *  read as collage. The wall band above stays: it is architecture, not a prop effect, and it is
+ *  what keeps the party walls legible as raised masonry.
  */
-export function inkPalette(pal: Readonly<Record<string, string>>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const k of Object.keys(pal)) out[k] = "var(--wp-drop)";
-  return out;
-}
-
-/** How far a standing thing's shadow is thrown, in cells. Matches the wall band's direction. */
-export const CAST = { dx: 2, dy: 2 };
-
-/** THE SHADOW IS PROJECTED ONTO THE GROUND, IN FRONT OF THE THING THAT CASTS IT.
- *
- *  Third report of "floating trees", and the two earlier fixes were each half of the answer. The
- *  first replaced a TRANSLATED copy with a real projection (a copy of a canopy moved two cells
- *  down is a dark canopy hanging in the air beside a green one). The second stepped the whole
- *  thing off the object's own foot, so a pine's skirt stopped swallowing its own shade. Both were
- *  right. Both left the third defect untouched, and it is the one that mattered:
- *
- *      THE PROJECTION RAN NORTH — TOWARD THE SUN.
- *
- *  `wallShadow` above drops its band SOUTH and EAST of every wall, `CAST` is `+2,+2`, the
- *  character's contact patch is thrown down and right, and this file's own header says the light
- *  comes from the north-west. This function disagreed with all four: a pixel `h` cells above the
- *  base landed `h * SQUASH` cells UP the screen, so the far end of a tree's shadow — the canopy,
- *  the biggest part — came to rest BEHIND the trunk, hidden by the very silhouette that cast it.
- *  What escaped was a thin bar level with the trunk, sticking out to the right, and nothing at all
- *  on the open ground in front. A tree with clear grass under its foot and a dark dash beside its
- *  waist is a tree standing on nothing. That is what he kept seeing, in both themes, at every
- *  zoom, on every tall thing in the picture.
- *
- *  It was invisible to the two rounds that came before because the compression hid it: at eight
- *  rows the whole shadow was three cells deep, so it never got far enough north to look wrong on
- *  its own — it just sat under the object like a stain, and every check asked "does it touch?"
- *  rather than "which way does it go?".
- *
- *  So the model is stated once, positively, and checked mechanically (`dev/shadows.ts`):
- *
- *    - the sun is in the NORTH-WEST for everything in this world;
- *    - a pixel `h` cells above the base is thrown `h * SHEAR` east and `h * SQUASH` SOUTH;
- *    - the base is the art's OWN lowest pixel, never the tile's bottom row, so a prop drawn short
- *      of its cell (a chair, a crate, a sofa — sixteen of the fifty-two are) has its shadow at its
- *      feet instead of a cell and a half below them;
- *    - one cell down and one cell right of that base before anything else, so a thing that is
- *      widest at the ground still shows its own shade.
- *
- *  Done to the GRID rather than with a transform, because a CSS skew would resample every hard
- *  edge in a scene whose whole substrate is hard edges.
- */
-/* Tuned on the rendered grounds, not on paper. At 0.62 the shadow of an eight-row tree reaches
-   four cells and lands as a black BAR beside it — the projection is right and the length is a
-   lie, because the same ink now covers three times the area the translated copy did. Shorter,
-   and the outdoor group dims its own ink further (a lawn in daylight is not a room). */
-const SHEAR = 0.45;
-const SQUASH = 0.34;
-/* AND THE WHOLE SHADOW STEPS OFF THE OBJECT'S OWN FOOT.
-   Shear alone moves a pixel by how far it is ABOVE the base, so a pixel standing ON the base does
-   not move at all — which is exactly right for the contact point and exactly wrong for anything
-   whose widest part is DOWN THERE. A conifer's skirt and a shrub are widest at their feet, so the
-   entire projection landed underneath the canopy that cast it and both read, again, as having no
-   ground contact. One cell down and one cell right of the base puts the shadow out from under
-   every silhouette regardless of its shape, and it is where a sun in the north-west puts it. */
-const FOOT_X = 1;
-const FOOT_Y = 1;
-
-/** How far a full-height tile's shadow actually reaches, in CELLS, east and south.
- *
- *  Exported because the site plans around it: nothing tall may stand where its shade would land
- *  on the water, and a hand-kept number for that is a hand-kept copy of this projection. The last
- *  one said five cells EAST while the projection reached four east and none south, and it went on
- *  saying it after the throw direction changed — a keep-back that is a constant rather than a
- *  consequence is how a tree ends up laying a slab across the pond again.
- *
- *  A tile is `TILE_CELLS` tall, so the worst case is a prop drawn to the top of its cell. Reported
- *  in TILES, which is what a planner works in, rounded up. */
-export function shadowReach(cells: number): { east: number; south: number } {
-  const high = cells - 1;
-  return {
-    east: Math.ceil((FOOT_X + Math.round(high * SHEAR)) / cells),
-    south: Math.ceil((FOOT_Y + Math.round(high * SQUASH)) / cells),
-  };
-}
-
-/** The art's own lowest pixel: where the thing actually meets the ground.
- *
- *  Sixteen of the fifty-two drawn props stop a row or more short of their cell — a chair, a sofa,
- *  a crate, a printer, the door leaf. Measuring height and contact from `grid.length - 1` puts
- *  their shadow that far below their feet, which is a gap, which is the whole complaint. Returns
- *  -1 for a grid with nothing in it. */
-export function footRow(grid: readonly string[]): number {
-  for (let r = grid.length - 1; r >= 0; r--) {
-    const row = grid[r];
-    for (let c = 0; c < row.length; c++) if (row[c] !== "." && row[c] !== " ") return r;
-  }
-  return -1;
-}
-
-export function project(grid: readonly string[], leafy = false): string[] {
-  const rows = grid.length;
-  if (!rows) return [];
-  const base = footRow(grid);
-  if (base < 0) return [];
-  const cols = Math.max(...grid.map((r) => r.length));
-  const reach = Math.round(base * SHEAR) + FOOT_X;
-  const tall = base + FOOT_Y + Math.round(base * SQUASH) + 1;
-  const out: string[][] = Array.from({ length: tall }, () => new Array(cols + reach).fill("."));
-  /* THE HARD PATCH IS THE TRUNK, NOT THE SKIRT. A leafy thing's base row can be as wide as its
-     canopy — a bush is all skirt, the big tree's lowest boughs sweep the ground — and a full-width
-     solid base row is a bar one caster wide that FUSES the moment two casters touch: a fringe of
-     tree, bush and big tree in adjacent cells measured 23 cells of unbroken ink, over the
-     two-tile limit the probe holds this file to. The thing the solid patch exists to say is
-     "standing on something", and what stands on the ground is the TRUNK — so solid contact is
-     the middle of the base row only, and the skirt dapples like everything thrown. */
-  const baseRow = grid[base];
-  let inkLo = baseRow.length;
-  let inkHi = -1;
-  for (let c = 0; c < baseRow.length; c++) {
-    if (baseRow[c] === "." || baseRow[c] === " ") continue;
-    if (c < inkLo) inkLo = c;
-    if (c > inkHi) inkHi = c;
-  }
-  const trunk = Math.floor((inkLo + inkHi) / 2);
-  for (let r = 0; r <= base; r++) {
-    const row = grid[r];
-    const high = base - r;
-    const dx = FOOT_X + Math.round(high * SHEAR);
-    // SOUTH, away from the light. The far end of a tall thing's shadow is the end nearest the
-    // viewer — that is what makes the ground in front of it read as ground it is standing on.
-    const y = base + FOOT_Y + Math.round(high * SQUASH);
-    if (y < 0 || y >= tall) continue;
-    for (let c = 0; c < row.length; c++) {
-      if (row[c] === "." || row[c] === " ") continue;
-      const x = c + dx;
-      if (leafy && high === 0 && Math.abs(c - trunk) > 2 && (x + y) % 2 === 1) continue;
-      /* SOLID IS CONTACT; THROWN IS DAPPLE.
-         The old rule kept everything within two cells of the foot solid, which sounds like the
-         same thing and is not: a tree's widest rows are down there, so each one laid a six-cell
-         solid bar, and trees in touching cells laid theirs END TO END. Measured across the whole
-         site that came out as 32 cells of continuous ink — four tiles — which is the 55px bar an
-         independent critic measured under two trunks, reading as one dark stripe rather than as
-         two trees' shade. It is the fourth thing on this view that reads as floating.
-         So the solid part is now only what actually TOUCHES the ground: the art's own base row,
-         at its own width. Everything above the base is thrown, and thrown shade is a
-         checkerboard. The tile pitch is even, so two neighbours' checkerboards land in the same
-         phase and union instead of filling in — a wood shades at ONE density however many trees
-         are in it, and each trunk keeps a small hard patch at its foot saying it is standing on
-         something. In a scene made of hard pixels a dither IS the soft edge; a blur would not be.
-         Longest unbroken run over the built site: 32 cells before, 15 after. `dev/shadows.ts`
-         measures it, because "reads as a bar" is a length and not a boolean. */
-      if (leafy && high > 0 && (x + y) % 2 === 1) continue;
-      out[y][x] = "#";
-    }
-  }
-  return out.map((r) => r.join(""));
-}

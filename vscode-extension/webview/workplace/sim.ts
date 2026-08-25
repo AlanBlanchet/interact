@@ -52,14 +52,14 @@ function rnd(id, n) { return (hash(id + ":" + n) % 10000) / 10000; }
 /* ── the world, as data ──────────────────────────────────────────────────────────────────────
    Handed over by the renderer rather than measured out of the DOM. A tile grid IS the geometry,
    so there is nothing to read off a bounding box and nothing that can go stale on a resize. */
-var W = { cols: 0, rows: 0, tile: 24, solid: null, rooms: [], byId: {}, gate: [0, 0], ok: false };
+var W = { cols: 0, rows: 0, tile: 32, solid: null, rooms: [], byId: {}, gate: [0, 0], ok: false };
 
 function readWorld() {
   var el = document.querySelector(".wp-world");
   if (!el) { W.ok = false; return; }
   W.cols = Number(el.getAttribute("data-cols")) || 0;
   W.rows = Number(el.getAttribute("data-rows")) || 0;
-  W.tile = Number(el.getAttribute("data-tile")) || 24;
+  W.tile = Number(el.getAttribute("data-tile")) || 32;
   var bits = el.getAttribute("data-solid") || "";
   W.solid = new Uint8Array(W.cols * W.rows);
   for (var i = 0; i < W.solid.length; i++) W.solid[i] = bits.charCodeAt(i) === 49 ? 1 : 0;
@@ -391,7 +391,11 @@ function place(b, t) {
     var stepS = String(stepI);
     if (el.getAttribute("data-step") !== stepS) el.setAttribute("data-step", stepS);
     if (el.getAttribute("data-dir") !== dir) el.setAttribute("data-dir", dir);
-    lean = dir === "x" ? b.face * 1.5 : 0;
+    /* Five degrees, not 1.5: the lean into the travel is what says HEADED somewhere rather than
+       drifting, and at 1.5° it measured real and read as nothing — under the waddle's own ±7°
+       swing it was noise. At 5° the swing sits asymmetric around the direction of travel
+       (-2°..+12° eastbound), which is the lean-into-the-run every small-sprite gait carries. */
+    lean = dir === "x" ? b.face * 5 : 0;
   } else {
     var status = el.getAttribute("data-status");
     var p = b.phase;
@@ -524,22 +528,20 @@ function sayEdge(b, py) {
    outranks standing — and chases it through a DEAD ZONE, so it moves when the work moves and
    holds perfectly still when it does not.
 
-   What is new here is that a READER can take it. The version this replaces derived the scale
-   from the panel width and offered no way to change it, which had two consequences nobody
-   could work around: the smallest possible view was 943x794 of a 1272x888 building, so there
-   was NO scale at which the company was visible at once; and any drag was snatched back after
-   six seconds, so even the panning that did exist could not be trusted to stay put. Both are
-   gone. The scale is a rung on a ladder the reader moves, and a reader who takes the camera
-   KEEPS it until they hand it back.
+   What is new here is that the SURVEY is the resting truth. The camera used to open FOLLOWING
+   at a close rung, and following plus ambient walking is what ate aimed clicks: the floor
+   panned under the pointer between the press and the release. Now the panel opens on the WHOLE
+   FLOOR, following is opt-in, and the moment a pointer goes down the camera holds still.
 
-   THE SCALE LADDER, which is the thing that makes pulling back possible at all. A tile is eight
-   cells drawn three pixels each, so one source pixel is three device pixels at zoom one. Every
-   rung here is a THIRD, which lands one source pixel on a whole number of device pixels at
-   every rung — INCLUDING the rungs below one: 2/3 draws each source pixel two wide and 1/3
-   draws it one wide, both exact. A ladder of whole numbers can only ever zoom in; a ladder of
-   arbitrary fractions (0.75, 0.5) smears every hard edge this substrate is made of. Thirds are
-   the only ladder that does both. */
-var CAM = { x: 0, y: 0, step: 3, zoom: 1, vw: 0, vh: 0, follow: true, ready: false };
+   THE SCALE LADDER, which is the thing that makes pulling back possible at all. A tile is
+   sixteen source pixels drawn at thirty-two, so one source pixel is two device pixels at zoom
+   one. Every rung here is a HALF, which lands one source pixel on a whole number of device
+   pixels at every rung — 1/2 draws it one wide, 1 draws it two, 3/2 three, up to six. A ladder
+   of arbitrary fractions (0.75, 0.4) smears every hard edge this substrate is made of; halves
+   are the ladder this art is exact on. The one licensed exception is the whole-floor FIT in a
+   panel too narrow even for the bottom rung — seeing the company beats a perfect pixel there,
+   and the far view is a signed plan, not something anybody reads sprites on. */
+var CAM = { x: 0, y: 0, step: 2, zoom: 1, vw: 0, vh: 0, follow: false, pin: false, ready: false };
 
 /* ── THE CAMERA MOVES; IT DOES NOT CUT ───────────────────────────────────────────────────────
  *
@@ -576,18 +578,15 @@ var VIEW = { x: 0, y: 0, zoom: 1, live: false, ready: false };
    threshold at 0.59 x GLIDE. Short enough that a held key never feels laggy, long enough that a
    rung change is a MOVE and not a cut. */
 var GLIDE = 320;
-/* How many tiles to try to keep across the frame when the panel opens. Sixteen is a room and
-   its corridor — unchanged, so the view still OPENS exactly where it used to. */
-var ACROSS = 16;
 var STEP_MIN = 1;
-var STEP_MAX = 9;
-/* What the reader is told the scale is. A rung is a third, so two thirds of them are fractions
-   and "0.67x" in a pixel-art building would be the only decimal on screen. */
-var SCALE_WORDS = ["⅓", "⅔", "1", "1⅓", "1⅔", "2", "2⅓", "2⅔", "3"];
+var STEP_MAX = 6;
+/* What the reader is told the scale is. A rung is a half, so every other one is a fraction and
+   "0.5x" in a pixel-art building would be the only decimal on screen. */
+var SCALE_WORDS = ["½", "1", "1½", "2", "2½", "3"];
 /* What the panel is currently SHOWING, so the frame loop can skip a write it already made. */
-var SHOWN = { far: "", follow: "", step: 0 };
+var SHOWN = { far: "", follow: "", step: 0, read: "", live: "" };
 
-function zoomOf(step) { return step / 3; }
+function zoomOf(step) { return step / 2; }
 function clampStep(s) { return Math.max(STEP_MIN, Math.min(STEP_MAX, Math.round(s) || STEP_MIN)); }
 function worldPx() { return { w: W.cols * W.tile, h: W.rows * W.tile }; }
 
@@ -626,20 +625,35 @@ function camWeight(b) {
   return 0.22;
 }
 
-/** The rung the panel opens on — the same framing as before this ladder existed, so nothing
- *  about the first sight of the view changed. It is a STARTING rung now, not the only one. */
-function camOpenStep() {
-  return clampStep(Math.round(CAM.vw / (ACROSS * W.tile)) * 3);
+/** The zoom at which the whole building is inside the frame. A pixel-exact rung when one fits;
+ *  the TRUE fit — the one licensed fractional scale — when the panel is too narrow even for the
+ *  bottom rung, because "see the whole company" is the survey's entire promise and the far view
+ *  is a signed plan nobody reads sprites on. */
+function camFitZoom() {
+  var built = builtPx();
+  if (!CAM.vw || !CAM.vh) return zoomOf(STEP_MIN);
+  var fit = Math.min(CAM.vw / built.w, CAM.vh / built.h);
+  var rung = Math.floor(fit * 2) / 2;
+  if (rung >= zoomOf(STEP_MIN)) return Math.min(rung, zoomOf(STEP_MAX));
+  return fit;
 }
 
-/** The rung at which the whole building is inside the frame. If the panel is too narrow to hold
- *  it at any pixel-exact scale — a 380px side bar cannot — this is the smallest rung, which
- *  there shows the full height and about seven eighths of the width. Trading the substrate for
- *  that last eighth is not worth it; every pixel in the scene would go soft. */
 function camFitStep() {
+  return clampStep(Math.round(camFitZoom() * 2));
+}
+
+/** Centre the built extent in the frame at the given zoom. The one place a non-rung zoom may be
+ *  written, so every other handle stays quantised. */
+function camFrameWhole() {
+  var z = camFitZoom();
+  CAM.zoom = z;
+  CAM.step = clampStep(Math.round(z * 2));
+  window.__wp.scale = z;
   var built = builtPx();
-  if (!CAM.vw || !CAM.vh) return STEP_MIN;
-  return clampStep(Math.floor(3 * Math.min(CAM.vw / built.w, CAM.vh / built.h)));
+  var span = camSpan();
+  CAM.x = built.x + (built.w - span.w) / 2;
+  CAM.y = built.y + (built.h - span.h) / 2;
+  camClamp();
 }
 
 function camFit() {
@@ -653,10 +667,11 @@ function camFit() {
   HAND.rok = false;
   if (!CAM.ready) {
     CAM.ready = true;
-    CAM.step = camOpenStep();
-    CAM.zoom = zoomOf(CAM.step);
-    window.__wp.scale = CAM.zoom;
-    camSnap();
+    /* THE FLOOR OPENS WHOLE. The old default — following the work at a close rung — meant the
+       first thing a reader ever saw was a camera moving on its own, and a click aimed at a
+       sprite panned away between press and release. The survey is the resting truth; following
+       is one key away for whoever wants it. */
+    camFrameWhole();
   }
   camClamp();
   camApply();
@@ -719,14 +734,9 @@ function camFollow(on) {
  *  double-click because it is the first thing anybody wants from a map they are lost in. */
 function camWhole() {
   camHold();
-  camSetStep(camFitStep());
-  var built = builtPx();
-  var span = camSpan();
-  CAM.x = built.x + (built.w - span.w) / 2;
-  CAM.y = built.y + (built.h - span.h) / 2;
-  camClamp();
+  camFrameWhole();
   camApply();
-  return { step: CAM.step, zoom: CAM.zoom, span: span, built: built };
+  return { step: CAM.step, zoom: CAM.zoom, span: camSpan(), built: builtPx() };
 }
 
 /** Move the frame by SCREEN pixels, so a key press and a drag of the same distance agree. */
@@ -762,7 +772,10 @@ function camSnap() {
 }
 
 function camStep(dt) {
-  if (!CAM.ready || !CAM.follow) return;
+  /* PINNED: a pointer is down somewhere on the glass, so the world holds still under it. The
+     follow camera panning between press and release is what ate four aimed clicks in a row —
+     the sprite was no longer where the finger came down. */
+  if (!CAM.ready || !CAM.follow || CAM.pin) return;
   var aim = camAim();
   if (!aim) return;
   var span = camSpan();
@@ -818,6 +831,17 @@ function camApply() {
      Same when the clock is simply paused. In both cases the camera CUTS, which is exactly what a
      reader who has asked for no motion wants. */
   if (!VIEW.ready || still || !TICK.on) camSync();
+  /* PROMOTE THE STAGE ONLY WHILE THE GLIDE IS FLYING. Promoted at rest, Chromium keeps the
+     layer's raster at whatever scale it was captured and the camera's scale() stretches that
+     RASTER — the whole map measured bilinear-soft at zoom 2. Un-promoted during a glide, every
+     frame re-rasters the visible tiles — measured p95 43.6ms across a zoom. So the layer is
+     promoted for the ~300ms it is actually scaling (a soft frame mid-motion is invisible) and
+     dropped the moment it settles, which re-rasters once, crisp, at the true scale. */
+  var flying = VIEW.live ? "1" : "0";
+  if (flying !== SHOWN.live) {
+    stage.style.willChange = VIEW.live ? "transform" : "auto";
+    SHOWN.live = flying;
+  }
   var z = VIEW.zoom;
   var tx = -VIEW.x * z;
   var ty = -VIEW.y * z;
@@ -853,12 +877,15 @@ function camApply() {
       SHOWN.follow = fol;
     }
   }
-  if (CAM.step !== SHOWN.step) {
+  /* The read says FIT when the whole-floor frame is running the one licensed off-rung scale,
+     so the gauge never claims a rung the picture is not on. */
+  var word = Math.abs(CAM.zoom - zoomOf(CAM.step)) > 0.01 ? "FIT" : SCALE_WORDS[CAM.step - 1] + "×";
+  if (CAM.step !== SHOWN.step || word !== SHOWN.read) {
     var rule = document.querySelector(".wp-rule");
     var read = document.querySelector(".wp-read");
     if (rule) rule.setAttribute("data-step", String(CAM.step));
-    if (read) read.textContent = SCALE_WORDS[CAM.step - 1] + "×";
-    if (rule || read) SHOWN.step = CAM.step;
+    if (read) read.textContent = word;
+    if (rule || read) { SHOWN.step = CAM.step; SHOWN.read = word; }
   }
   var eye = document.querySelector(".wp-eye");
   var mini = document.querySelector(".wp-mini");
@@ -907,7 +934,7 @@ var SAID = [];
 /** How tall this body is drawn, in device pixels. Published by the renderer from ONE table. */
 function headOf(b) {
   var n = b.el && Number(b.el.getAttribute("data-head"));
-  return n > 0 ? n : 54;
+  return n > 0 ? n : 32;
 }
 
 function boxesOf(b, kind) {
@@ -932,9 +959,8 @@ function boxesOf(b, kind) {
 
 function sayBox(b, level) {
   var up = b.el && b.el.getAttribute("data-label") === "up";
-  /* Clear of the stamp rather than three pixels off it: measured, the placard's top edge is
-     sixty-three world pixels above the boots and the lowest bubble's floor was sixty-six. */
-  var base = (up ? 100 : 72) + level * 26 - (54 - headOf(b));
+  /* Clear of the stamp rather than three pixels off it, at the doll's own heights. */
+  var base = (up ? 78 : 50) + level * 26 - (32 - headOf(b));
   /* The bubble holds a constant SCREEN size, so in world pixels it shrinks as the camera moves
      in. Reserving the unscaled box would refuse most of the lines at zoom two for a collision
      that is not there. */
@@ -988,8 +1014,8 @@ function speechLayout(t) {
       taken.push(box);
       live[i].el.style.bottom = "";
       live[i].el.querySelector(".wp-say").style.bottom =
-        ((live[i].el.getAttribute("data-label") === "up" ? 96 : 66) + lv * 26 -
-          (54 - headOf(live[i]))) + "px";
+        ((live[i].el.getAttribute("data-label") === "up" ? 74 : 44) + lv * 26 -
+          (32 - headOf(live[i]))) + "px";
       next.push(live[i].el);
       break;
     }
@@ -1042,6 +1068,34 @@ function handAim() {
   }
   HAND.tx = ((HAND.cx - HAND.rx) / VIEW.zoom + VIEW.x) / W.tile;
   HAND.ty = ((HAND.cy - HAND.ry) / VIEW.zoom + VIEW.y) / W.tile;
+}
+
+/* How far a click may land from a body and still mean that body, in tiles. Generous on purpose:
+   a sprite is one tile wide, ambient life moves it a little, and the professional sweep measured
+   four aimed clicks in a row selecting nothing. Selection is by NEAREST BODY inside this ring,
+   from the engine's own positions — never by whether the pointer happened to be inside a 32px
+   element on the exact frame the button came up. */
+var PICK_REACH = 2.2;
+
+function actorNear(cx, cy) {
+  if (!VIEW.ready || !VIEW.zoom) return null;
+  var view = document.querySelector(".wp-view");
+  if (!view) return null;
+  var r = view.getBoundingClientRect();
+  var tx = ((cx - r.left) / VIEW.zoom + VIEW.x) / W.tile;
+  var ty = ((cy - r.top) / VIEW.zoom + VIEW.y) / W.tile;
+  var best = null;
+  var bd = PICK_REACH * PICK_REACH;
+  for (var id in BODIES) {
+    var b = BODIES[id];
+    if (!b.el || !b.el.isConnected) continue;
+    /* Aimed at the body's middle: the anchor is at the boots. */
+    var dx = b.x - tx;
+    var dy = b.y - 0.5 - ty;
+    var d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best ? best.el : null;
 }
 
 /* Heads turn. A body at rest inside GAZE tiles of the pointer faces it and follows it — the

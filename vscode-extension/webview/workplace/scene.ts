@@ -21,38 +21,10 @@
 import { ZONES } from "../../src/team";
 import type { TeamState, Worker, ZoneId } from "../../src/team";
 import { FACULTIES } from "../../src/capabilities";
-import { closeSheet, draw, drawFrames, openSheet, place } from "./pixels";
-import type { Grid } from "./pixels";
-import {
-  FACULTY_ART,
-  BANG,
-  NOTE,
-  POSE_AWAY_A,
-  POSE_AWAY_B,
-  POSE_BLINK,
-  POSE_MOVE,
-  POSE_REST,
-  POSE_REST_A,
-  POSE_REST_B,
-  POSE_REST_BLINK,
-  POSE_SIT_A,
-  POSE_SIT_B,
-  POSE_SIT_BLINK,
-  POSE_SLUMP,
-  POSE_STRIDE_A,
-  POSE_STRIDE_B,
-  POSE_STRIDE_C,
-  POSE_WALK_A,
-  POSE_WALK_B,
-  RING,
-  SKIN_PAL,
-  SNOOZE,
-  VISITOR_PAL,
-  WAVE_A,
-  WAVE_B,
-  WAVE_PAL,
-} from "./art";
-import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
+import { closeSheet, draw, drawFrames, openSheet } from "./pixels";
+import { FACULTY_ART, BANG, NOTE, RING, SNOOZE, WAVE_A, WAVE_B, WAVE_PAL } from "./art";
+import { atlasDefs, cellUse, dollOf, dollSvg, tileUse } from "./kenney";
+import { TILE_CELLS, TILE_PX } from "./tiles";
 
 /** How far the ground runs past the built world, in tiles.
  *
@@ -69,12 +41,12 @@ import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
  *  and the renderer only rasterises the part inside the viewport. */
 const GROUNDS = 220;
 import type { TileId } from "./tiles";
-import { PITCH, WALL_FIXTURES, buildWorld } from "./world";
+import { PITCH, buildWorld } from "./world";
 import type { Dept, Prop, Rect, Room, Seat, World } from "./world";
-import { assignAccents, atMillis, faceOf, hash, idleAmount, shortDuration } from "./palette";
+import { assignAccents, faceOf, hash, idleAmount, shortDuration } from "./palette";
 import { HEAD, WORDS, attentionOf, behaviourOf, isHeld, markOf, stampHtml, worldStampFor } from "./status";
 import type { Posture } from "./status";
-import { lampsFor, poolRuns, project, runPath as litPath, wallShadow, LEVELS } from "./light";
+import { lampsFor, poolRuns, runPath as litPath, wallShadow, LEVELS } from "./light";
 import { buildPods, posts, tally } from "./layout";
 import type { Post } from "./layout";
 import { clip, esc } from "./esc";
@@ -177,70 +149,11 @@ export function placeOf(world: World, w: Cast): Room {
 
 /* ── the map ─────────────────────────────────────────────────────────────────────────────────*/
 
-/** One tile, drawn at a cell. Scale 1: the whole map is one SVG whose user units are tile CELLS,
- *  and the pixel size arrives from the camera, so a tile is authored once and the building can be
+/** One tile, drawn at a cell. The whole map is one SVG whose user units are tile CELLS, and the
+ *  pixel size arrives from the camera, so a tile is referenced once and the building can be
  *  zoomed without re-rendering anything. */
 function at(id: TileId, x: number, y: number, cls = "", extra = ""): string {
-  const t = TILES[id];
-  return place(t.grid, t.pal, x * TILE_CELLS, y * TILE_CELLS, {
-    scale: 1,
-    outline: !!t.rim,
-    className: cls || undefined,
-    attrs: extra,
-  });
-}
-
-/** Tiles that cast nothing, and the reason each one does not.
- *
- *  A prop's shadow is the same drawing in one flat ink, projected — its own SILHOUETTE lying on
- *  the floor south-east of it. Everything in this world is lit from the north-west, so everything
- *  in it drops the same way; a scene where each object invents its own light direction reads as
- *  collage.
- *
- *  Two reasons, and both have to be a DECISION somebody can point at rather than a gap in a list.
- *  A thing lying ON the ground has no height to throw (a floor casting a shadow on the floor is a
- *  chequerboard), and a thing hanging on a WALL is not standing on the ground at all — that set
- *  is `WALL_FIXTURES`, derived from the archetypes' own face lists next to where the fixtures are
- *  chosen. Everything else in the building casts, indoors and out; there is no third category and
- *  no prop that quietly falls through.
- *
- *  Exported so the shadow invariant (`dev/shadows.ts`) iterates exactly the set this renderer
- *  casts for, rather than a hand-kept copy of it — four separate bugs on this view have been a
- *  duplicated list drifting from the thing it duplicated. */
-export const FLAT: ReadonlySet<TileId> = new Set<TileId>([
-  // GROUND: drawn where you walk, with no height above it.
-  "floor", "carpet", "grass", "wall", "path", "lino", "runner", "face", "mass", "dais", "rug",
-  "doorCap", "doorWay", "matt",
-  // Water is a hole in the ground, not a thing standing on it, and ground cover an inch high
-  // throws nothing you could see — drawn, its shadows are the dark specks that made the lawn
-  // look littered rather than textured.
-  "pond", "tuft", "blooms",
-  // Meadow and bare earth are GROUND, and were missing from this list purely because they only
-  // ever arrive as terrain runs rather than as props today — so nothing cast them and nothing
-  // caught it. The shadow invariant reads this set, which is what surfaced it; a ground tile
-  // dropped into `scenery` would otherwise have thrown a silhouette of a patch of grass.
-  "meadow", "earth", "litter",
-  // HUNG: the wall face, whose masonry already has its own band in `wallShadow`.
-  ...WALL_FIXTURES,
-]);
-
-const DROP_PAL = { "#": "var(--wp-drop)" };
-/** The projected grid per tile, cached by IDENTITY rather than the drawn string: the pixel engine
- *  keys its own body cache — and the render sheet's `<use>` ids — off the grid object, so handing
- *  it a freshly-built array on every placement would defeat both. One array per tile id, forever. */
-const CAST_GRID = new Map<TileId, string[]>();
-
-function castOf(id: TileId, x: number, y: number): string {
-  if (FLAT.has(id)) return "";
-  let grid = CAST_GRID.get(id);
-  if (!grid) CAST_GRID.set(id, (grid = project(TILES[id].grid, !!TILES[id].leafy)));
-  // NO offset. The projection already lands every pixel where the ground is; a translation on
-  // top of it is exactly what lifted the old shadow off the thing casting it.
-  return place(grid, DROP_PAL, x * TILE_CELLS, y * TILE_CELLS, {
-    scale: 1,
-    outline: false,
-    className: "wp-drop",
-  });
+  return tileUse(id, x, y, cls, extra);
 }
 
 function patch(id: TileId, r: Rect): string {
@@ -256,15 +169,13 @@ function patches(id: TileId, runs: readonly Rect[]): string {
 
 function patterns(ids: TileId[]): string {
   return ids
-    .map((id) => {
-      const t = TILES[id];
-      return (
+    .map(
+      (id) =>
         `<pattern id="wp-p-${id}" width="${TILE_CELLS}" height="${TILE_CELLS}" ` +
         `patternUnits="userSpaceOnUse">` +
-        draw(t.grid, t.pal, { scale: 1, outline: !!t.rim }) +
-        `</pattern>`
-      );
-    })
+        tileUse(id, 0, 0) +
+        `</pattern>`,
+    )
     .join("");
 }
 
@@ -276,16 +187,30 @@ function runPath(runs: readonly Rect[]): string {
 }
 
 /** The overlay that makes a prop move. A separate node every time: the drawing underneath is
- *  shared through the sheet, and a class on it would animate every copy of it in the building. */
+ *  shared through the defs, and a class on it would animate every copy of it in the building.
+ *  These are plain rects rather than atlas cells — a glow, a puff and a pool are LIGHT, and the
+ *  Kenney sheets deliberately carry none (their scenes are evenly lit); a themed rect keeps the
+ *  effect on the theme's own tokens. */
 function liveOf(p: Prop): string {
   const delay = drift(p.x, p.y);
+  const X = p.x * TILE_CELLS;
+  const Y = p.y * TILE_CELLS;
   switch (p.live) {
     case "screen":
-      return at("screenGlow", p.x, p.y, "wp-lv wp-lv-screen", delay);
+      return (
+        `<rect class="wp-lv wp-lv-screen" x="${X + 3}" y="${Y + 2}" width="10" height="7" ` +
+        `fill="var(--t-screen)" ${delay}/>`
+      );
     case "steam":
-      return at("steam", p.x, p.y - 1, "wp-lv wp-lv-steam", delay);
+      return (
+        `<path class="wp-lv wp-lv-steam" fill="var(--wp-fg)" ${delay} ` +
+        `d="M${X + 7} ${Y - 4}h3v2h-3zM${X + 5} ${Y - 8}h3v2h-3zM${X + 9} ${Y - 12}h3v2h-3z"/>`
+      );
     case "lamp":
-      return at("lampPool", p.x, p.y + 1, "wp-lv wp-lv-lamp", delay);
+      return (
+        `<rect class="wp-lv wp-lv-lamp" x="${X + 2}" y="${Y + 14}" width="12" height="6" ` +
+        `fill="var(--l-lamp)" ${delay}/>`
+      );
     default:
       return "";
   }
@@ -304,33 +229,6 @@ function drift(x: number, y: number): string {
  *  rendered once and cached on its department key). */
 function depthOrder(props: readonly Prop[]): Prop[] {
   return [...props].sort((a, b) => a.y - b.y || a.x - b.x);
-}
-
-/** SHADE IS A LAYER OF THE BUILDING, NOT A PART OF A PROP.
- *
- *  A shadow is thrown SOUTH (see `project`), so it lands on the tile in FRONT of the thing casting
- *  it. The previous round noticed that and emitted every shadow before every body — but WITHIN
- *  each room's own group, and a room's group is a sibling of eight others plus the grounds. So the
- *  document read `roomA casts, roomA bodies, roomB casts, roomB bodies, …, grounds casts, grounds
- *  bodies`, and every one of those cast passes painted over every body emitted before it. The
- *  grounds hold 243 of them and come LAST, so all 243 painted over the entire building and over
- *  each other's neighbours: a bush one tile north of a conifer smeared a grey band across its
- *  canopy, in both themes, at every rung. Local ordering cannot fix that; the group it is local to
- *  is the problem.
- *
- *  It is also not a tree bug. Any prop set denser than today's forest reproduces it identically,
- *  which is why the fix is at the LAYER: shade goes where light goes, once, for the whole map,
- *  between the floor it falls on and everything that stands up in it. Then a shadow is occluded by
- *  whatever is standing in front of it, for free and by construction.
- *
- *  And ONE layer buys the second thing a per-prop emission can never have: shade that does not
- *  COMPOUND. The group carries the alpha and its children are opaque, so two canopies crossing
- *  union to one silhouette at one density instead of stacking to twice the ink. The old code
- *  compensated for the stacking by halving the ink everywhere — a whole lawn made paler to make
- *  its overlaps survivable. Now the single shadow can be as strong as a single shadow should be.
- */
-function propCasts(props: readonly Prop[]): string {
-  return depthOrder(props).map((p) => castOf(p.tile, p.x, p.y)).join("");
 }
 
 function propBodies(props: readonly Prop[]): string {
@@ -354,7 +252,7 @@ function renderMap(world: World): string {
     `viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true" focusable="false">` +
     `<defs>${patterns([
       "floor", "carpet", "grass", "meadow", "litter", "earth", "pond", "wall", "path", "lino", "runner",
-      "face", "mass", "dais", "rug",
+      "face", "mass", "dais", "rug", "road", "roadDash", "roadCross",
     ])}</defs>`;
 
   // The envelope, then everything carved out of it. Mass first: the building is solid until a
@@ -375,6 +273,18 @@ function renderMap(world: World): string {
      frame, which is precisely the scale the camera exists to reach: props are one tile each and
      one tile is a speck there. */
   for (const layer of world.terrain) out += patches(layer.tile, layer.runs);
+  /* The street keeps going. Its in-world stub ends at the data's edge, but the picture does not:
+     run the same rows out across the drawn grounds, so the way out of the gate reads as a town
+     road passing the lot rather than a driveway into a lawn. Decoration only — nothing walks
+     out there. */
+  {
+    const s = world.street;
+    out += patch("path", { x: world.cols, y: s.y, w: GROUNDS, h: 1 });
+    out += patch("road", { x: world.cols, y: s.y + 1, w: GROUNDS, h: 3 });
+    out += patch("roadDash", { x: world.cols, y: s.y + 4, w: GROUNDS, h: 1 });
+    out += patch("road", { x: world.cols, y: s.y + 5, w: GROUNDS, h: 2 });
+    out += patch("path", { x: world.cols, y: s.y + 7, w: GROUNDS, h: 1 });
+  }
 
   out += patch("mass", {
     x: world.envelope.x,
@@ -382,23 +292,13 @@ function renderMap(world: World): string {
     w: world.facadeX - world.envelope.x + 1,
     h: world.envelope.h,
   });
-
-  // The building's own structure, on the parts of it you do not see into. Left as a flat dark
-  // field the mass reads as a void with the rooms floating in it; a column grid on a four-tile
-  // rhythm is what makes it read as the rest of the building.
-  {
-    const cells = new Set<number>();
-    for (const r of world.mass) for (let x = r.x; x < r.x + r.w; x++) cells.add(r.y * world.cols + x);
-    let d = "";
-    const e = world.envelope;
-    for (let y = e.y + 2; y < e.y + e.h - 1; y += 4) {
-      for (let x = e.x + 2; x < world.facadeX; x += 4) {
-        if (!cells.has(y * world.cols + x)) continue;
-        d += `M${x * TILE_CELLS + 1} ${y * TILE_CELLS + 1}h6v6h-6z`;
-      }
-    }
-    if (d) out += `<path class="wp-struct" d="${d}"/>`;
-  }
+  /* The parapet: the light rim every roof in the reference town wears where it meets the sky.
+     One stroked rect around the roof's own extent — the rooms drawn later sit inside it. */
+  out +=
+    `<rect class="wp-parapet" x="${world.envelope.x * TILE_CELLS + 2}" ` +
+    `y="${world.envelope.y * TILE_CELLS + 2}" ` +
+    `width="${(world.facadeX - world.envelope.x + 1) * TILE_CELLS - 4}" ` +
+    `height="${world.envelope.h * TILE_CELLS - 4}"/>`;
 
   // The spine.
   out += patch("lino", world.hall);
@@ -459,6 +359,10 @@ function renderMap(world: World): string {
       out += `<path class="wp-pool" data-l="${i}" d="${litPath(pools[i])}"/>`;
     }
     out += `<path class="wp-shut" d="${floor}"/>`;
+    // The voice's rim: the same floor outline, stroked in the state's colour when the room takes
+    // a voice. The pool answers up close; the rim is what survives the whole-floor rung, where a
+    // wash over an eight-pixel tile is texture but an edge is still an edge.
+    out += `<path class="wp-voice-rim" d="${floor}"/>`;
     out += `</g>`;
   }
 
@@ -475,34 +379,18 @@ function renderMap(world: World): string {
     out += `</g>`;
   }
 
-  // 3. SHADOW. One direction for the whole building, computed from the same grid a body walks on,
-  //    so the party wall between two departments casts into both of them and the structural mass
-  //    casts onto the corridor beside it.
+  // 3. SHADOW. One direction for the whole building, computed from the same grid a body walks
+  //    on, so the party wall between two departments casts into both of them and the structural
+  //    mass casts onto the corridor beside it. This is the ONLY thrown shade left: the Kenney
+  //    art grounds its own props (trunks, feet, base shading are in the sprites), and the packs'
+  //    reference scenes draw no per-prop shadows — re-projecting silhouettes over art that
+  //    already sits down reads as collage.
   {
     const d = wallShadow(world);
     if (d) out += `<path class="wp-ao" d="${d}"/>`;
   }
 
-  /* 3b. AND EVERY PROP'S OWN SHADE, for the WHOLE map, in one layer — see `propCasts`.
-        Two groups, because a shadow is only as dark as the light it is subtracting: under a roof
-        it comes off one lamp and is hard, out in the open it comes off the whole sky and is soft.
-        The split is by what the shade LANDS on, so the yard's props go with the grounds — they
-        were the odd case before, carrying a room's indoor ink onto grass because they happen to
-        belong to a Room object.
-        Each group is opaque inside and carries its alpha on the group, so overlaps union rather
-        than stack; that is `opacity`, in the stylesheet, and it is the whole of the compounding
-        fix. */
-  {
-    const roofed = world.rooms.filter((r) => !r.outdoor);
-    const open = world.rooms.filter((r) => r.outdoor);
-    const indoor = propCasts([...roofed.flatMap((r) => r.props), ...world.hallProps]);
-    const outdoor = propCasts([...open.flatMap((r) => r.props), ...world.scenery]);
-    if (indoor) out += `<g class="wp-shadow is-in">${indoor}</g>`;
-    if (outdoor) out += `<g class="wp-shadow is-out">${outdoor}</g>`;
-  }
-
-  // 4. STRUCTURE, and everything standing on the floor. Bodies only: the shade they throw was
-  //    laid in 3b, under everything, where the ground is.
+  // 4. STRUCTURE, and everything standing on the floor.
   for (const r of world.rooms) {
     out += `<g class="wp-rm wp-bu${r.brain ? " is-brain" : ""}${r.open ? " is-open" : ""}" ` +
       `data-room="${esc(r.id)}" data-kind="${esc(r.kind)}">`;
@@ -609,11 +497,12 @@ function survey(world: World): string {
           `width="${r.w * TILE_CELLS}" height="${r.h * TILE_CELLS}"/>`,
     )
     .join("");
-  // Nine rungs, because a rung is a THIRD of a source pixel's width on screen and thirds are the
-  // only ladder that stays pixel-exact BELOW one. Drawn as a rule of rising marks: the shape says
-  // "scale" on sight, and the mark you are standing on is the one that is lit.
-  const rungs = Array.from({ length: 9 }, (_, i) => i + 1)
-    .map((n) => `<i data-rung="${n}" style="--h:${2 + n}px"></i>`)
+  // Six rungs, because a rung is HALF a source pixel's width on screen — the 16px art draws each
+  // source pixel two device pixels at zoom 1, so halves are the ladder that stays pixel-exact at
+  // every stop. Drawn as a rule of rising marks: the shape says "scale" on sight, and the mark
+  // you are standing on is the one that is lit.
+  const rungs = Array.from({ length: 6 }, (_, i) => i + 1)
+    .map((n) => `<i data-rung="${n}" style="--h:${3 + n * 2}px"></i>`)
     .join("");
   return (
     `<div class="wp-plan">` +
@@ -638,10 +527,12 @@ function survey(world: World): string {
     `<button class="wp-cam wp-cam-wide" data-cam="whole" type="button" ` +
     `title="Frame the whole company — the 0 key, or double-click the floor" ` +
     `aria-label="Show the whole floor">${FIT_MARK}<span>WHOLE FLOOR</span></button>` +
+    /* Following is OPT-IN now: the survey is the resting truth, so the quiet state is the whole
+       floor holding still and the lit state is the camera chasing the work. */
     `<button class="wp-cam wp-cam-wide wp-cam-follow" data-cam="follow" type="button" ` +
     `title="Follow the work — the F key" aria-label="Follow the work" ` +
-    `aria-pressed="true">${EYE_MARK}` +
-    `<span class="wp-on">FOLLOWING</span><span class="wp-off">RESUME FOLLOW</span></button>` +
+    `aria-pressed="false">${EYE_MARK}` +
+    `<span class="wp-on">FOLLOWING</span><span class="wp-off">FOLLOW WORK</span></button>` +
     `</div>`
   );
 }
@@ -660,44 +551,19 @@ const EYE_MARK =
 
 /* ── the people ──────────────────────────────────────────────────────────────────────────────*/
 
-/** The pair a body RESTS in, chosen by what its state means it is doing.
+/** The character, as a paper doll from the Kenney sheet.
  *
- *  Deliberately emitted under the same class the standing pair used to carry, so every rule that
- *  already animates a resting body — the two-frame swap on the beat, the walk swap, the lean —
- *  keeps working untouched. A posture is a different DRAWING, not a different mechanism.
+ *  ONE composed drawing per person now, not four pose sets: the pack is front-facing art in the
+ *  roguelike tradition, so posture and gait are carried by the ELEMENT — the walk is a two-beat
+ *  waddle the stylesheet drives off the engine's `data-step`, east and west are the face flip,
+ *  sitting tucks the body toward its desk, and the lounge ROTATES the figure onto the couch: an
+ *  aspect flip is the one posture change that reads at every zoom.
  *
- *  Both seated pairs are fourteen rows against the standing figure's sixteen and every sprite is
- *  anchored at the boots, so sitting down drops the head six device pixels: the posture is legible
- *  before any of its detail is, which is the only test that matters at this size.
- */
-const RESTING: Record<Posture, readonly Grid[]> = {
-  stand: [POSE_REST, POSE_MOVE, POSE_BLINK],
-  sit: [POSE_SIT_A, POSE_SIT_B, POSE_SIT_BLINK],
-  slump: [POSE_SLUMP],
-  lounge: [POSE_REST_A, POSE_REST_B, POSE_REST_BLINK],
-};
-
-/** The third frame of every waking pair is the BLINK — the lids down for a few frames every few
- *  seconds, staggered per person. The slump has no blink because its eyes are already shut, and
- *  the absence is what keeps a genuinely stopped body genuinely still. */
-function spriteOf(w: Cast, posture: Posture): string {
-  const pal = w.status === "foreign" ? VISITOR_PAL : SKIN_PAL;
-  /* Three walks, one per facing the tile floor allows: the side gait (mirrored for west by the
-     engine's face flip), the back going north, the front coming south. Which one shows is the
-     engine's `data-dir`; the stylesheet holds the other two. The vertical gaits repeat their two
-     frames across the four footfall phases so one `data-step` drives all three. */
-  return (
-    drawFrames(RESTING[posture], pal, { scale: 3, className: "wp-sprite wp-stand" }) +
-    drawFrames([POSE_STRIDE_A, POSE_STRIDE_B, POSE_STRIDE_C, POSE_STRIDE_B], pal, {
-      scale: 3, className: "wp-sprite wp-walk wp-walk-x",
-    }) +
-    drawFrames([POSE_WALK_A, POSE_WALK_B, POSE_WALK_A, POSE_WALK_B], pal, {
-      scale: 3, className: "wp-sprite wp-walk wp-walk-s",
-    }) +
-    drawFrames([POSE_AWAY_A, POSE_AWAY_B, POSE_AWAY_A, POSE_AWAY_B], pal, {
-      scale: 3, className: "wp-sprite wp-walk wp-walk-n",
-    })
-  );
+ *  The shirt is the pod's, everything else is the run's. `hue` is the accent index the pod
+ *  colour allocator picked, so the garment and the ring can never disagree about the team. */
+function spriteOf(w: Cast, hue: number, brain: boolean): string {
+  const doll = dollOf(w.run_id, hue, { foreign: w.status === "foreign", brain });
+  return dollSvg(doll, "wp-sprite");
 }
 
 /** What this one can DO, read off its own definition file.
@@ -726,6 +592,13 @@ function faculties(w: Cast, rare: Map<string, number>): string {
     list.map((f) => `<i>${glyph(f!.id)}${esc(f!.label)}</i>`).join("") +
     `</span>`
   );
+}
+
+/** The accent's index in the hue ladder, for dressing the doll. The allocator hands back the CSS
+ *  variable (`var(--wp-h4)`), which is right for paint and useless for picking a garment. */
+function hueOf(accent: string): number {
+  const m = /--wp-h(\d)/.exec(accent);
+  return m ? Number(m[1]) : 1;
 }
 
 function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, rare: Map<string, number>): string {
@@ -773,13 +646,18 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
        injected on demand, so the engine can grant them with a class and the sheet dedupes the
        art to one body each. */
     `<span class="wp-ring">${draw(RING.grid, RING.pal, { scale: 3, outline: false })}</span>` +
-    `<span class="wp-body">${spriteOf(w, posture)}` +
+    `<span class="wp-body">${spriteOf(w, hueOf(accent), brain)}` +
     (stalled ? `<span class="wp-zzz">${draw(SNOOZE.grid, SNOOZE.pal, { scale: 2, outline: false })}</span>` : "") +
     `<span class="wp-hi">${drawFrames([WAVE_A, WAVE_B], WAVE_PAL, { scale: 2, className: "wp-wavehand" })}</span>` +
     `<span class="wp-bang">${draw(BANG.grid, BANG.pal, { scale: 3 })}</span>` +
     `</span>` +
+    /* The idle clock rides the plate ONLY while the run is alive. A finished run is not idle,
+       it is OVER — "idle 153h" haunting a desk for a week was the loudest word on a quiet floor,
+       counting time nobody is waiting through. */
     `<span class="wp-tag">${esc(clip(w.name, 16))}` +
-    (w.idle_seconds >= 30 ? `<i>${esc(shortDuration(w.idle_seconds))}</i>` : "") +
+    (w.status === "running" && w.idle_seconds >= 30
+      ? `<i>${esc(shortDuration(w.idle_seconds))}</i>`
+      : "") +
     `</span>` +
     faculties(w, rare) +
     `</div>`
@@ -947,10 +825,12 @@ function money(total: number): string {
  *  carry their own words on hover, and the stamps are already words), and the whole thing is one
  *  line thin enough that the floor is the biggest thing on screen at any panel width. */
 function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): string {
-  const when = new Date(atMillis(state.at)).toLocaleTimeString();
   const chip = (status: string, n: number, word: string, colour: string) =>
     n ? `<span class="wp-chip" style="--mark:${colour}">${markOf(status)}<b>${n}</b> ${word}</span>` : "";
   const projects = t.projects.length === 1 ? esc(t.projects[0]) : `${t.projects.length} projects`;
+  /* No clock. It showed the SNAPSHOT's time and never ticked, so it read as a frozen wall clock —
+     wrong twice a minute and alarming the rest of the time. The snapshot's age already shows as
+     motion (a live floor moves); a number that only ever looks stopped earns nothing. */
   return (
     `<header class="wp-hud">` +
     `<span class="wp-sign"><span class="wp-sign-name">The team</span>` +
@@ -958,15 +838,14 @@ function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): strin
     chip("running", t.running, WORDS.running, "var(--wp-ok)") +
     chip("error", t.error, WORDS.error, "var(--wp-bad)") +
     chip("held", t.idle, WORDS.held, "var(--wp-dim)") +
-    /* The other four chips read "11 on", "1 error", "1 held" — a number and a WORD. This one was
-       a bare envelope and a number, so the only count on the strip nobody could name was the one
-       whose glyph is smallest. It says what it counts. */
+    /* The other chips read "11 on", "1 error" — a number and a WORD. This one says what it
+       counts too, and carries the long form on its title so the strip stays one line. */
     (mail
-      ? `<span class="wp-chip">${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b> ` +
+      ? `<span class="wp-chip" title="Agent-to-agent messages in this snapshot">` +
+        `${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b> ` +
         `${mail === 1 ? "note" : "notes"}</span>`
       : "") +
     `<span class="wp-chip wp-spend">${money(t.cost)}</span>` +
-    `<span class="wp-clock">${esc(when)}</span>` +
     `</header>`
   );
 }
@@ -991,5 +870,7 @@ export function renderScene(state: TeamState): string {
     hud(state, t, list.length) +
     survey(WORLD) +
     `</div>`;
-  return `<div class="wp">${closeSheet()}${body}</div>`;
+  // Two defs blocks: the Kenney atlas (tiles + dolls) and the pixel sheet (marks, rings, UI
+  // glyphs — the small shared vocabulary both panels draw).
+  return `<div class="wp">${atlasDefs()}${closeSheet()}${body}</div>`;
 }

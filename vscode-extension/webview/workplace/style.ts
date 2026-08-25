@@ -56,7 +56,7 @@ body {
   --wp-line: color-mix(in srgb, var(--wp-fg) 26%, var(--wp-bg));
   /* A room nobody is in. A VEIL rather than an absent glow: in a light theme "no light" left the
      empty room the BRIGHTEST thing on screen, so occupancy read backwards. */
-  --wp-shut: color-mix(in srgb, var(--wp-ink) 34%, transparent);
+  --wp-shut: color-mix(in srgb, var(--wp-ink) 18%, transparent);
   --wp-plate: color-mix(in srgb, var(--wp-fg) 82%, var(--wp-bg));
   --wp-paper: color-mix(in srgb, #f3efe4 82%, var(--wp-bg));
   --wp-chrome: color-mix(in srgb, var(--wp-bg) 92%, var(--wp-fg));
@@ -151,30 +151,20 @@ body {
   --l-lamp: var(--wp-h3);
   --l-tint: var(--l-lamp);
   --l-mix: 0%;
-  /* Night. Strong pools on a genuinely dark floor. */
-  --l-0: 36%;
-  --l-1: 20%;
-  --l-2: 7%;
-  --l-edge: color-mix(in srgb, var(--wp-ink) 30%, transparent);
-  --l-unlit: color-mix(in srgb, var(--wp-ink) 58%, transparent);
-  --l-ao: color-mix(in srgb, var(--wp-ink) 50%, transparent);
-  /* A SHADOW IS A FRACTION OF THE LIGHT ON THE SURFACE IT LANDS ON, NEVER A FIXED INK.
-     This was '--wp-ink' at 44%, and '--wp-ink' is #14101c — the same near-black as an UNLIT room's
-     floor. Measured under a potted tree in a dark room: floor 0.079 luminance, its shade 0.074.
-     Five thousandths. A shadow painted in the floor's own colour is invisible by construction, and
-     that is why the indoor plants read as standing on nothing while the same code outdoors read
-     fine: grass is at 0.28, so there was a gap for the ink to eat into.
-     So the ink goes to near-black and the STRENGTH moves to '.wp-shadow''s opacity, where it is a
-     RATIO. Black at alpha a leaves a surface at (1 - a) of whatever it was: the same visible
-     fraction on a dark room floor, on a lit pool, on a lawn — which is what shade does. The
-     residual hue is the theme's, kept because shade in the dark theme is cool, not grey. */
+  /* Night. The Kenney tiles carry their own value structure, so the light layer is a WASH over
+     finished art now, not the thing that makes the picture: pools a third of their old strength,
+     and the unlit veil a grey rather than a blackout — an empty room reads closed, never like a
+     hole in the building. */
+  --l-0: 14%;
+  --l-1: 8%;
+  --l-2: 3%;
+  --l-edge: color-mix(in srgb, var(--wp-ink) 10%, transparent);
+  --l-unlit: color-mix(in srgb, var(--wp-ink) 22%, transparent);
+  --l-ao: color-mix(in srgb, var(--wp-ink) 32%, transparent);
   --wp-drop: #05040d;
-  /* A BODY'S CONTACT PATCH IS THE SAME PHYSICAL THING AS A PROP'S, so it takes the same ratio.
-     It cannot take it the same WAY: the patch is a CSS box under the sprite, not a node in the
-     map's shade layer, so its alpha has to be spelled on the colour rather than on a group. Same
-     number as '.wp-shadow.is-in' — a person and a plant standing on one floor casting two
-     different densities is exactly the collage this layer exists to avoid. */
-  --wp-foot: color-mix(in srgb, var(--wp-drop) 36%, transparent);
+  /* The one cast shade left on a body: a soft contact patch, because a DOM sprite floats over
+     the map and needs a toe-hold the baked art cannot give it. */
+  --wp-foot: color-mix(in srgb, var(--wp-drop) 26%, transparent);
 
   --stamp-ink: var(--wp-fg);
   --stamp-quiet: var(--wp-dim);
@@ -187,6 +177,9 @@ body {
   height: 100vh;
   padding: 3px;
   gap: 0;
+  /* Inherited by every svg in the tree, so the Kenney art upscales hard-edged everywhere —
+     the map, the dolls, the defs — not only inside the stagebox. */
+  image-rendering: pixelated;
 }
 
 /* A light theme has to flip the tint dark, or every team colour pastels out against cream. */
@@ -243,16 +236,14 @@ body.vscode-high-contrast-light .wp {
      ink on a light substrate, so copying a night value across is how the shadow ends up either
      invisible or a black bar. */
   --l-lamp: var(--wp-h5);
-  --l-0: 30%;
-  --l-1: 17%;
-  --l-2: 6%;
-  --l-edge: color-mix(in srgb, #2b3348 15%, transparent);
-  --l-unlit: color-mix(in srgb, #2b3348 30%, transparent);
-  --l-ao: color-mix(in srgb, #232a3d 30%, transparent);
-  /* Near-black with the theme's own cool bias, for the same reason as the dark theme: the ink
-     stops carrying the strength so that the strength can be a ratio of the surface. */
+  --l-0: 12%;
+  --l-1: 7%;
+  --l-2: 3%;
+  --l-edge: color-mix(in srgb, #2b3348 8%, transparent);
+  --l-unlit: color-mix(in srgb, #2b3348 18%, transparent);
+  --l-ao: color-mix(in srgb, #232a3d 22%, transparent);
   --wp-drop: #060a14;
-  --wp-foot: color-mix(in srgb, var(--wp-drop) 28%, transparent);
+  --wp-foot: color-mix(in srgb, var(--wp-drop) 22%, transparent);
 }
 
 /* ── the window ────────────────────────────────────────────────────────────────────────────
@@ -279,7 +270,10 @@ body.vscode-high-contrast-light .wp {
   top: 0;
   transform-origin: 0 0;
   image-rendering: pixelated;
-  will-change: transform;
+  /* NO will-change. Promoted, the stage rasters once at whatever scale Chromium picks and the
+     camera's scale() then stretches that RASTER — measured as the whole map going bilinear-soft
+     at zoom 2 while the HTML dolls beside it stayed crisp. Un-promoted, a scale change
+     re-rasters the visible tiles at the true scale and every source pixel stays square. */
 }
 /* The grounds run past the world, so the map paints outside its own box on purpose. */
 .wp-map { position: absolute; inset: 0; display: block; overflow: visible; }
@@ -339,7 +333,10 @@ body.vscode-high-contrast-light .wp {
   font-size: 10px;
   background: var(--wp-chrome);
   border-bottom: 1px solid var(--wp-line);
-  pointer-events: none;
+  /* The strip is CHROME, and chrome eats its own clicks: with pointer-events none a click on
+     "2 notes" fell through to the map behind it, and a double-click there silently ran the
+     whole-floor zoom — the "silent zoom jump" finding. */
+  pointer-events: auto;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -348,8 +345,7 @@ body.vscode-high-contrast-light .wp {
 .wp-sign-sub { color: var(--wp-dim); font-size: 9px; }
 .wp-chip { display: inline-flex; align-items: center; gap: 3px; color: var(--wp-dim); }
 .wp-chip b { color: var(--wp-fg); }
-.wp-spend { color: var(--wp-dim); }
-.wp-clock { margin-left: auto; color: var(--wp-dim); font-size: 9px; }
+.wp-spend { color: var(--wp-dim); margin-left: auto; }
 
 /* ── the survey panel ─────────────────────────────────────────────────────────────────────
    The camera takes the overview away; this gives it back, and gives the reader the camera.
@@ -445,10 +441,7 @@ body.vscode-high-contrast-light .wp {
 .wp-rule[data-step="3"] .wp-rungs i:nth-child(-n+3),
 .wp-rule[data-step="4"] .wp-rungs i:nth-child(-n+4),
 .wp-rule[data-step="5"] .wp-rungs i:nth-child(-n+5),
-.wp-rule[data-step="6"] .wp-rungs i:nth-child(-n+6),
-.wp-rule[data-step="7"] .wp-rungs i:nth-child(-n+7),
-.wp-rule[data-step="8"] .wp-rungs i:nth-child(-n+8),
-.wp-rule[data-step="9"] .wp-rungs i:nth-child(-n+9) {
+.wp-rule[data-step="6"] .wp-rungs i:nth-child(-n+6) {
   background: color-mix(in srgb, var(--wp-fg) 60%, var(--wp-bg));
 }
 .wp-rule[data-step="1"] .wp-rungs i:nth-child(1),
@@ -456,10 +449,7 @@ body.vscode-high-contrast-light .wp {
 .wp-rule[data-step="3"] .wp-rungs i:nth-child(3),
 .wp-rule[data-step="4"] .wp-rungs i:nth-child(4),
 .wp-rule[data-step="5"] .wp-rungs i:nth-child(5),
-.wp-rule[data-step="6"] .wp-rungs i:nth-child(6),
-.wp-rule[data-step="7"] .wp-rungs i:nth-child(7),
-.wp-rule[data-step="8"] .wp-rungs i:nth-child(8),
-.wp-rule[data-step="9"] .wp-rungs i:nth-child(9) {
+.wp-rule[data-step="6"] .wp-rungs i:nth-child(6) {
   background: var(--wp-fg);
 }
 .wp-rungs i { transition: background 120ms linear; }
@@ -507,20 +497,18 @@ body.vscode-high-contrast-light .wp {
 .wp-cam:focus-visible { outline: 1px solid var(--wp-fg); outline-offset: 1px; }
 .wp-cam-mark { width: 9px; height: 9px; flex: 0 0 auto; fill: currentColor; display: block; }
 
-/* FOLLOWING is the resting truth, so it is quiet. HOLDING is a state the reader put the view
-   into and may have forgotten about, so it lights up in the accent the rest of the building
-   uses for attention, and it BREATHES on the building's own beat — the one control on screen
-   that asks to be pressed. */
-.wp-cam-follow .wp-off { display: none; }
-.wp-view[data-follow="0"] .wp-cam-follow .wp-on { display: none; }
-.wp-view[data-follow="0"] .wp-cam-follow .wp-off { display: inline; }
-.wp-view[data-follow="0"] .wp-cam-follow {
+/* THE SURVEY IS THE RESTING TRUTH, so the latch is quiet by default and lights only while the
+   camera is genuinely chasing the work — an ACTIVE state the reader opted into, said in the
+   accent, held steady. The old breathing amber "RESUME FOLLOW" was right when following was the
+   default; as chrome on a still floor it was the loudest thing on screen. */
+.wp-cam-follow .wp-on { display: none; }
+.wp-view[data-follow="1"] .wp-cam-follow .wp-on { display: inline; }
+.wp-view[data-follow="1"] .wp-cam-follow .wp-off { display: none; }
+.wp-view[data-follow="1"] .wp-cam-follow {
   color: var(--wp-bg);
   background: var(--wp-h3);
   border-color: var(--wp-h3);
-  animation: wp-latch calc(var(--beat) * 2) ease-in-out infinite;
 }
-@keyframes wp-latch { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.22); } }
 
 /* ── pulled back ──────────────────────────────────────────────────────────────────────────
    Below one, a nameplate held at constant SCREEN size is wider than the room the person stands
@@ -533,13 +521,21 @@ body.vscode-high-contrast-light .wp {
 .wp-view[data-far="1"] .wp-kit { display: none; }
 .wp-view[data-far="1"] .wp-can { opacity: 0; pointer-events: none; }
 .wp-view[data-far="1"] .wp-plaque {
-  font-size: 6px;
-  padding: 0 2px;
+  /* Pulled back, the plaques are the ONLY words left on the plan — the tags, bubbles and kits
+     are all shed — so this is where the type budget goes, not where it is cut. 6px was chosen
+     to FIT the narrowest room and measured unreadable at the whole-floor rung; a plan whose one
+     job is "which room is which" signs its rooms in plan type instead. */
+  font-size: 9px;
+  padding: 1px 3px;
   letter-spacing: 0;
   /* A room pulled back is short of WIDTH, never of height, so a sign that wraps says more
-     than one that ellipses: "PRODUCTION & MAKERS" over two lines beats "PRODUCTIO...". */
+     than one that ellipses: "PRODUCTION & MAKERS" over two lines beats "PRODUCTIO...". And a
+     NARROW room (the web yard is a five-tile strip) caps its sign below one readable word, so
+     the cap takes a floor: at plan scale a label overflowing its slip of ground is how any map
+     labels a narrow feature. */
+  max-width: max(72px, calc(var(--rw, 8) * 32px * var(--z, 1)));
   white-space: normal;
-  line-height: 1.1;
+  line-height: 1.15;
   text-align: center;
 }
 
@@ -583,16 +579,59 @@ body.vscode-high-contrast-light .wp {
 
 /* What each state does to the light. Only the states that WANT something take the room's colour
    over; work in progress keeps the lamp warm, or a floor of eleven busy agents would be eleven
-   blue rooms and the one that needs a person would not stand out at all. */
-.wp-lit[data-voice="error"] { --l-tint: var(--vscode-charts-red, #f14c4c); --l-mix: 100%; }
-.wp-lit[data-voice="asked"] { --l-tint: var(--vscode-charts-blue, #4daafc); --l-mix: 82%; }
-.wp-lit[data-voice="held"] { --l-tint: var(--vscode-charts-yellow, #d7ba7d); --l-mix: 55%; }
+   blue rooms and the one that needs a person would not stand out at all.
+
+   A voiced room also runs a HOTTER alpha ladder than the resting lamp. At the lamp's own 14/8/3
+   the voice was only a hue swap inside a wash that was already faint — forcing a room to error
+   moved the whole-floor mean by two parts in 255, i.e. the state existed and could not be seen.
+   The purpose of this layer is to answer "who is in trouble" ACROSS THE MAP, so a state that
+   wants a person takes the room, not a tenth of it. ERROR burns loudest, the rest step down in
+   urgency; the ramp SHAPE survives (bands still decrease, the far corners stay shade), which is
+   what keeps a hot room reading as a room on fire rather than a painted rectangle. */
+.wp-lit[data-voice="error"] {
+  --l-tint: var(--vscode-charts-red, #f14c4c); --l-mix: 100%;
+  --l-0: 58%; --l-1: 42%; --l-2: 26%;
+}
+.wp-lit[data-voice="asked"] {
+  --l-tint: var(--vscode-charts-blue, #4daafc); --l-mix: 88%;
+  --l-0: 46%; --l-1: 32%; --l-2: 18%;
+}
+.wp-lit[data-voice="held"] {
+  --l-tint: var(--vscode-charts-yellow, #d7ba7d); --l-mix: 74%;
+  --l-0: 38%; --l-1: 26%; --l-2: 14%;
+}
 /* FINISHED earns more of the room than it used to, because it now means something different: it
    fires only when EVERY run in a department is done, not when any one of them is. At 46% — a mix
    tuned back when one done agent could trigger it — it was a barely-warmer grey, invisible at the
    scale somebody actually asks "is anything still running?" at. It is a rare, unanimous, whole-
    room fact now, and it is the only thing at whole-floor scale that carries it. */
-.wp-lit[data-voice="finished"] { --l-tint: var(--vscode-charts-green, #89d185); --l-mix: 78%; }
+.wp-lit[data-voice="finished"] {
+  --l-tint: var(--vscode-charts-green, #89d185); --l-mix: 82%;
+  --l-0: 40%; --l-1: 28%; --l-2: 15%;
+}
+
+/* THE RIM — the room's floor outlined in the voice's own colour, held at SCREEN width like the
+   labels are. The pool is area and area shrinks with the map; an edge does not, so at the
+   whole-floor rung — where a tile is eight device pixels and any wash is texture — the rim is
+   the mark that still says WHICH room wants a person. Constant screen width for the same reason
+   the plaque is: it is read, not looked at. */
+.wp-voice-rim {
+  fill: none;
+  stroke: var(--l-tint);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 520ms cubic-bezier(.33, 0, .2, 1);
+}
+.wp-lit[data-voice] .wp-voice-rim { opacity: .95; }
+.wp-lit[data-voice="error"] .wp-voice-rim {
+  animation: wp-rim-alarm calc(var(--beat) * 2 / 3) ease-in-out infinite;
+}
+@keyframes wp-rim-alarm {
+  0%, 100% { opacity: .45; }
+  50% { opacity: 1; }
+}
 
 /* And the fixture itself differs by trade: a machine room burns colder than a library. The old
    flat wash carried this and it was worth keeping — it is most of what tells two lit rooms apart
@@ -638,53 +677,13 @@ body.vscode-high-contrast-light .wp {
 /* Every wall in the building, casting into the floor beside it. ONE path for the whole world, so
    the overlaps at a corner paint once rather than stacking into a black notch. */
 .wp-ao { fill: var(--l-ao); pointer-events: none; }
-/* A prop's own silhouette, lying where the light is not.
-   NOT .wp-cast — that class is the ACTORS container the engine re-binds every refresh, and a
-   shadow wearing it appears earlier in the document, so querySelector('.wp-cast') found a desk's
-   shadow instead of the cast. */
-.wp-drop { pointer-events: none; }
 
-/* ALL OF IT, IN ONE LAYER, AND THE ALPHA ON THE GROUP.
-   Two things follow from that and neither is available to a shadow drawn per prop.
-
-   It is UNDER everything that stands up. Shade used to be emitted inside each room's own group,
-   which meant the document read 'roomA casts, roomA bodies, roomB casts, …, grounds casts, grounds
-   bodies' — so the grounds' 243 shadows, being last, painted over every prop in the building and
-   over each other's neighbours. One group between the floor and the furniture and a shadow is
-   occluded by whatever is standing in front of it, for nothing.
-
-   And overlaps UNION instead of stacking. The children are opaque and the group carries the alpha,
-   so a rasteriser composites the silhouettes together first and dims the union ONCE: two canopies
-   crossing are exactly as dark as one canopy, which is how the copse stops fusing into a slab. The
-   old code paid for the stacking by making every shadow on the site paler — a whole lawn dimmed to
-   make its overlaps survivable — so a single shadow can now be as dark as a single shadow wants.
-
-   The numbers are RATIOS of the surface's own luminance (the ink is near-black), measured on the
-   rendered map rather than chosen: indoors a lamp throws a hard shadow, outdoors the sky fills it
-   in. 'isolation' so the group composites against the map and not the panel behind it.
-
-   TUNED AT THE ZOOM SOMEBODY ACTUALLY LOOKS AT, which is not the zoom it is easiest to measure at.
-   An independent read of .30 called the interior shade "clear at 3x, marginal at whole floor" — and
-   whole floor is precisely the rung a screenshot of "is anything on fire" gets taken at, where a
-   room's shadow is three cells of an eight-pixel tile. A ratio that reads at arm's length has to be
-   bigger than one that reads with your nose against it. Raised until an unlit room's floor loses a
-   third of its light (0.079 -> 0.050, a shade you can see at a glance) and stopped well short of
-   the 43% that was measured as a HOLE in the floor rather than a shadow on it. */
-.wp-shadow { isolation: isolate; pointer-events: none; }
-.wp-shadow.is-in { opacity: .36; }
-.wp-shadow.is-out { opacity: .20; }
-body.vscode-light .wp .wp-shadow.is-in,
-body.vscode-high-contrast-light .wp .wp-shadow.is-in { opacity: .28; }
-/* The light theme's outdoor shade was the faintest of the four combinations by a clear margin and
-   read as a different decision rather than as the same one under a different sky. Same shade in
-   both themes, give or take what a brighter substrate needs. */
-body.vscode-light .wp .wp-shadow.is-out,
-body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
 
 /* The rug is bordered by a stroke rather than by its own tile: a pattern repeats the border in
    every cell and the floor comes out a chequerboard, which is louder than the carpet it replaced. */
 .wp-rug { fill: none; stroke: var(--t-rug-hi); stroke-width: 1; }
-.wp-struct { fill: var(--t-wall); }
+/* The roof's rim, in the pack's own parapet pink. */
+.wp-parapet { fill: none; stroke: #e0a89b; stroke-width: 3; opacity: .85; }
 .wp-core { animation: wp-core calc(var(--beat) * 1.5) ease-in-out infinite; transform-origin: center; }
 @keyframes wp-core { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
 
@@ -763,7 +762,7 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
      its width computable: the room's own width on screen, tiles by the tile size by the zoom.
      A flat cap in world pixels was right at one scale and wrong at every other, and pulled back
      it let three department signs sit on top of each other over rooms 64px wide. */
-  max-width: calc(var(--rw, 8) * 24px * var(--z, 1));
+  max-width: calc(var(--rw, 8) * 32px * var(--z, 1));
   font-size: 7px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -825,17 +824,50 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
   position: absolute;
   left: 0;
   bottom: 0;
-  width: 36px;
-  height: 54px;
+  width: 32px;
+  height: 32px;
   transform: translateX(-50%) rotate(var(--lean, 0deg));
   transform-origin: 50% 100%;
 }
-.wp-body .wp-sprite { position: absolute; left: 0; bottom: 0; }
-.wp-actor.face-left .wp-body .wp-sprite { transform: scaleX(-1); }
+/* THE DOLL. One composed drawing per person; posture and gait are the ELEMENT's. Every verb
+   this sprite has composes through custom properties on ONE transform — the face flip, the walk
+   waddle, the seated tuck, the lounge roll — because two rules writing the transform on the
+   same element silently erase each other. */
+.wp-body .wp-doll {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  transform: scaleX(var(--fx, 1)) translate(var(--wx, 0px), var(--wy, 0px)) rotate(var(--wr, 0deg));
+  transform-origin: 50% 100%;
+}
+.wp-actor.face-left .wp-body .wp-doll { --fx: -1; }
+
+/* Seated: tucked up toward the desk it works at, so body and workstation read as one station. */
+.wp-actor[data-posture="sit"]:not(.is-walking) .wp-body .wp-doll,
+.wp-actor[data-posture="slump"]:not(.is-walking) .wp-body .wp-doll { --wy: -4px; }
+/* FINISHED lies down: the one posture change that reads at every rung is the aspect flip, so
+   the figure ROLLS onto the couch. A quarter turn keeps every source pixel square. */
+.wp-actor[data-posture="lounge"]:not(.is-walking) .wp-body .wp-doll {
+  --wr: 90deg;
+  --wy: -3px;
+  --wx: 2px;
+}
+
+/* THE WALK is a rocking waddle on the engine's own footfall counter — the roguelike gait for
+   front-facing art. The first cut flipped ±5° on EVERY footfall: at 3.6 tiles/s that is a 7Hz
+   wobble, faster than an eye (or a video model — it reported "static sprites gliding") can
+   resolve, so the gait has to live at HALF the footfall rate: lean left across one stride, lean
+   right across the next, with the dip on each passing beat. ~1.8Hz at full pace, and the lean is
+   wide enough to read at a glance. Driven by data-step so it stays keyed to DISTANCE walked. */
+.wp-actor.is-walking[data-step="0"] .wp-body .wp-doll { --wr: -7deg; }
+.wp-actor.is-walking[data-step="1"] .wp-body .wp-doll { --wr: -4deg; --wy: 1px; }
+.wp-actor.is-walking[data-step="2"] .wp-body .wp-doll { --wr: 7deg; }
+.wp-actor.is-walking[data-step="3"] .wp-body .wp-doll { --wr: 4deg; --wy: 1px; }
 
 /* The head of the company stands taller. The cheapest true thing the picture can say about the
-   one agent everybody else reports to, and it needs no label to say it. */
-.wp-actor.is-brain .wp-body { transform: translateX(-50%) scale(1.3) rotate(var(--lean, 0deg)); }
+   one agent everybody else reports to, and it needs no label to say it. 1.5, not 1.3: at 2x a
+   half step keeps the brain's source pixels a whole three device pixels wide. */
+.wp-actor.is-brain .wp-body { transform: translateX(-50%) scale(1.5) rotate(var(--lean, 0deg)); }
 .wp-actor.is-brain::before {
   content: "";
   position: absolute;
@@ -861,10 +893,10 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
      nobody was standing on. Thrown down and to the right, the same way every wall and every prop
      in this building throws. */
   position: absolute;
-  left: -8px;
-  bottom: -5px;
-  width: 32px;
-  height: 8px;
+  left: -10px;
+  bottom: -4px;
+  width: 26px;
+  height: 7px;
   background: var(--wp-foot);
   /* A cast shadow is a drawing, never a target. It is 32px wide against a 36px body and it sits
      down and to the RIGHT of the person it belongs to, so it overhangs the neighbour's tool
@@ -875,72 +907,42 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
     6px 0, 24px 0, 24px 2px, 28px 2px, 28px 6px, 24px 6px, 24px 8px,
     6px 8px, 6px 6px, 2px 6px, 2px 2px, 6px 2px);
 }
-.wp-actor.is-brain .wp-shade { width: 40px; left: -12px; }
+.wp-actor.is-brain .wp-shade { width: 34px; left: -14px; }
 /* A seated body's contact with the floor is its feet and the seat under it, not a standing
    footprint — narrower, and pulled back under the chair rather than out in front of it. */
 .wp-actor[data-posture="sit"] .wp-shade,
-.wp-actor[data-posture="slump"] .wp-shade { width: 26px; left: -6px; bottom: -3px; }
-.wp-actor[data-posture="lounge"] .wp-shade { width: 34px; left: -10px; bottom: -3px; }
+.wp-actor[data-posture="slump"] .wp-shade { width: 22px; left: -8px; bottom: -2px; }
+.wp-actor[data-posture="lounge"] .wp-shade { width: 30px; left: -12px; bottom: -2px; }
 
-/* ── the sprite frames ─────────────────────────────────────────────────────────────────────
-   The resting sets are THREE frames now — pose, counter-pose, BLINK — and every waking cycle
-   runs on one long period: four working sub-beats and then the lids, staggered per person by
-   the same head start everything else carries. Held frames, uneven timing: a cycle that spends
-   most of its time still and then does ONE thing is what reads as alive; even flipping reads as
-   a metronome. The keyframes hold each value to the next stop (steps easing), because sprite
-   frames do not tween. */
+/* The wave hand still runs on the two-frame flip. */
 .wp-f { opacity: 0; }
-.wp-stand .wp-f0 { opacity: 1; }
-/* Typing at the desk: the two work frames alternate with a long hold on the lean-in, and the
-   blink lands at the top of the cycle. */
-.wp-actor[data-status="running"] .wp-stand .wp-f0 { animation: wp-t0 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-t1 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor[data-status="running"] .wp-stand .wp-f2 { animation: wp-t2 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
-@keyframes wp-t0 { 0% { opacity: 1; } 15.5% { opacity: 0; } 25% { opacity: 1; } 40.5% { opacity: 0; } 50% { opacity: 1; } 65.5% { opacity: 0; } 75% { opacity: 1; } 90.5% { opacity: 0; } 100% { opacity: 0; } }
-@keyframes wp-t1 { 0% { opacity: 0; } 15.5% { opacity: 1; } 25% { opacity: 0; } 40.5% { opacity: 1; } 50% { opacity: 0; } 65.5% { opacity: 1; } 75% { opacity: 0; } 90.5% { opacity: 1; } 94% { opacity: 0; } 100% { opacity: 0; } }
-@keyframes wp-t2 { 0% { opacity: 0; } 94% { opacity: 1; } 100% { opacity: 1; } }
 /* The old pair, kept for the wave hand. */
 @keyframes wp-fa { 0%, 62% { opacity: 1; } 63%, 100% { opacity: 0; } }
 @keyframes wp-fb { 0%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
-/* A body that is awake but not typing still BLINKS — the one accent that says a still sprite is
-   a person and not a prop of one. The slump never fires it: its set has no blink frame, and its
-   eyes are already shut. */
-.wp-actor:not([data-status="running"])[data-posture="stand"] .wp-stand .wp-f0,
-.wp-actor:not([data-status="running"])[data-posture="sit"] .wp-stand .wp-f0 { animation: wp-b0 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor:not([data-status="running"])[data-posture="stand"] .wp-stand .wp-f2,
-.wp-actor:not([data-status="running"])[data-posture="sit"] .wp-stand .wp-f2 { animation: wp-t2 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
-@keyframes wp-b0 { 0% { opacity: 1; } 94% { opacity: 0; } 100% { opacity: 0; } }
-/* AT EASE BREATHES; STOPPED DOES NOT. A body on a couch takes two slow breaths and one drowsy
-   blink per cycle — a fifth of the working tempo, on the building's own beat like everything
-   else. HELD deliberately gets nothing at all: a worker the registry says has stopped stops,
-   and absence of motion is the loudest way a picture can say it. */
-/* The lounger lies SIDEWAYS: sixteen columns of sprite against everybody else's ten, wider than
-   the 36px body box, so it is re-centred — and only the resting sprite, because the moment they
-   get up and walk they are an ordinary upright body again. */
-.wp-actor[data-posture="lounge"] .wp-body .wp-stand { left: -6px; }
-.wp-actor[data-posture="lounge"] .wp-stand .wp-f0 { animation: wp-r0 calc(var(--beat) * 5) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor[data-posture="lounge"] .wp-stand .wp-f1 { animation: wp-r1 calc(var(--beat) * 5) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor[data-posture="lounge"] .wp-stand .wp-f2 { animation: wp-r2 calc(var(--beat) * 5) steps(1, end) var(--d, 0s) infinite; }
-@keyframes wp-r0 { 0% { opacity: 1; } 25% { opacity: 0; } 50% { opacity: 1; } 75% { opacity: 0; } 100% { opacity: 0; } }
-@keyframes wp-r1 { 0% { opacity: 0; } 25% { opacity: 1; } 50% { opacity: 0; } 75% { opacity: 1; } 97% { opacity: 0; } 100% { opacity: 0; } }
-@keyframes wp-r2 { 0% { opacity: 0; } 97% { opacity: 1; } 100% { opacity: 1; } }
-/* ── the walks ─────────────────────────────────────────────────────────────────────────────
-   Three sprites, one visible, picked by the leg's direction; four footfall phases driven by the
-   engine on distance walked. The vertical gaits carry their two frames twice over, so the same
-   step attribute drives all three. */
-.wp-walk { visibility: hidden; }
-.wp-actor.is-walking .wp-stand { visibility: hidden; }
-.wp-actor.is-walking[data-dir="s"] .wp-walk-s { visibility: visible; }
-.wp-actor.is-walking[data-dir="n"] .wp-walk-n { visibility: visible; }
-.wp-actor.is-walking[data-dir="x"] .wp-walk-x,
-.wp-actor.is-walking:not([data-dir]) .wp-walk-x { visibility: visible; }
-.wp-actor.is-walking[data-step="0"] .wp-walk .wp-f0 { opacity: 1; }
-.wp-actor.is-walking[data-step="1"] .wp-walk .wp-f1 { opacity: 1; }
-.wp-actor.is-walking[data-step="2"] .wp-walk .wp-f2 { opacity: 1; }
-.wp-actor.is-walking[data-step="3"] .wp-walk .wp-f3 { opacity: 1; }
-.wp-actor.is-walking:not([data-step]) .wp-walk .wp-f0 { opacity: 1; }
 /* A body off the ground throws a smaller, tighter shadow. */
 .wp-actor.is-walking .wp-shade { transform: scaleX(.82); }
+
+
+/* AT REST THE WORLD IS A PLACE, NOT A DASHBOARD. A nameplate stays up only for the states a
+   reader is actually waiting on — running work, an error, a question, a stall. A finished, a
+   ready and a visiting body carry no plate until the pointer asks; the posture and the seat
+   already say everything their plate said, and thirty resting plates were most of what made the
+   floor read as an ops board with sprites on it. */
+.wp-actor[data-attention="finished"] .wp-tag,
+.wp-actor[data-attention="ready"] .wp-tag,
+.wp-actor[data-attention="not-ours"] .wp-tag { display: none; }
+.wp-actor[data-attention="finished"]:hover .wp-tag,
+.wp-actor[data-attention="ready"]:hover .wp-tag,
+.wp-actor[data-attention="not-ours"]:hover .wp-tag,
+.wp-actor[data-attention="finished"]:focus-visible .wp-tag,
+.wp-actor[data-attention="ready"]:focus-visible .wp-tag,
+.wp-actor[data-attention="not-ours"]:focus-visible .wp-tag,
+.wp-actor[data-attention="finished"].is-met .wp-tag,
+.wp-actor[data-attention="ready"].is-met .wp-tag,
+.wp-actor[data-attention="not-ours"].is-met .wp-tag,
+.wp-actor[data-attention="finished"].is-picked .wp-tag,
+.wp-actor[data-attention="ready"].is-picked .wp-tag,
+.wp-actor[data-attention="not-ours"].is-picked .wp-tag { display: block; }
 
 .wp-tag {
   position: absolute;
@@ -991,13 +993,21 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
      things lying on the desk. Same size, a quarter of the weight. */
   position: absolute;
   left: 0;
-  top: var(--belt, 17px);
+  top: var(--belt, 15px);
   transform: translateX(-50%);
   display: flex;
   gap: 2px;
-  /* LIVE. It carried a title and a pointer cursor while pointer-events said none, so it offered
-     an affordance it could never honour — the tooltip never fired and the cursor never changed.
-     A click on one now reaches the same handler a click on the person does. */
+  /* HOVER-ONLY. Three framed marks under every one of forty-six people was a floor of tiny
+     buttons; the tools now come out when the pointer meets the person, exactly like the full
+     kit. Opacity rather than display, so the reveal can fade and the layout never jumps. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+.wp-actor:hover .wp-can,
+.wp-actor:focus-visible .wp-can,
+.wp-actor.is-met .wp-can {
+  opacity: 1;
   pointer-events: auto;
 }
 /* The back rank has no nameplate under its boots, so its belt sits right at them.
@@ -1070,7 +1080,7 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
      Multiplied by --inv because left is in the STAGE coordinate space, which the camera
      scales, while the clamp is a distance on the SCREEN. */
   left: calc(var(--sx, 0px) * var(--inv, 1));
-  bottom: 66px;
+  bottom: 44px;
   transform: translate(-50%, 3px) scale(var(--inv, 1));
   transform-origin: 50% 100%;
   width: 132px;
@@ -1114,21 +1124,21 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
    belongs to — and the speech layout's reserved rectangles, which are the only reason two labels
    are never drawn over each other, were computed from the same stale constants. --head is set per
    actor from status.ts HEAD, and the layout reads the identical number off data-head. */
-.wp-actor[data-label="up"] .wp-tag { top: auto; bottom: calc(var(--head, 54px) + 4px); }
-.wp-actor[data-label="up"] .wp-say { bottom: calc(var(--head, 54px) + 42px); }
-.wp-actor[data-label="up"] .wp-mark { bottom: calc(var(--head, 54px) + 30px); }
-.wp-actor[data-label="up"] .wp-kit { top: auto; bottom: calc(var(--head, 54px) + 46px); }
+.wp-actor[data-label="up"] .wp-tag { top: auto; bottom: calc(var(--head, 32px) + 4px); }
+.wp-actor[data-label="up"] .wp-say { bottom: calc(var(--head, 32px) + 40px); }
+.wp-actor[data-label="up"] .wp-mark { bottom: calc(var(--head, 32px) + 28px); }
+.wp-actor[data-label="up"] .wp-kit { top: auto; bottom: calc(var(--head, 32px) + 44px); }
 
 .wp-mark {
   position: absolute;
   left: 0;
-  bottom: var(--head, 54px);
+  bottom: var(--head, 32px);
   transform: translateX(-50%) scale(.5);
   transform-origin: 50% 100%;
   pointer-events: none;
 }
 /* The z's belong over the HEAD, so they follow it down when somebody sits. */
-.wp-zzz { position: absolute; left: 22px; bottom: calc(var(--head, 54px) - 10px); --mark: var(--wp-dim); }
+.wp-zzz { position: absolute; left: 14px; bottom: calc(var(--head, 32px) - 6px); --mark: var(--wp-dim); }
 
 /* Somebody has come over to say something. Both of them stop and turn to each other — a message
    that lands with nobody reacting is a note flying past a person rather than to one. */
@@ -1161,7 +1171,7 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
    pieces themselves are pixel art from the sheet; nothing here is a CSS shape. */
 
 /* The claim ring: picked up like a unit. Under the body, over its contact shade. */
-.wp-ring { position: absolute; left: -18px; bottom: -6px; display: none; pointer-events: none; }
+.wp-ring { position: absolute; left: -18px; bottom: -7px; display: none; pointer-events: none; }
 /* The same hard pixel shadow every sign in the building carries — it is what keeps one line of
    accent legible on any floor it lands on. */
 .wp-ring svg { filter: drop-shadow(1px 1px 0 var(--wp-ink)); }
@@ -1170,7 +1180,7 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
 
 /* The greeting: hovered, a character perks up and waves with its own hand. The hand rides the
    shoulder and swings on the sprite system's own two-frame flip. */
-.wp-hi { position: absolute; left: 21px; bottom: calc(var(--head, 54px) - 12px); display: none; pointer-events: none; }
+.wp-hi { position: absolute; left: 13px; bottom: calc(var(--head, 32px) - 8px); display: none; pointer-events: none; }
 .wp-actor.is-met .wp-hi { display: block; }
 .wp-hi .wp-f0 { opacity: 1; }
 .wp-hi .wp-f1 { opacity: 0; }
@@ -1192,7 +1202,7 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
   55% { transform: translateX(-50%) translateY(-6px) rotate(var(--lean, 0deg)) scale(.94, 1.08); }
   100% { transform: translateX(-50%) rotate(var(--lean, 0deg)) scale(1, 1); }
 }
-.wp-bang { position: absolute; left: 26px; bottom: calc(var(--head, 54px) + 4px); display: none; pointer-events: none; }
+.wp-bang { position: absolute; left: 16px; bottom: calc(var(--head, 32px) + 4px); display: none; pointer-events: none; }
 .wp-actor.is-poked .wp-bang { display: block; animation: wp-bang 760ms steps(2, end) 1 both; }
 @keyframes wp-bang {
   0% { opacity: 0; transform: translateY(4px); }
@@ -1218,9 +1228,6 @@ ${STAMP_CSS}
   .wp-lv-sway,
   .wp-lv-fan,
   .wp-actor.is-brain::before,
-  .wp-actor .wp-stand .wp-f0,
-  .wp-actor .wp-stand .wp-f1,
-  .wp-actor .wp-stand .wp-f2,
   .wp-actor.is-talking .wp-body,
   .wp-actor.is-met .wp-body,
   .wp-actor.is-poked .wp-body,
@@ -1233,11 +1240,8 @@ ${STAMP_CSS}
   .wp-hi .wp-f0 { opacity: 1; }
   .wp-hi .wp-f1 { opacity: 0; }
   .wp-actor.is-poked .wp-bang { opacity: 1; }
-  .wp-pool, .wp-shut, .wp-leaf, .wp-rungs i, .wp-fac { transition: none; }
+  .wp-pool, .wp-shut, .wp-leaf, .wp-rungs i, .wp-fac, .wp-can { transition: none; }
   .wp-lit .wp-pool { animation: none !important; }
-  .wp-stand .wp-f0 { opacity: 1; }
-  .wp-stand .wp-f1 { opacity: 0; }
-  .wp-stand .wp-f2 { opacity: 0; }
   .wp-lv-steam { opacity: 0; }
 }
 `;

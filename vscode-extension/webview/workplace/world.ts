@@ -28,8 +28,7 @@
  *  keyed to a department NAME, so a company file with different departments furnishes itself.
  */
 import type { TileId } from "./tiles";
-import { TILE_CELLS } from "./tiles";
-import { shadowReach } from "./light";
+import { footprint } from "./tiles";
 
 /* ── the measure ─────────────────────────────────────────────────────────────────────────────
    Every number here is in TILES. A bay is one back-wall prop, one desk under it and two standing
@@ -202,6 +201,9 @@ export interface World {
    *  furniture's footprint, so no route ever carries a body through a potted tree. Exposed for
    *  the placement probe. */
   shy: number[];
+  /** The street out of the gate: its top row, so the renderer can run it past the world's own
+   *  columns into the drawn grounds — a road that stops at the data's edge reads as a driveway. */
+  street: { y: number };
 }
 
 function hash32(text: string): number {
@@ -358,7 +360,7 @@ const LIVE_OF: Partial<Record<TileId, LiveId>> = {
 /** Things there is only ONE of in a building. A room asks for one and gets it if nobody already
  *  took it — which is the whole mechanism against "decorative filler repeats identically three
  *  times per row": the second room that wants a coffee machine does not get one. */
-const ONCE: TileId[] = ["coffee", "tank", "vending", "cooler", "fan", "globe", "ladder", "printer", "dish"];
+const ONCE: TileId[] = ["coffee", "tank", "vending", "cooler", "piano", "globe", "ladder", "printer", "dish", "stove", "mirror"];
 
 class Uniques {
   private taken = new Set<string>();
@@ -459,6 +461,23 @@ function furnish(
   restBanks = 1,
 ): void {
   const main = room.rects[0];
+  /* THE DOOR APPROACH IS SACRED, and every emitter checks it — not only the clutter pass.
+     Two rooms sealed themselves shut on a real roster and neither was clutter: the PLANT laid
+     between two couches claimed the cell south of itself as solid (its pot's floor space), and
+     the one-of-a-kind feature walking north off the couch row stopped exactly over the door's
+     inside approach. Both emitters ran before the old `forbidden` set even existed. A prop that
+     seals a department is worse than no prop at any position, so the door's whole column — and
+     the cell a leafy piece would claim beneath itself — is checked by everything placed here. */
+  const doorSafe = new Set<string>();
+  for (const d of room.doors) {
+    for (let k = -4; k <= 4; k++) {
+      doorSafe.add(d.x + ":" + (d.y + k));
+      doorSafe.add(d.x - 1 + ":" + (d.y + k));
+      doorSafe.add(d.x + 1 + ":" + (d.y + k));
+    }
+  }
+  const sealing = (x: number, y: number, tile: TileId): boolean =>
+    doorSafe.has(x + ":" + y) || (tile === "plant" && doorSafe.has(x + ":" + (y + 1)));
   // A recess deep enough to stand something in. The plan forms also emit a WING — two or three
   // rows, most of it wall — and treating that as an alcove put the room's one-of-a-kind prop
   // inside the masonry, outside every room, on the building's own mass.
@@ -538,8 +557,11 @@ function furnish(
       const cx = ix + i * BAY + 1;
       put(cx, seatY - 1, restKit[(i + bank + seed) % restKit.length]);
       // A low table between two seats, and greenery at the ends: the difference between a row of
-      // chairs and a place somebody would actually sit.
-      if (i > 0) put(cx - 1, seatY - 1, (i + bank + seed) % 2 === 0 ? "tableM" : "plant");
+      // chairs and a place somebody would actually sit. Never in the door's own column.
+      if (i > 0) {
+        const between: TileId = (i + bank + seed) % 2 === 0 ? "tableM" : "plant";
+        if (!sealing(cx - 1, seatY - 1, between)) put(cx - 1, seatY - 1, between);
+      }
       room.seats.push({
         x: cx,
         y: seatY,
@@ -611,7 +633,7 @@ function furnish(
       c++;
       if ((c * 7 + row * 3) % 4) continue;
       const cx = ix + i * BAY + (c % 3);
-      if (forbidden.has(cx + ":" + row)) continue;
+      if (forbidden.has(cx + ":" + row) || sealing(cx, row, clutter[c % clutter.length])) continue;
       put(cx, row, clutter[c % clutter.length]);
     }
   }
@@ -633,7 +655,7 @@ function furnish(
     // through the type system, and the room shapes this list is walked for never happened to reach
     // it until the plan forms changed — so the whole map threw on an undefined grid. A tile id that
     // needs a cast to compile is an id that does not exist.
-    const mate = uniques.pick(["fan", "coffee", "printer", "cabinet", "crates"]) ?? "crates";
+    const mate = uniques.pick(["stove", "coffee", "printer", "cabinet", "crates"]) ?? "crates";
     put(ax + 1, ay + 1, mate);
   } else {
     /* The fixed row collided with the NEAR couch bank the moment the rest end grew a second
@@ -646,9 +668,9 @@ function furnish(
     for (let y = fy; y >= iy + 2; y--) {
       const beside = room.props.some((p) => p.y === y && Math.abs(p.x - fx) <= 1);
       const seated = room.seats.some((s) => Math.abs(s.x - fx) <= 1 && Math.abs(s.y - y) <= 1);
-      if (!beside && !seated) { fy = y; break; }
+      if (!beside && !seated && !sealing(fx, y, only)) { fy = y; break; }
     }
-    put(fx, fy, only);
+    if (!sealing(fx, fy, only)) put(fx, fy, only);
   }
 }
 
@@ -662,7 +684,7 @@ function loosen(room: Room, uniques: Uniques, seed: number): void {
   };
   /* No plants in a plaza's own kit — the whole plaza is open floor bodies roam, which is the
      floating-canopy class. The greenery an open floor gets is the grounds outside its windows. */
-  const wish: TileId[] = ["coffee", "cooler", "tank", "vending"];
+  const wish: TileId[] = ["piano", "coffee", "cooler", "tank", "vending"];
   const kit: TileId[] = ["sofa", "urn", "bench", "tableM", "crates"];
   let n = 0;
   for (let y = b.y + 1; y < b.y + b.h - 1; y += 3) {
@@ -1037,7 +1059,7 @@ export function buildWorld(
     for (let dx = 2; dx < OUT; dx += PITCH) {
       // The bench first, the place in front of it second. Benches laid on their own rhythm put two
       // of the three places on bare grass, which is the "sitting on a lawn" defect one room out.
-      yardProps.push({ x: facadeX + dx, y: benchY, tile: "bench" });
+      yardProps.push({ x: facadeX + dx, y: benchY, tile: "benchPark" });
       yardSeats.push({ x: facadeX + dx, y: benchY + 1, post: "rest", face: dx < OUT / 2 ? 1 : -1 });
     }
     for (let dx = 3; dx < OUT; dx += PITCH) yardProps.push({ x: facadeX + dx, y: benchY, tile: "tableM" });
@@ -1053,7 +1075,7 @@ export function buildWorld(
       { x: facadeX + 4, y: wallY + 2, tile: "mast" },
       { x: facadeX + 2, y: wallY + 4, tile: "tree", live: "sway" },
       { x: facadeX + 6, y: floorY - 3, tile: "pine", live: "sway" },
-      { x: facadeX + 5, y: wallY + 3, tile: "bush" },
+      { x: facadeX + 5, y: wallY + 3, tile: "planter" },
       { x: facadeX + 1, y: floorY - 4, tile: "blooms" },
     ],
   });
@@ -1075,6 +1097,12 @@ export function buildWorld(
   const block = (x: number, y: number): void => {
     if (x < 0 || y < 0 || x >= cols || y >= rows) return;
     solid[y * cols + x] = true;
+  };
+  /* A prop blocks its whole GROUND footprint, not only its anchor: a two-seat couch is two
+     cells, a piano and a parked car are two wide. One place, or the wide furniture is solid on
+     paper and walk-through in pixels. */
+  const blockProp = (p: Prop): void => {
+    for (const [dx, dy] of footprint(p.tile)) block(p.x + dx, p.y + dy);
   };
 
   const hall: Rect = { x: bandStart - 1, y: hallY, w: lobbyX - bandStart + 2, h: HALL_H };
@@ -1170,7 +1198,7 @@ export function buildWorld(
          other four is not a rule. */
       const on = new Set(room.seats.map((p) => p.x + ":" + p.y));
       room.props = room.props.filter((p) => !on.has(p.x + ":" + p.y));
-      for (const p of room.props) block(p.x, p.y);
+      for (const p of room.props) blockProp(p);
       continue;
     }
     const shape = shapeOf(room.rects, cols);
@@ -1223,7 +1251,7 @@ export function buildWorld(
 
     // Furniture is solid: the moment a route has to bend around a desk the floor stops being a
     // backdrop and becomes a place with things in it. A prop on the wall FACE is already solid.
-    for (const p of room.props) block(p.x, p.y);
+    for (const p of room.props) blockProp(p);
   }
 
   // The envelope, the grounds outside it, and the gate through the facade. Everything beyond the
@@ -1247,7 +1275,7 @@ export function buildWorld(
      bench, mast and tree out here was walkable-over and a body could stand INSIDE the pine.
      The critic's probe read it directly: ownSolid=0 on both yard trees. Blocked again, after
      the last carve that touches the strip. */
-  for (const p of yard.props) block(p.x, p.y);
+  for (const p of yard.props) blockProp(p);
 
   // What is left solid inside the envelope, as rectangles, so the renderer can draw the building's
   // mass rather than leaving a hole where a shallow room did not reach the outside wall.
@@ -1263,11 +1291,78 @@ export function buildWorld(
   }
   const mass = runsOf(massCells, envelope, cols);
 
-  for (const p of hallProps) block(p.x, p.y);
+  for (const p of hallProps) blockProp(p);
 
   /* The pot's floor space, claimed LAST — after every carve, or the room-shape pass would hand
      the cell straight back to the walkable floor it was cut from. */
   for (const cell of shy) solid[cell] = true;
+
+  /* ── THE CLEARANCE NET ────────────────────────────────────────────────────────────────────
+     The emitters above each refuse the door approach, and this is the guarantee they cannot
+     give: after EVERY solidity pass, every seat in a walled room must be walkable from its own
+     door. Two rooms on a real roster proved that prose rules over five emitters do not compose —
+     a plant's claimed floor cell and a walked feature sealed two departments shut, invisibly,
+     because each placement was locally legal. When a seat is cut off, the least load-bearing
+     prop on the boundary of the reachable region is removed (never a piece a seat sits against,
+     never the wall face) until the room opens. Furniture is furniture; a route is the point. */
+  for (const room of rooms) {
+    if (room.open || room.outdoor || !room.doors.length) continue;
+    const inRoom = (x: number, y: number): boolean =>
+      room.rects.some((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+    const reach = (): Set<number> => {
+      const seen = new Set<number>();
+      const q: number[] = [];
+      for (const d of room.doors) {
+        const k = d.y * cols + d.x;
+        seen.add(k);
+        q.push(k);
+      }
+      for (let head = 0; head < q.length; head++) {
+        const cur = q[head];
+        const x = cur % cols;
+        const y = (cur - x) / cols;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (!inRoom(nx, ny)) continue;
+          const k = ny * cols + nx;
+          if (solid[k] || seen.has(k)) continue;
+          seen.add(k);
+          q.push(k);
+        }
+      }
+      return seen;
+    };
+    const backing = new Set(room.seats.map((s) => s.x + ":" + (s.y - 1)));
+    for (let guard = 0; guard < 24; guard++) {
+      const seen = reach();
+      if (room.seats.every((s) => seen.has(s.y * cols + s.x))) break;
+      let removed = false;
+      for (let i = room.props.length - 1; i >= 0; i--) {
+        const p = room.props[i];
+        if (backing.has(p.x + ":" + p.y)) continue;
+        if (p.y <= room.y + 1) continue; /* the wall face is masonry, not an obstruction */
+        const cells = footprint(p.tile).map(([dx, dy]) => (p.y + dy) * cols + (p.x + dx));
+        const podium = (p.y + 1) * cols + p.x; /* a leafy prop's claimed floor space */
+        const all = shy.has(podium) ? [...cells, podium] : cells;
+        const onEdge = all.some((k) => {
+          const x = k % cols;
+          const y = (k - x) / cols;
+          return (
+            seen.has(y * cols + x - 1) || seen.has(y * cols + x + 1) ||
+            seen.has((y - 1) * cols + x) || seen.has((y + 1) * cols + x)
+          );
+        });
+        if (!onEdge) continue;
+        for (const k of all) solid[k] = false;
+        shy.delete(podium);
+        room.props.splice(i, 1);
+        removed = true;
+        break;
+      }
+      if (!removed) break;
+    }
+  }
 
   /* ── the grounds ──────────────────────────────────────────────────────────────────────────
      What was here before is the whole of "floating trees, and the sprites are weirdly placed":
@@ -1366,15 +1461,39 @@ export function buildWorld(
     }
   }
 
-  // The path out of the gate, running east to the edge of the site, and lit.
+  /* THE STREET. The way out of the gate is a real road now — the register the urban pack's own
+     sample town sets: asphalt with lane dashes, a kerb of pavement either side, a crosswalk
+     where the yard path meets it, street lights along the kerb and a few parked cars. "Out on
+     the web" stops being a sliver of lawn and becomes the curb the web workers stand on — the
+     loudest thing on the east side of the map, which is what findability actually is. */
+  const roadX = facadeX + OUT + 1;
   const pathY = gateY;
-  for (let x = facadeX + OUT + 1; x < cols; x++) {
-    lay(x, pathY, "path");
-    lay(x, pathY + 1, "path");
-    taken.add(x + ":" + pathY);
-    taken.add(x + ":" + (pathY + 1));
-    if ((x - facadeX) % 5 === 0) plant(x, pathY - 1, "lamppost");
+  for (let y = pathY - 3; y <= pathY + 4; y++) {
+    for (let x = roadX; x < cols; x++) {
+      if (y === pathY - 3 || y === pathY + 4) lay(x, y, "path");
+      else if (x === roadX + 1) lay(x, y, "roadCross");
+      else if (y === pathY + 1) lay(x, y, x % 2 === 0 ? "roadDash" : "road");
+      else lay(x, y, "road");
+      taken.add(x + ":" + y);
+    }
   }
+  for (let x = roadX + 3; x < cols - 1; x += 6) {
+    plant(x, pathY - 4, "lamppost");
+    plant(x + 3, pathY + 5, "lamppost");
+  }
+  /* Parked on the road's south lane. The road cells are already `taken` (they are road), so the
+     cars are pushed directly — the lane is theirs by construction, and `clear()` would refuse
+     every spot on it. */
+  {
+    const CARS: TileId[] = ["taxi", "carRed", "van"];
+    for (let i = 0, x = roadX + 3; x + 1 < cols; x += 4, i++) {
+      scenery.push({ x, y: pathY + 2, tile: CARS[(i + hash32("car:" + x)) % CARS.length] });
+    }
+  }
+  /* The street furniture a town corner has, where the yard path meets the road. */
+  plant(roadX - 1, pathY - 2, "hydrant");
+  plant(roadX - 1, pathY + 3, "mailbox");
+  plant(roadX + 2, pathY - 3, "urn");
 
   /* ── THE POND ─────────────────────────────────────────────────────────────────────────────
      Laid BEFORE anything is planted, because water is the one thing on the site that decides
@@ -1425,15 +1544,11 @@ export function buildWorld(
         }
       }
     }
-    /* How far a trunk must keep back, DERIVED from the projection rather than remembered.
-       A canopy at the top of its cell throws `shadowReach` tiles east and south, so the water is
-       shaded from the WEST and from the NORTH — and the previous constant went on saying "five
-       cells to the right" after the throw gained a southward component, which is exactly how a
-       tree ends up laying a hard slab across flat blue again. The bank is then widened past that
-       minimum on purpose: a pond wants an open shore, not trunks at the waterline. */
-    const cast = shadowReach(TILE_CELLS);
-    const KEEP = Math.max(5, cast.east + 1);
-    const RIM = Math.max(2, cast.south + 1);
+    /* How far a trunk keeps back from the water. The projected-shadow system this was derived
+       from is gone (the Kenney art grounds itself), but an open shore is still the difference
+       between a pond and a puddle in a wood. */
+    const KEEP = 5;
+    const RIM = 2;
     for (const [x, y] of water) {
       for (let dy = -RIM; dy <= RIM; dy++) {
         for (let dx = -KEEP; dx <= 1; dx++) wet.add(x + dx + ":" + (y + dy));
@@ -1576,5 +1691,6 @@ export function buildWorld(
       runs: runsOf(cells, { x: 0, y: 0, w: cols, h: rows }, cols),
     })),
     shy: [...shy],
+    street: { y: gateY - 3 },
   };
 }

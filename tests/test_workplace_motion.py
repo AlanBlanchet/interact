@@ -591,22 +591,14 @@ def test_every_standing_place_has_the_thing_it_belongs_to_behind_it(tmp_path_fac
         "somebody is standing where nothing is:\n" + run.stdout + run.stderr)
 
 
-def test_a_shadow_starts_at_the_foot_and_is_thrown_away_from_the_light(tmp_path_factory):
-    """Alan reported floating trees THREE times.
-
-    The first two rounds fixed real things — grounds furnished from the indoor kit, a shadow that
-    was the prop's grid merely translated rather than projected — and neither was the cause. The
-    third mechanism was the SIGN: `project()` threw the shadow NORTH, toward the light, so a
-    canopy's shade came to rest behind its own trunk and only a bar at the waist escaped. Every
-    earlier check asked "does it touch?" and none asked "which way does it go?".
-
-    It survived two rounds because the symptom compresses: a 3-row glow and an 8-row tree threw the
-    IDENTICAL 3-row shadow. When a table reads the same for every row, the quantity is not being
-    expressed at all.
-
-    So the rule is checked against the built art, where it is one line, and it is checked HERE
-    because a probe nothing runs is a note, not an invariant — which is precisely how a fourth
-    report stays possible.
+def test_the_art_holds_its_contract(tmp_path_factory):
+    """The probe this runs guarded the projected-shadow system through six "floating trees"
+    reports. The projection died with the hand-drawn art — the Kenney tiles bake their own
+    grounding — but the CLASS of defect it guarded did not: art detached from the cell it claims
+    to stand on, a `<use>` whose target does not exist (which renders NOTHING, silently), layers
+    painting in an order nobody decided, and a seat sealed off from its own door. The probe now
+    asserts those, against the composed tiles AND the rendered document, and it is checked HERE
+    because a probe nothing runs is a note, not an invariant.
     """
     probe = EXT / "webview" / "workplace" / "dev" / "shadows.ts"
     if not probe.exists() or shutil.which("npx") is None:

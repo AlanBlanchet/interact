@@ -61,9 +61,8 @@ const SHAPES: Record<StampKind, string> = {
   held: "held",
   finished: "done",
   "not-ours": "foreign",
-  /* Reuses the held drawing until the artist cuts a dedicated one — the WORD carries the meaning
-     (STOPPED), and a wrong-but-present placard beats a compile error in a shared file. */
-  stopped: "held",
+  /* A filled block: the tape-deck stop, the one mark that means "a person ended this". */
+  stopped: "stopped",
 };
 
 function stampOf(kind: StampKind): Stamp {
@@ -193,11 +192,13 @@ export function behaviourOf(a: Attention): Behaviour {
  *  somebody's head, and a reserve box that refuses bubbles over empty air while allowing one over
  *  a word. */
 export const HEAD: Record<Posture, number> = {
-  stand: 54,
-  sit: 42,
-  slump: 42,
-  /* Twelve rows of canvas, most of it lying sideways: (12 + rim 2) * 3. */
-  lounge: 42,
+  /* A Kenney doll is a 16px frame drawn at 2x: 32 on screen, boots on the anchor. */
+  stand: 32,
+  /* Seated tucks the figure four pixels toward its desk. */
+  sit: 28,
+  slump: 28,
+  /* Rotated onto the couch — the figure lies, so its top is the doll's WIDTH. */
+  lounge: 22,
 };
 
 /** The stamp the WORLD hangs, which is not the stamp the rail prints. Two states earn a placard

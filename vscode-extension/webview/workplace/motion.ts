@@ -196,7 +196,7 @@ export const SCRIPT =
           var r = rungs.getBoundingClientRect();
           var f = (e.clientX - r.left) / Math.max(1, r.width);
           camHold();
-          camSetStep(1 + Math.round(Math.max(0, Math.min(1, f)) * 8));
+          camSetStep(1 + Math.round(Math.max(0, Math.min(1, f)) * 5));
         };
         var scrubbing = false;
         rungs.addEventListener("pointerdown", function (e) {
@@ -248,7 +248,14 @@ export const SCRIPT =
     }, { passive: false });
 
     var drag = null;
+    /* THE CAMERA HOLDS STILL UNDER A FINGER. Pin on pointer-down — any pointer-down, including
+       one on a sprite — and release on pointer-up: a following camera panning between press and
+       release is what ate four aimed clicks in a row in the professional sweep. The pin also
+       snaps a glide already in flight, so the press stops the world THAT instant. */
     view.addEventListener("pointerdown", function (e) {
+      CAM.pin = true;
+      camSync();
+      camApply();
       if (e.target.closest && e.target.closest(".wp-actor, .wp-plan")) return;
       drag = { x: e.clientX, y: e.clientY, cx: CAM.x, cy: CAM.y, moved: false };
       view.classList.add("is-dragging");
@@ -267,6 +274,7 @@ export const SCRIPT =
       camApply();
     });
     var release = function () {
+      CAM.pin = false;
       if (!drag) return;
       if (drag.moved) draggedAt = Date.now();
       drag = null;
@@ -343,9 +351,15 @@ export const SCRIPT =
     var t = e.target;
     var actor = t && t.closest ? t.closest("[data-run-id]") : null;
     if (actor) { pick(t); return; }
-    /* Clicking open floor puts the unit down — unless this click is the tail of a pan. */
-    if (t && t.closest && t.closest(".wp-view") && !t.closest(".wp-plan, .wp-hud, button") &&
-        Date.now() - draggedAt > 300) unpick();
+    if (!(t && t.closest && t.closest(".wp-view")) || t.closest(".wp-plan, .wp-hud, button")) return;
+    if (Date.now() - draggedAt <= 300) return; /* the tail of a pan is not a click */
+    /* A click on the floor near somebody IS a click on them. The engine knows where every body
+       stands this frame; the nearest one within reach is selected, and only a click on genuinely
+       open floor puts the unit down. Element hit-testing alone missed 4/4 aimed clicks while
+       bodies idled and the camera glided. */
+    var near = actorNear(e.clientX, e.clientY);
+    if (near) { poke(near); if (api) api.postMessage({ type: "select", run_id: near.getAttribute("data-run-id") }); }
+    else unpick();
   });
 
   /* Hovering a character is MEETING it: it turns to you, perks up and waves. Delegated, because
@@ -441,13 +455,13 @@ export const SCRIPT =
      For a build loop and a critic, never for the product. */
   window.__wp.zoom = function (z) {
     camHold();
-    camSetStep(typeof z === "number" ? z * 3 : CAM.step);
+    camSetStep(typeof z === "number" ? z * 2 : CAM.step);
     return { zoom: CAM.zoom, step: CAM.step, span: camSpan(), world: worldPx() };
   };
   window.__wp.whole = function () { return camWhole(); };
   window.__wp.follow = function (on) { return camFollow(on === undefined ? true : on); };
   window.__wp.pan = function (dx, dy) { camPan(dx, dy); return { x: CAM.x, y: CAM.y }; };
-  window.__wp.fitStep = function () { return { fit: camFitStep(), at: CAM.step, min: 1, max: 9 }; };
+  window.__wp.fitStep = function () { return { fit: camFitStep(), at: CAM.step, min: 1, max: 6 }; };
   window.__wp.step = function (ts) {
     TICK.t = ts;
     var dt = 16;

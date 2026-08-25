@@ -30,7 +30,7 @@ import type { Cast } from "../scene";
 import { fixture } from "./fixture";
 
 /** What a body may actually sit at or on. Everything else behind a seat is scenery. */
-const PERCHES = new Set(["desk", "drafting", "sofa", "bench", "chair"]);
+const PERCHES = new Set(["desk", "drafting", "sofa", "sofaG", "bench", "benchPark", "armchair", "chair"]);
 
 interface Fault {
   room: string;
@@ -239,7 +239,7 @@ function main(): void {
       if (!s) continue;
       const room = placeOf(world, w);
       const behind = room.props.find((p) => p.x === s.x && p.y === s.y - 1);
-      const couch = behind && (behind.tile === "sofa" || behind.tile === "bench");
+      const couch = behind && ["sofa", "sofaG", "bench", "benchPark", "armchair"].includes(String(behind.tile));
       if (s.post !== "rest" || s.perch === false || !couch) {
         standing.push(
           `${room.id || "(lobby)"}: ${w.run_id} finished but got ${s.post ?? "desk"} at (${s.x},${s.y}), ` +
