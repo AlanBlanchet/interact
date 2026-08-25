@@ -256,3 +256,25 @@ test("a command needing an agent is marked when none is selected", () => {
   assert.match(withNoAgent, /data-needs-agent="1"/,
     "greying it out is the honest answer; hiding the whole menu was not");
 });
+
+test("the header answers the questions, without a trip to the top", () => {
+  /* "When i click on a conversation, i have to go to the top to view info... instead things should
+     be accessible in the header." The identity facts — which model, what it cost, its state — live
+     in the header itself, which stays put while the transcript scrolls. */
+  const html = chatDocument({ nonce: "n", name: "researcher", status: "running", turns: [],
+    run: { ...RUN, model: "ollama/deepseek-v4-pro:cloud", cost_usd: 0.42 } });
+  const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+  assert.ok(header.includes("deepseek-v4-pro:cloud"), "the model belongs in the header");
+  assert.ok(header.includes("0.42"), "so does what it has cost");
+  assert.match(html, /header\s*{[^}]*position:\s*sticky/, "and the header must not scroll away");
+});
+
+test("the header is drawn in the theme's own colours, not an inverted plate", () => {
+  /* "in the conversation header the contrast is really badly adapted to themes." The plate painted
+     its letters in the PANEL BACKGROUND colour — a light plate carrying light letters the moment
+     the theme changes. Foreground on the sidebar's own tokens adapts by construction. */
+  const html = chatDocument({ nonce: "n", name: "g", status: "done", turns: [], run: RUN });
+  const css = html.slice(html.indexOf("header {"), html.indexOf("header {") + 500);
+  assert.ok(!css.includes("color: var(--wp-bg)"),
+    "background-coloured letters is the defect he is describing");
+});

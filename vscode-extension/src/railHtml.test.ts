@@ -139,23 +139,21 @@ test("every action carries a title, since a bare glyph is a guess", () => {
   }
 });
 
-test("a row renders the SAME word the world stamps, in the shared accent", () => {
-  /* The defect: the rail said a green tick and lowercase "finished" while the workplace stamped a
-     tilted uppercase "DONE" on paper — same five states, two visual languages, which visual-critic
-     called out twice and tied to Alan's "the environment is weird". Rendered output is the only
-     place that split is visible, so it is pinned here rather than at the source level alone. */
-  const doc = html([run({ status: "completed" })]);
-  const voice = voiceOf("finished");
-  assert.ok(
-    doc.includes(`>${voice.word}<`),
-    `the row does not render "${voice.word}" — the world stamps it and the rail must say it too`,
-  );
-  assert.ok(
-    doc.includes(`var(${voice.accent})`),
-    "the row is not tinted from the shared accent token",
-  );
-  assert.ok(doc.includes(voice.mark), "the shape-first mark is missing from the row");
+test("the rail and the world stay quiet about the same states", () => {
+  /* The coherence rule, updated with the design: the world dropped its DONE stamp — a finished
+     agent SITS at rest, and captioning the obvious is noise ("Agents keep saying 'finished'.
+     Instead, we should not have that"). So the shared vocabulary carries QUIET, and the rail obeys
+     the same bit: a finished row is a green ✓ and nothing else, while ERROR still says its word on
+     both surfaces, because that is a state that needs him. */
+  const doneRow = html([run({ status: "completed" })]);
+  assert.ok(!doneRow.includes(">DONE<"), "a finished row must not caption itself");
+  assert.ok(doneRow.includes(voiceOf("finished").mark), "the mark carries the state alone");
+
+  const errRow = html([run({ status: "failed" })]);
+  const err = voiceOf("error");
+  assert.ok(errRow.includes(`>${err.word}<`), "an error must still SAY so, in the shared word");
 });
+
 
 test("each state carries its own accent, so colour still separates them", () => {
   const finished = html([run({ status: "completed" })]);

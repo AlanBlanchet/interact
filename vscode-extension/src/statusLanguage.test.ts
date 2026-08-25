@@ -71,3 +71,12 @@ test("only the states that earn colour are painted", () => {
     assert.equal(STATUS[a].tinted, true, `${a} needs the eye`);
   }
 });
+
+test("a finished agent says nothing — the checkmark is the whole message", () => {
+  /* "Agents keep saying 'finished'. Instead, we should not have that." The states that keep their
+     words are the two that need him; everything routine is a mark, not a caption. */
+  assert.equal(STATUS.finished.quiet, true);
+  assert.equal(STATUS.working.quiet, true);
+  assert.ok(!STATUS.error.quiet, "an error must still SAY so");
+  assert.ok(!STATUS.asked.quiet, "a question waiting on him must still say so");
+});

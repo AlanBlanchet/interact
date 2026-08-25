@@ -295,6 +295,44 @@ function messageLabel(turn: Turn): string {
  *  Both halves stay VERBATIM inside `<pre>`: a command is not prose, and tool output is some
  *  program's bytes, where `# comment` is a shell comment and a pipe-shaped line is not a table.
  */
+/** The tools that ACT ON A FILE, each with the verb a person would say. */
+const FILE_TOOLS: Record<string, string> = {
+  Edit: "edited", Write: "wrote", Read: "read", NotebookEdit: "edited",
+};
+
+/** The file a summarised tool input names, if any. Python writes `file_path='/x/y.ts' …`. */
+function filePathOf(input: string): string | null {
+  const m = /file_path='([^']+)'/.exec(input);
+  return m ? m[1] : null;
+}
+
+/** Image files mentioned in a result — a capture the agent took and saved somewhere. */
+function imagePathsOf(text: string): string[] {
+  return [...text.matchAll(/(?:^|[\s"'`(])((?:\/[^\s"'`():]+)+\.(?:png|jpe?g|gif|webp))/g)]
+    .map((m) => m[1]).slice(0, 4);
+}
+
+/** A file change as a CARD, never the code dumped into the transcript.
+ *
+ *  "how others do it is they show a box, and when we click on it it opens the code diff in the
+ *  file." The old rendering printed the tool's raw argument soup — old_string, new_string, whole
+ *  written documents — inline, which buried the conversation under source nobody asked to read
+ *  there. The card names the verb and the file; the click opens the real thing in the editor,
+ *  where code belongs. The result turn for a file tool is a mechanical acknowledgement ("The file
+ *  has been updated…") and is folded away entirely.
+ */
+function fileCard(call: Turn, path: string): string {
+  const verb = FILE_TOOLS[call.tool ?? ""] ?? "touched";
+  const base = escapeHtml(path.split("/").pop() ?? path);
+  const dir = escapeHtml(path.slice(0, path.length - (path.split("/").pop() ?? "").length));
+  return `<div class="turn turn-tool turn-file"><button class="file-open" data-open="${escapeHtml(path)}"` +
+    ` title="Open ${escapeHtml(path)}">` +
+    `<span class="file-verb">${escapeHtml(verb)}</span>` +
+    `<span class="file-name">${base}</span>` +
+    `<span class="file-dir">${dir}</span>` +
+    `</button></div>`;
+}
+
 function toolBox(call: Turn, answer: Turn | undefined): string {
   const name = escapeHtml(call.tool || "tool");
   const input = (call.tool_input ?? "").trim();
@@ -302,11 +340,17 @@ function toolBox(call: Turn, answer: Turn | undefined): string {
   const io = (tag: string, body: string) =>
     `<div class="io"><span class="io-tag">${tag}</span>` +
     `<pre class="io-body">${escapeHtml(body)}</pre></div>`;
+  // A capture the command saved is EVIDENCE, and evidence gets a card: name it, make it openable,
+  // exactly as a file change does — one language for everything an agent shows you.
+  const shots = imagePathsOf(out).map((p) =>
+    `<button class="file-open io-shot" data-open="${escapeHtml(p)}" title="Open ${escapeHtml(p)}">` +
+    `<span class="file-verb">captured</span><span class="file-name">${escapeHtml(p.split("/").pop() ?? p)}</span></button>`).join("");
   return `<div class="turn turn-tool"><div class="who">🔧 ${name}</div>` +
     (input ? io("IN", input) : "") +
     // No OUT until there IS one: a command still running has no answer, and drawing an empty one
     // would claim it finished.
     (out ? io("OUT", out) : "") +
+    shots +
     `</div>`;
 }
 
@@ -321,6 +365,14 @@ export function renderTurn(turn: Turn): string {
     : LABEL[turn.kind] ?? escapeHtml(turn.kind);
   const raw = turn.text ?? "";
   if (!raw.trim()) return "";
+  if (turn.kind === "thinking") {
+    // A thought is context, not speech: fold it to one dim line — how long, in its own words'
+    // first breath — and let the reader open it when they actually want the reasoning.
+    const words = raw.trim().split(/\s+/);
+    const breath = escapeHtml(words.slice(0, 7).join(" "));
+    return `<details class="turn turn-thinking"><summary>💭 ${breath}… <span class="think-count">` +
+      `${words.length} words</span></summary><div class="body">${renderMarkdown(escapeHtml(raw))}</div></details>`;
+  }
   // Agents write Markdown by habit, and the chat printed it literally — a verdict arrived as a
   // wall of asterisks. Rendered only for what an agent SAYS; a tool result is machine output and
   // stays verbatim in its pre.
@@ -349,7 +401,10 @@ export function renderTranscript(turns: Turn[]): string {
       const next = turns[i + 1];
       const answer = next && next.kind === "tool_result" ? next : undefined;
       if (answer) i++;
-      parts.push(toolBox(turn, answer));
+      const path = turn.tool && FILE_TOOLS[turn.tool] ? filePathOf(turn.tool_input ?? "") : null;
+      // A file tool's card swallows its acknowledgement: "The file has been updated" is not
+      // information, and the change itself lives behind the click, in the editor.
+      parts.push(path ? fileCard(turn, path) : toolBox(turn, answer));
       continue;
     }
     parts.push(renderTurn(turn));
@@ -462,10 +517,19 @@ export function chatDocument(
     ? `<button class="back" id="up" data-run="${escapeHtml(parent.runId)}"` +
       ` title="Go to the conversation that started this one">↑ ${escapeHtml(parent.title)}</button>`
     : "";
+  // The identity facts a reader keeps needing — which model, what it has cost, its autonomy —
+  // used to live in a details block at the TOP of the transcript, a scroll away from wherever you
+  // are. They belong in the header, which stays put.
+  const facts: string[] = [];
+  if (run?.model) facts.push(`<span class="fact" title="model">${escapeHtml(run.model)}</span>`);
+  if (run?.cost_usd != null) facts.push(`<span class="fact" title="cost so far">$${run.cost_usd.toFixed(2)}</span>`);
+  if (run?.permission) facts.push(`<span class="fact" title="autonomy">${escapeHtml(run.permission.label)}</span>`);
   const header = name
-    ? `<header><button class="back" id="back" title="Back to the team">← Team</button>${up}` +
+    ? `<header><div class="head-row"><button class="back" id="back" title="Back to the team">← Team</button>${up}` +
       `<span class="who">${escapeHtml(name)}</span>` +
-      `<span class="status">${escapeHtml(status ?? "")}</span></header>`
+      `<span class="status">${escapeHtml(status ?? "")}</span></div>` +
+      (facts.length ? `<div class="facts">${facts.join("")}</div>` : "") +
+      `</header>`
     : "";
   const pending = awaitingReply
     ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
@@ -519,6 +583,12 @@ const vscode = acquireVsCodeApi();
     // Leaving a conversation is one click, and the panel gives the column back to the roster.
     const back = document.getElementById("back");
     if (back) back.addEventListener("click", () => vscode.postMessage({ type: "back" }));
+    // One rule for every card: a thing with data-open opens where it points. Delegated, because
+    // the transcript is re-rendered live and per-element bindings would go stale.
+    document.addEventListener("click", (e) => {
+      const card = e.target && e.target.closest ? e.target.closest("[data-open]") : null;
+      if (card) vscode.postMessage({ type: "open", path: card.getAttribute("data-open") });
+    });
     const up = document.getElementById("up");
     if (up) up.addEventListener("click", () => vscode.postMessage({ type: "openRun", runId: up.dataset.run }));
   }
@@ -727,13 +797,27 @@ const STYLE = `
      horizontal scrollbar and pushed the conversation's own name off screen. A header must budget
      its TOTAL width, not its worst element — so the controls hold the first line and the name and
      status fall to the next rather than sliding out of view. */
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: .35em .5em; margin: .7em .8em .4em;
-           padding: 5px 12px; background: var(--wp-plate); color: var(--wp-bg);
-           border: 1px solid color-mix(in srgb, var(--wp-ink) 45%, transparent);
-           border-radius: 999px; box-shadow: var(--wp-lift);
-           align-self: flex-start; }
+  header {
+    /* Sticky, in the theme's OWN colours. The old header was an inverted plate — a light slab
+       whose letters were painted in the panel BACKGROUND colour, which stops contrasting the
+       moment a theme moves either colour. Foreground-on-sidebar adapts by construction, and
+       sticky means the answers are wherever you are, not a scroll away. */
+    position: sticky; top: 0; z-index: 3;
+    display: flex; flex-direction: column; gap: .25em;
+    margin: 0; padding: .55em .8em .5em;
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+    color: var(--vscode-foreground);
+    border-bottom: 1px solid var(--vscode-panel-border, transparent);
+  }
+  .head-row { display: flex; flex-wrap: wrap; align-items: center; gap: .35em .5em; }
+  .facts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .fact {
+    font-size: .8em; padding: 1px 7px; border-radius: 999px; color: var(--wp-dim);
+    border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 70%, transparent);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .who { font-weight: 700; letter-spacing: .18em; font-size: 11px; text-transform: uppercase; }
-  /* No opacity. The header is a light plate carrying background-coloured letters, so fading the
+  /* No opacity. (Historical note: the header was once a plate carrying background-coloured
      word composites it toward the plate it sits on — the same way the workplace nameplate and
      three of the sidebar's devices lost their contrast. Said quieter with size and weight, which
      cost nothing legible; see plateContrast.test.ts. */
@@ -772,6 +856,32 @@ const STYLE = `
     color: var(--wp-dim);
     border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 70%, transparent);
   }
+  /* A file change: the same card language as a command, one line, the payload behind the click.
+     Full-width button so the whole card is the target, in the editor's own colours. */
+  .turn-file { padding: 0; }
+  .file-open {
+    font: inherit; cursor: pointer; display: flex; align-items: baseline; gap: .5em;
+    width: 100%; text-align: left; padding: .45em .7em;
+    color: var(--vscode-foreground); background: transparent; border: 0; min-width: 0;
+  }
+  .file-open:hover { background: var(--vscode-list-hoverBackground); }
+  .file-open:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  .file-verb {
+    flex: 0 0 auto; font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 999px; color: var(--wp-dim);
+    border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 70%, transparent);
+  }
+  .file-name { font-family: var(--vscode-editor-font-family); font-size: .92em; font-weight: 600; }
+  .file-dir { color: var(--wp-dim); font-size: .8em; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; direction: rtl; min-width: 0; }
+  .io-shot { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
+  /* A thought, folded to a whisper. */
+  details.turn-thinking > summary { cursor: pointer; list-style: none; color: var(--wp-dim);
+    font-style: italic; }
+  details.turn-thinking > summary::-webkit-details-marker { display: none; }
+  details.turn-thinking .think-count { font-size: .8em; opacity: .8; }
+  details.turn-thinking[open] > summary { margin-bottom: .3em; }
+  details.turn-thinking .body { color: var(--wp-dim); }
   .turn-tool .io-body {
     flex: 1 1 auto; min-width: 0; margin: 0;
     font-family: var(--vscode-editor-font-family); font-size: .9em;

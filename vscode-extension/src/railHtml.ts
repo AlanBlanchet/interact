@@ -53,7 +53,7 @@ function esc(text: string): string {
  *  caller quietly reintroduce a second source of truth, and the compiler is a better guard than a
  *  comment asking nicely.
  */
-export type Voice = { mark: string; word: string; phrase: string; accent: string; tinted: boolean };
+export type Voice = { mark: string; word: string; phrase: string; accent: string; tinted: boolean; quiet?: boolean };
 
 export function railHtml(
   rail: Rail,
@@ -223,10 +223,10 @@ export function railBody(
         <span class="mark">${esc(voice.mark)}</span>
         <span class="who">${esc(titleOf(r.run))}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
-        <span class="stamp">${esc(voice.word)}</span>
+        ${voice.quiet ? "" : `<span class="stamp">${esc(voice.word)}</span>`}
         <button class="role" data-agent="${esc(roleOf(r.run).id)}"
           title="Show every conversation with ${esc(roleOf(r.run).label)}">${esc(roleOf(r.run).label)}</button>
-        <span class="note">${esc(r.note)}</span>
+        ${voice.quiet ? "" : `<span class="note">${esc(r.note)}</span>`}
         <span class="acts">${actionsFor(r.run).map((a) =>
           `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
           ` title="${esc(a.label)}">${a.mark}</button>`).join("")}</span>

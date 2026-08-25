@@ -25,6 +25,11 @@ export type StatusVoice = {
   phrase: string;
   /** The theme variable both surfaces tint with — never a hard-coded hex. */
   accent: string;
+  /** A state that needs no WORDS. "Agents keep saying 'finished'. Instead, we should not have
+   *  that" — a finished agent already sits at rest in the world and carries a quiet ✓ in the
+   *  roster; captioning the obvious is noise. Quiet states render their mark only; ERROR and
+   *  ASKED keep their words, because those are the two that need him. */
+  quiet?: boolean;
   /** Whether the accent is actually PAINTED, or the state renders in neutral ink.
    *
    *  Not every state earns colour. The world stamps HELD and NOT-OURS in plain ink on purpose —
@@ -40,8 +45,8 @@ export const STATUS: Record<Attention, StatusVoice> = {
   error: { mark: "✕", word: "ERROR", phrase: "stopped with an error", accent: "--vscode-charts-red", tinted: true },
   asked: { mark: "✉", word: "ASKED", phrase: "waiting on you", accent: "--vscode-charts-blue", tinted: true },
   held: { mark: "⏸", word: "HELD", phrase: "paused", accent: "--vscode-charts-yellow", tinted: false },
-  finished: { mark: "✓", word: "DONE", phrase: "finished", accent: "--vscode-charts-green", tinted: true },
-  working: { mark: "●", word: "WORKING", phrase: "working", accent: "--vscode-charts-blue", tinted: true },
+  finished: { mark: "✓", word: "DONE", phrase: "finished", accent: "--vscode-charts-green", tinted: true, quiet: true },
+  working: { mark: "●", word: "WORKING", phrase: "working", accent: "--vscode-charts-blue", tinted: true, quiet: true },
   "not-ours": { mark: "○", word: "NOT OURS", phrase: "another project", accent: "--vscode-charts-purple", tinted: false },
 };
 

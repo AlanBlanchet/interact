@@ -312,8 +312,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   private async open(target: string): Promise<void> {
     try {
-      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
-      await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+      const uri = vscode.Uri.file(target);
+      // "when we click on it it opens the code DIFF in the file." For a source file with pending
+      // changes, the git extension's own view IS that diff — the same one its gutter opens. It
+      // no-ops or throws for an unchanged or untracked file, so the plain editor is the fallback,
+      // and an image never goes near it (VS Code renders it in its own viewer).
+      if (!/\.(png|jpe?g|gif|webp)$/i.test(target)) {
+        try {
+          await vscode.commands.executeCommand("git.openChange", uri);
+          return;
+        } catch {
+          /* not in a repo, not modified, or no git extension — the file itself is still right */
+        }
+      }
+      await vscode.commands.executeCommand("vscode.open", uri, { preview: true });
     } catch (err) {
       this.log.appendLine(`could not open ${target}: ${err}`);
       void vscode.window.showErrorMessage(`Interact: could not open ${target} — ${err}`);
