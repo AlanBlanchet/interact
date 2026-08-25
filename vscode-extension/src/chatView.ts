@@ -157,6 +157,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
       if (msg?.type === "back") { this.agentId = null; void ChatViewProvider.leaveConversation(); }
+      // The empty state's door: an empty panel must lead somewhere, not describe a missing list.
+      if (msg?.type === "openTeam") void vscode.commands.executeCommand("interact.agents.team");
       // The two things you MANAGE about an agent, from the depth where the agent IS the subject.
       if (msg?.type === "agentAction" && typeof msg.agent === "string") {
         if (msg.action === "model") void vscode.commands.executeCommand("interact.agents.model", msg.agent);

@@ -187,6 +187,8 @@ export class WorkplacePanel {
       (run) => Math.max(0, now - (lastObservedAt(readAgentActivity(run.run_id, 40)) ?? now)),
       undefined,
       this.inside ? { agent: this.inside, roleOf: (r) => roleOf(r as never, company).id } : undefined,
+      // The same identity the MAP draws with — so the roster's rows are the sprites, one unit.
+      (r) => ({ id: roleOf(r as never, company).id, label: agentLabel(r as never, company) }),
     );
     return railBody(
       rail,

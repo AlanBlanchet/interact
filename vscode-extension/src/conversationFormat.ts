@@ -337,9 +337,21 @@ function toolBox(call: Turn, answer: Turn | undefined): string {
   const name = escapeHtml(call.tool || "tool");
   const input = (call.tool_input ?? "").trim();
   const out = (answer?.text ?? "").trim();
-  const io = (tag: string, body: string) =>
-    `<div class="io"><span class="io-tag">${tag}</span>` +
-    `<pre class="io-body">${escapeHtml(body)}</pre></div>`;
+  const io = (tag: string, body: string) => {
+    // Beyond a handful of lines the output folds: show the head, fold the rest behind its count.
+    // Four different truncation conventions had grown across the panel; this is the one rule.
+    const lines = body.split("\n");
+    if (lines.length > 6) {
+      const head = escapeHtml(lines.slice(0, 5).join("\n"));
+      const rest = escapeHtml(lines.slice(5).join("\n"));
+      return `<div class="io"><span class="io-tag">${tag}</span>` +
+        `<pre class="io-body">${head}\n</pre></div>` +
+        `<details class="io-more"><summary>${lines.length - 5} more lines</summary>` +
+        `<pre class="io-body">${rest}</pre></details>`;
+    }
+    return `<div class="io"><span class="io-tag">${tag}</span>` +
+      `<pre class="io-body">${escapeHtml(body)}</pre></div>`;
+  };
   // A capture the command saved is EVIDENCE, and evidence gets a card: name it, make it openable,
   // exactly as a file change does — one language for everything an agent shows you.
   const shots = imagePathsOf(out).map((p) =>
@@ -360,10 +372,24 @@ export function renderTurn(turn: Turn): string {
     return toolBox(turn, undefined);
   }
   if (NOT_A_TURN.has(turn.kind)) return ""; // run infrastructure, not something the agent said
+  // A harness injection (a stop-hook review, a system reminder) is not something HE said, and
+  // rendering it verbatim under "YOU" claims he wrote it. It folds as system machinery.
+  if (turn.kind === "message" && /^(Stop hook feedback:|\[Request interrupted|<system-reminder>)/.test((turn.text ?? "").trim())) {
+    const words = (turn.text ?? "").trim().split(/\s+/).length;
+    return `<details class="turn turn-thinking"><summary>⚙ harness <span class="think-count">${words} words</span>` +
+      `</summary><pre class="io-body">${foldLongOutput(turn.text ?? "")}</pre></details>`;
+  }
   const label = turn.kind === "message"
     ? escapeHtml(messageLabel(turn))
     : LABEL[turn.kind] ?? escapeHtml(turn.kind);
   const raw = turn.text ?? "";
+  if (turn.kind === "thinking" && !raw.trim()) {
+    // The vendor emits thinking blocks with the CONTENT withheld (signature only) unless its own
+    // flag persists them. Dropping the event entirely made reasoning invisible — "3 in data, 0
+    // rendered" — which reads as the panel hiding something. A quiet marker is the honest render:
+    // it happened, and there is nothing more to show.
+    return `<div class="turn turn-thinking think-quiet">💭 thought for a moment</div>`;
+  }
   if (!raw.trim()) return "";
   if (turn.kind === "thinking") {
     // A thought is context, not speech: fold it to one dim line — how long, in its own words'
@@ -425,7 +451,10 @@ export function renderTranscript(turns: Turn[]): string {
  */
 
 /** Shown when nothing is selected — a blank panel reads as broken rather than as ready. */
-export const CHAT_EMPTY_HINT = "Pick an agent in the list above to read and reply to it";
+/** What an empty panel says. It used to point at "the list above" — a surface that no longer
+ *  exists there (the roster moved to the Team tab), so a first-timer stared at 740px of void with
+ *  directions to a place that was not on the map. An empty state must be a DOOR, not a caption. */
+export const CHAT_EMPTY_HINT = "No conversation open yet.";
 
 /** A file the panel can open for you — the point of a link rather than a path you copy out. */
 export interface ChatFile {
@@ -536,7 +565,9 @@ export function chatDocument(
     : "";
   const body = name
     ? renderDetails(run, files, sentBy, spend) + renderTranscript(turns) + pending
-    : `<p class="hint">${escapeHtml(CHAT_EMPTY_HINT)}</p>`;
+    : `<div class="hint"><p>${escapeHtml(CHAT_EMPTY_HINT)}</p>` +
+      `<button class="door" id="openTeam">Open the Team</button>` +
+      `<p class="hint-sub">Pick a character or a roster row there to talk to it.</p></div>`;
   // The panel could only SEND. Everything else you might want to do with the agent you are
   // reading — stop it, start another, open the team, change workspace — lived in a tree context
   // menu or the command palette. All three reference tools put this behind a slash menu in the
@@ -581,6 +612,8 @@ ${composer}
 const vscode = acquireVsCodeApi();
   {
     // Leaving a conversation is one click, and the panel gives the column back to the roster.
+    const door = document.getElementById("openTeam");
+    if (door) door.addEventListener("click", () => vscode.postMessage({ type: "openTeam" }));
     const back = document.getElementById("back");
     if (back) back.addEventListener("click", () => vscode.postMessage({ type: "back" }));
     // One rule for every card: a thing with data-open opens where it points. Delegated, because
@@ -832,7 +865,15 @@ const STYLE = `
     outline: 2px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 1px; }
 
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
-  .hint { color: var(--wp-dim); }
+  .hint { color: var(--wp-dim); padding: 1.2em .9em; }
+  .hint-sub { font-size: .88em; }
+  .door {
+    font: inherit; cursor: pointer; padding: 4px 14px; border-radius: 999px;
+    color: var(--vscode-button-foreground, var(--vscode-foreground));
+    background: var(--vscode-button-background, transparent);
+    border: 1px solid var(--vscode-panel-border, transparent);
+  }
+  .door:hover { background: var(--vscode-button-hoverBackground, var(--vscode-list-hoverBackground)); }
   .pending { color: var(--wp-dim); font-style: italic; }
   .pending::after { content: ""; animation: blink 1.2s steps(1) infinite; }
   @keyframes blink { 50% { opacity: .4 } }
@@ -874,6 +915,9 @@ const STYLE = `
   .file-name { font-family: var(--vscode-editor-font-family); font-size: .92em; font-weight: 600; }
   .file-dir { color: var(--wp-dim); font-size: .8em; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; direction: rtl; min-width: 0; }
+  .io-more { padding: 0 .7em .45em 2.6em; }
+  .io-more > summary { cursor: pointer; color: var(--wp-dim); font-size: .82em; list-style: none; }
+  .io-more > summary::-webkit-details-marker { display: none; }
   .io-shot { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
   /* A thought, folded to a whisper. */
   details.turn-thinking > summary { cursor: pointer; list-style: none; color: var(--wp-dim);
@@ -882,6 +926,7 @@ const STYLE = `
   details.turn-thinking .think-count { font-size: .8em; opacity: .8; }
   details.turn-thinking[open] > summary { margin-bottom: .3em; }
   details.turn-thinking .body { color: var(--wp-dim); }
+  .think-quiet { color: var(--wp-dim); font-style: italic; font-size: .9em; }
   .turn-tool .io-body {
     flex: 1 1 auto; min-width: 0; margin: 0;
     font-family: var(--vscode-editor-font-family); font-size: .9em;

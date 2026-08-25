@@ -43,6 +43,9 @@ export interface RailRun {
    *  than pinned to the top: this surface sorts by who NEEDS you, and a healthy boss must never
    *  bury a crashed agent. */
   brain: boolean;
+  /** How many errands this row stands for. Above 1 only at the top level, where a row is an
+   *  AGENT — the same unit the map draws — and the worst of its errands speaks for it. */
+  tasks?: number;
   /** 0 for a lead, 1 for somebody a lead sent out. The rail cannot replace the tree until it
    *  shows the COMPANY rather than a flat list — a sub-agent floating loose beside its lead tells
    *  you nothing about who is driving what. */
@@ -150,16 +153,41 @@ export function buildRail(
   /** Narrow to one agent's conversations. Applied FIRST, so counts, leads and reports all describe
    *  the thing you are actually looking at rather than the team behind it. */
   filter?: { agent: string; roleOf: (run: AgentRun) => string },
+  /** WHO holds each run. When present and NOT drilled in, the roster GROUPS: one row per agent,
+   *  exactly the unit the map draws — the cold sweep's root coherence finding was one sprite per
+   *  role beside sixteen run-rows, with nothing reconciling them. */
+  identify?: (run: AgentRun) => { id: string; label: string },
 ): Rail {
   // Your own editor windows are not conversations this panel holds: interact did not start them,
   // cannot send to them and cannot stop them, so they rendered as greyed unactionable rows in a
   // column whose whole job is what you can act on. You are already looking at those windows.
   const held = runs.filter((r) => r.status !== "foreign");
   const inScope = filter ? held.filter((r) => filter.roleOf(r) === filter.agent) : held;
-  const rows: RailRun[] = inScope.map((run) => {
-    const attention = attentionOf(run, idleOf(run), awaitingReply(run));
-    return { run, attention, depth: 0, brain: false, note: NOTES[attention] };
-  });
+  let rows: RailRun[];
+  if (identify && !filter) {
+    // One row per AGENT. The errand that most needs him speaks for the row (same rule as the
+    // map's characters), and the count carries the rest; drilling in lists them individually.
+    const byAgent = new Map<string, AgentRun[]>();
+    for (const run of inScope) {
+      const { id } = identify(run);
+      const bucket = byAgent.get(id);
+      if (bucket) bucket.push(run); else byAgent.set(id, [run]);
+    }
+    rows = [...byAgent.values()].map((bucket) => {
+      const speaks = [...bucket].sort((a, b) => {
+        const rank = (r: AgentRun) => RANK.indexOf(attentionOf(r, idleOf(r), awaitingReply(r)));
+        return rank(a) - rank(b) || (b.started_at ?? 0) - (a.started_at ?? 0);
+      })[0];
+      const attention = attentionOf(speaks, idleOf(speaks), awaitingReply(speaks));
+      return { run: speaks, attention, depth: 0, brain: false, note: NOTES[attention],
+               tasks: bucket.length };
+    });
+  } else {
+    rows = inScope.map((run) => {
+      const attention = attentionOf(run, idleOf(run), awaitingReply(run));
+      return { run, attention, depth: 0, brain: false, note: NOTES[attention] };
+    });
+  }
 
   const byAttention = (a: RailRun, b: RailRun) => {
     const byRank = RANK.indexOf(a.attention) - RANK.indexOf(b.attention);

@@ -351,8 +351,12 @@ export function buildTeam(
       activity: run.status === "foreign" ? "your own session" : activityOf(step),
       parent_run_id: run.parent_run_id ?? null,
       project: run.project ?? "",
-      cost_usd: run.cost_usd ?? null,
-      input_tokens: run.input_tokens ?? null,
+      // Summed over EVERY errand this agent held, not the speaking run's alone: dropping the
+      // rest made the map's team total disagree with the dashboard's on one screen.
+      cost_usd: held.some((r) => r.cost_usd != null)
+        ? held.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0) : null,
+      input_tokens: held.some((r) => r.input_tokens != null)
+        ? held.reduce((sum, r) => sum + (r.input_tokens ?? 0), 0) : null,
       idle_seconds: Math.max(0, now - since),
       started_at: run.started_at ?? null,
       finished_at: run.finished_at ?? null,

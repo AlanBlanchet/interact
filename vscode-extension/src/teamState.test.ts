@@ -582,3 +582,19 @@ test("a character opens the agent, so its run_id is one of its own errands", () 
     () => ({ id: "x", label: "x" }));
   assert.ok(["a", "b"].includes(team.workers[0].run_id));
 });
+
+test("one body carries the cost of ALL its errands", () => {
+  /* The cold sweep found two team totals on one screen: the map's header said $12.56 while the
+     dashboard said $20.81 over the same sixteen agents. The dedup did it — a worker carried only
+     its SPEAKING run's cost, silently dropping every other errand's. One agent, one body, the sum
+     of everything it was asked to do. */
+  const runs = [
+    { run_id: "a", name: "x", agent: "x", status: "done", started_at: 1, cost_usd: 2.5, input_tokens: 100 },
+    { run_id: "b", name: "x", agent: "x", status: "done", started_at: 2, cost_usd: 1.5, input_tokens: 50 },
+  ];
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    () => ({ id: "x", label: "x" }));
+  assert.equal(team.workers.length, 1);
+  assert.equal(team.workers[0].cost_usd, 4, "half the money vanished with the dedup");
+  assert.equal(team.workers[0].input_tokens, 150);
+});

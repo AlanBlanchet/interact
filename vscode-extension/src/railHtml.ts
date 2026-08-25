@@ -221,7 +221,8 @@ export function railBody(
         r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}
         style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
         <span class="mark">${esc(voice.mark)}</span>
-        <span class="who">${esc(titleOf(r.run))}${
+        <span class="who">${(r.tasks ?? 1) > 1 ? esc(roleOf(r.run).label) : esc(titleOf(r.run))}${
+          (r.tasks ?? 1) > 1 ? `<span class="tasks" title="${r.tasks} tasks">×${r.tasks}</span>` : ""}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         ${voice.quiet ? "" : `<span class="stamp">${esc(voice.word)}</span>`}
         <button class="role" data-agent="${esc(roleOf(r.run).id)}"

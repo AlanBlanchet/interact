@@ -10,7 +10,7 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { renderTranscript } from "./conversationFormat.ts";
+import { renderTranscript, chatDocument } from "./conversationFormat.ts";
 
 const edit = (path: string, extra = "") => ({
   kind: "tool", tool: "Edit",
@@ -77,4 +77,36 @@ test("a bash command keeps its IN and OUT box", () => {
 test("file paths from outside are escaped like everything else", () => {
   const html = renderTranscript([edit(`/tmp/"onmouseover="alert(1)`)] as never[]);
   assert.ok(!html.includes('"onmouseover="'), "a hostile path must not break out of the attribute");
+});
+
+test("thinking the vendor withheld still leaves a trace", () => {
+  /* His real streams carry thinking blocks with EMPTY content — the vendor persists a signature,
+     not the words. Rendering nothing made reasoning invisible ("3 in data, 0 rendered"); the
+     honest render is a quiet marker: it happened, there is nothing more to show. */
+  const html = renderTranscript([{ kind: "thinking", text: "" }] as never[]);
+  assert.ok(html.includes("thought for a moment"));
+  assert.ok(!html.includes("<details"), "there is nothing to expand, so nothing must pretend to");
+});
+
+test("long output folds behind its count — one truncation rule, not four", () => {
+  const out = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
+  const html = renderTranscript([
+    { kind: "tool", tool: "Bash", tool_input: "make" }, { kind: "tool_result", text: out },
+  ] as never[]);
+  assert.match(html, /<summary>25 more lines<\/summary>/);
+  assert.ok(html.includes("line 4") && html.includes("line 29"), "nothing is thrown away");
+});
+
+test("a harness injection folds as machinery, never as something HE said", () => {
+  const html = renderTranscript([
+    { kind: "message", from_run: "operator", text: "Stop hook feedback: [Review the turn...]" },
+  ] as never[]);
+  assert.ok(html.includes("harness"), "machinery must be named as machinery");
+  assert.ok(!/>YOU</i.test(html), "and never attributed to him");
+});
+
+test("the empty panel is a door, not a caption about a missing list", () => {
+  const html = chatDocument({ nonce: "n", turns: [], commands: [] });
+  assert.ok(!html.includes("list above"), "the list it pointed at no longer exists there");
+  assert.match(html, /id="openTeam"/, "an empty state must lead somewhere");
 });

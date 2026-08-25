@@ -309,3 +309,25 @@ test("the destinations are the panel's own, not a launcher for everything", () =
     assert.ok(c.label && c.command, "a destination needs a word and something to do");
   }
 });
+
+test("the roster's rows are the map's sprites — one entity model per screen", () => {
+  /* The cold sweep's root coherence finding: the map draws one sprite per AGENT (~6) while the
+     roster beside it lists 16 RUNS, and nothing reconciles them — two researcher runs, one
+     character. At the top level a row IS an agent: worst errand speaks, the count says how many.
+     Drilling into an agent still lists its runs — that is what the depth is FOR. */
+  const runs = [
+    { run_id: "r1", provider: "claude", name: "researcher", agent: "researcher", status: "running", started_at: 20 },
+    { run_id: "r2", provider: "claude", name: "researcher", agent: "researcher", status: "failed", started_at: 10 },
+    { run_id: "t1", provider: "claude", name: "tester", agent: "tester", status: "completed", started_at: 5 },
+  ];
+  const identify = (r: { agent?: string | null }) => ({ id: r.agent ?? "main", label: r.agent ?? "main" });
+  const grouped = buildRail(runs as never[], "s", () => 0, undefined, undefined, identify as never);
+  assert.equal(grouped.runs.length, 2, "three errands, two colleagues");
+  const researcher = grouped.runs.find((r) => identify(r.run as never).id === "researcher")!;
+  assert.equal(researcher.attention, "error", "the errand that needs him speaks for the agent");
+  assert.equal(researcher.tasks, 2, "and the count says how much it holds");
+
+  const drilled = buildRail(runs as never[], "s", () => 0, undefined,
+    { agent: "researcher", roleOf: (r) => identify(r as never).id }, identify as never);
+  assert.equal(drilled.runs.length, 2, "inside an agent, the rows are its errands again");
+});
