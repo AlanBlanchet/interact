@@ -119,6 +119,11 @@ body {
      anything under it in either theme. */
   --t-leaf-hi: color-mix(in srgb, var(--wp-h4) 96%, var(--wp-bg));
   --t-leaf-lo: color-mix(in srgb, var(--wp-h4) 52%, var(--wp-ink));
+  /* The forest floor, under the canopies. Darker than the lawn in BOTH themes — it stands in for
+     the permanent shade of a wood at the rungs where a cast shadow is three device pixels.
+     Darkened through the LEAF-SHADE green, never through bare ink: ink alone turns the clearing
+     grey and a grey patch under a green tree reads as pavement, not understory. */
+  --t-under: color-mix(in srgb, var(--t-ground) 52%, var(--t-leaf-lo));
   --t-bark: color-mix(in srgb, #6b4423 78%, var(--wp-bg));
   --t-bark-hi: color-mix(in srgb, #97663a 78%, var(--wp-bg));
   --t-stone: color-mix(in srgb, var(--wp-fg) 30%, var(--wp-bg));
@@ -217,6 +222,8 @@ body.vscode-high-contrast-light .wp {
   --t-leaf: color-mix(in srgb, var(--wp-h4) 74%, var(--wp-bg));
   --t-leaf-hi: color-mix(in srgb, var(--wp-h4) 92%, var(--wp-bg));
   --t-leaf-lo: color-mix(in srgb, var(--wp-h4) 62%, var(--wp-ink));
+  /* Day: the same rule through the theme's own darker green — grey kills it on cream. */
+  --t-under: color-mix(in srgb, var(--t-ground) 55%, var(--t-leaf-lo));
   --t-stone: color-mix(in srgb, var(--wp-fg) 34%, var(--wp-bg));
   --t-stone-hi: color-mix(in srgb, var(--wp-fg) 22%, var(--wp-bg));
 
@@ -1082,19 +1089,70 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
 @keyframes wp-talk { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-1px); } }
 .wp-actor.has-post .wp-shade { background: color-mix(in srgb, var(--wp-h3) 60%, transparent); }
 
-/* A worker the registry says has stopped stops. Scoped to the sprite, never to the whole actor:
-   an ancestor opacity composites the nameplate and the stamp with it, and a greyed-out ERROR is
-   the one word that must never be hard to read. */
-.wp-actor[data-stalled="1"] .wp-body,
-.wp-actor[data-status="done"] .wp-body { opacity: calc(1 - var(--idle, 0) * .38); }
-/* NOT faded with idle. A visitor's session is not ours to age, and fading a body that is already
-   drawn in one hue is precisely how it stopped reading as a person and started reading as a gap
-   in the picture. It recedes by a fixed, small amount — enough to sit behind our own team in the
-   depth of the image, not enough to disappear out of it. */
-.wp-actor[data-status="foreign"] .wp-body { opacity: .88; }
+/* A RUNNING worker the registry says has stopped stops. Scoped to the sprite, never to the whole
+   actor: an ancestor opacity composites the nameplate and the stamp with it, and a greyed-out
+   ERROR is the one word that must never be hard to read. */
+.wp-actor[data-stalled="1"] .wp-body { filter: saturate(.7) brightness(.94); }
+/* NEVER opacity. A translucent person reads as a rendering bug, not a state — the done-fade was
+   removed for exactly that ("Agents are also transparent kind of... I don't know why"), and a
+   stalled body fading by the same mechanism is the same defect waiting for the next held agent. */
+/* A FINISHED worker is NOT translucent. A real registry is mostly finished runs, so the fade made
+   most of the building ghostly and nothing on screen explained why — a translucent person reads
+   as a rendering bug, not a state. The body already SITS at the rest end of its room, which is
+   the whole signal; the sprite only cools a touch, at full opacity. */
+.wp-actor[data-status="done"] .wp-body { filter: saturate(.82) brightness(.97); }
+/* NOT faded with idle either. A visitor's session is not ours to age, and fading a body that is
+   already drawn in one hue is precisely how it stopped reading as a person and started reading as
+   a gap in the picture. Same treatment as finished: present, merely quieter. */
+.wp-actor[data-status="foreign"] .wp-body { filter: saturate(.82) brightness(.97); }
 .wp-actor[data-status="error"] .wp-body { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--wp-bad) 70%, transparent)); }
 
 .wp-proto { position: absolute; visibility: hidden; pointer-events: none; }
+
+/* ── presence: the world notices the pointer ─────────────────────────────────────────────────
+   Three grants, each earned by the hand at the glass and given by the engine as a class. The
+   pieces themselves are pixel art from the sheet; nothing here is a CSS shape. */
+
+/* The claim ring: picked up like a unit. Under the body, over its contact shade. */
+.wp-ring { position: absolute; left: -18px; bottom: -6px; display: none; pointer-events: none; }
+/* The same hard pixel shadow every sign in the building carries — it is what keeps one line of
+   accent legible on any floor it lands on. */
+.wp-ring svg { filter: drop-shadow(1px 1px 0 var(--wp-ink)); }
+.wp-actor.is-picked .wp-ring { display: block; animation: wp-claim calc(var(--beat)) ease-in-out infinite; }
+@keyframes wp-claim { 0%, 100% { opacity: .9; } 50% { opacity: .45; } }
+
+/* The greeting: hovered, a character perks up and waves with its own hand. The hand rides the
+   shoulder and swings on the sprite system's own two-frame flip. */
+.wp-hi { position: absolute; left: 21px; bottom: calc(var(--head, 54px) - 12px); display: none; pointer-events: none; }
+.wp-actor.is-met .wp-hi { display: block; }
+.wp-hi .wp-f0 { opacity: 1; }
+.wp-hi .wp-f1 { opacity: 0; }
+.wp-actor.is-met .wp-hi .wp-f0 { animation: wp-fa calc(var(--beat) / 6) steps(1, end) infinite; }
+.wp-actor.is-met .wp-hi .wp-f1 { animation: wp-fb calc(var(--beat) / 6) steps(1, end) infinite; }
+.wp-actor.is-met .wp-body { animation: wp-greet calc(var(--beat) / 3) steps(2, end) infinite; }
+@keyframes wp-greet {
+  0%, 100% { transform: translateX(-50%) translateY(0) rotate(var(--lean, 0deg)); }
+  50% { transform: translateX(-50%) translateY(-2px) rotate(var(--lean, 0deg)); }
+}
+.wp-actor.is-met .wp-tag { color: var(--wp-fg); }
+
+/* The poke: a click LANDS before it opens anything — squash, hop, and a startled mark, the
+   cheapest honest dopamine a tile game has. One-shot; the engine re-arms it per click. */
+.wp-actor.is-poked .wp-body { animation: wp-poke 560ms cubic-bezier(.34, 1.56, .64, 1) 1; }
+@keyframes wp-poke {
+  0% { transform: translateX(-50%) rotate(var(--lean, 0deg)) scale(1, 1); }
+  22% { transform: translateX(-50%) rotate(var(--lean, 0deg)) scale(1.14, .8); }
+  55% { transform: translateX(-50%) translateY(-6px) rotate(var(--lean, 0deg)) scale(.94, 1.08); }
+  100% { transform: translateX(-50%) rotate(var(--lean, 0deg)) scale(1, 1); }
+}
+.wp-bang { position: absolute; left: 26px; bottom: calc(var(--head, 54px) + 4px); display: none; pointer-events: none; }
+.wp-actor.is-poked .wp-bang { display: block; animation: wp-bang 760ms steps(2, end) 1 both; }
+@keyframes wp-bang {
+  0% { opacity: 0; transform: translateY(4px); }
+  30% { opacity: 1; transform: translateY(0); }
+  85% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0); }
+}
 
 ${STAMP_CSS}
 
@@ -1116,7 +1174,17 @@ ${STAMP_CSS}
   .wp-actor .wp-stand .wp-f0,
   .wp-actor .wp-stand .wp-f1,
   .wp-actor.is-talking .wp-body,
+  .wp-actor.is-met .wp-body,
+  .wp-actor.is-poked .wp-body,
+  .wp-actor.is-poked .wp-bang,
+  .wp-actor.is-picked .wp-ring,
+  .wp-actor.is-met .wp-hi .wp-f0,
+  .wp-actor.is-met .wp-hi .wp-f1,
   .wp-view[data-follow="0"] .wp-cam-follow { animation: none !important; }
+  /* Still noticed, just still: the raised hand, the mark and the ring hold without moving. */
+  .wp-hi .wp-f0 { opacity: 1; }
+  .wp-hi .wp-f1 { opacity: 0; }
+  .wp-actor.is-poked .wp-bang { opacity: 1; }
   .wp-pool, .wp-shut, .wp-leaf, .wp-rungs i, .wp-fac { transition: none; }
   .wp-lit .wp-pool { animation: none !important; }
   .wp-stand .wp-f0 { opacity: 1; }

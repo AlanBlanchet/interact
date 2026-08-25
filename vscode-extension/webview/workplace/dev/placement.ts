@@ -157,6 +157,35 @@ function main(): void {
     }
   }
 
+  /* ── AND FOLIAGE STANDS IN SOIL, NEVER IN FURNITURE ───────────────────────────────────────
+     Found on the REAL registry, never on a fixture: a plant sharing a cell with the chamber's
+     whiteboard, and a plant one tile north of the front desk — the southern prop paints over the
+     trunk and the canopy appears to grow out of the desk, which is what "trees are floating" was
+     the fourth time it was reported. The builder now drops such a plant; this makes the rule an
+     invariant so it cannot quietly return with the next furnisher change. */
+  const LEAFY = new Set(["plant", "tree", "treeBig", "pine", "bush"]);
+  const planted: string[] = [];
+  const propSets: [string, { x: number; y: number; tile: string }[]][] = [
+    ...world.rooms.map((r): [string, { x: number; y: number; tile: string }[]] => [
+      r.id || "(lobby)",
+      r.props.map((p) => ({ x: p.x, y: p.y, tile: String(p.tile) })),
+    ]),
+    ["(hall)", world.hallProps.map((p) => ({ x: p.x, y: p.y, tile: String(p.tile) }))],
+  ];
+  for (const [where, props] of propSets) {
+    const firm = new Set(props.filter((p) => !LEAFY.has(p.tile)).map((p) => p.x + ":" + p.y));
+    for (const p of props) {
+      if (!LEAFY.has(p.tile)) continue;
+      if (firm.has(p.x + ":" + p.y)) planted.push(`${where}: ${p.tile}@(${p.x},${p.y}) shares a cell with furniture`);
+      if (firm.has(p.x + ":" + (p.y + 1))) planted.push(`${where}: ${p.tile}@(${p.x},${p.y}) grows out of the prop south of it`);
+    }
+  }
+  if (planted.length) {
+    console.log("\nFOLIAGE PLANTED IN FURNITURE:");
+    for (const c of planted) console.log("  " + c);
+    process.exitCode = 1;
+  }
+
   console.log(`\n${seats} places, ${perched} of them claiming something to sit on.`);
   console.log(`${given.length} people placed, ${collided.length} of them crowding somebody.`);
   console.log(`${deptsOf(cast).length} departments.`);

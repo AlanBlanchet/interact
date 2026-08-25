@@ -82,6 +82,7 @@ const T: Palette = {
      bottom row of its tile, or it is a shrub hovering over grass. */
   t: "var(--t-bark)",
   T: "var(--t-bark-hi)",
+  D: "var(--t-under)",
   M: "var(--t-leaf-hi)",
   N: "var(--t-leaf-lo)",
   q: "var(--t-stone)",
@@ -357,6 +358,22 @@ export const MEADOW = tile([
   "vVvLvVLV",
   "VVvVLvVv",
   "vVLvVVvV",
+]);
+
+/** FOREST FLOOR — the ground under a canopy, where grass does not grow. This is the mark that
+ *  finally grounds a tree at MAP scale: a cast shadow is three device pixels at the whole-floor
+ *  rung and no alpha makes three pixels read as contact, but a change of GROUND is tile-sized and
+ *  reads as a shape at every rung. A copse standing in its own darker clearing is attached to the
+ *  earth the way a copse on billiard-table lawn never is. */
+export const LITTER = tile([
+  "DDNDDDDD",
+  "DDDDDtDD",
+  "DNDDDDDD",
+  "DDDDNDDD",
+  "DDDDDDDN",
+  "DtDDDDDD",
+  "DDDNDDDD",
+  "DDDDDDtD",
 ]);
 
 /** Bare earth, where the ground is walked or a bed has been turned over. */
@@ -805,14 +822,17 @@ export const SCREEN = tile(
   { solid: true },
 );
 
+/** A dish that reads as a DISH. The first drawing was a ring with a blob and a stem — the same
+ *  ghost-in-a-halo misread as the old globe, from the same cause: frontal symmetry. An antenna is
+ *  a TILTED bowl with a mast; the diagonal is what says "aimed at the sky". */
 export const DISH = tile(
   [
-    "..eeee..",
-    ".e....e.",
-    "e..ee..e",
-    "e.eeee.e",
-    "e..ee..e",
-    ".e.ee.e.",
+    "....ee..",
+    "..eeae..",
+    ".eaaae..",
+    "eeaaaee.",
+    "eeaaee..",
+    ".eeee...",
     "...ee...",
     "..oooo..",
   ],
@@ -987,15 +1007,19 @@ export const DRAFTING = tile(
   { solid: true },
 );
 
+/** A globe that reads as a GLOBE. The first drawing was a same-tone ring around a symmetric
+ *  column of "continents", which at 24px is a grey figure inside a halo — an independent sweep
+ *  literally reported it as a ghost placeholder. A planet is a FRAME around WATER with
+ *  asymmetric LAND: three tones, no symmetry. */
 export const GLOBE = tile(
   [
-    "..LLLL..",
-    ".LvvvvL.",
-    "LvLvvLvL",
-    "LvvLLvvL",
-    "LvvLLvvL",
-    "LvLvvLvL",
-    ".LvvvvL.",
+    "..eeee..",
+    ".eaaLLe.",
+    "eaLLaaae",
+    "eaaLLLae",
+    "eaLaaaae",
+    ".eLaaLe.",
+    "..eeee..",
     "..oooo..",
   ],
   { solid: true },
@@ -1110,6 +1134,7 @@ export const TILES = {
   core: CORE,
   grass: GRASS,
   meadow: MEADOW,
+  litter: LITTER,
   earth: EARTH,
   path: PATH,
   mast: MAST,

@@ -69,6 +69,11 @@ ${aside ? `<style>${aside.style}
    roster scrolls on its own so a long team never pushes the room off screen. */
 .wp-split { display: flex; align-items: stretch; height: 100vh; width: 100%; }
 .wp-split > .wp-room { flex: 1 1 auto; min-width: 0; position: relative; overflow: hidden; }
+/* The scene sizes itself to the VIEWPORT when it owns the page; inside the split it must size to
+   its half, or — measured in the stacked layout — the room runs 894px tall in a 495px slot and
+   its bottom-right survey controls land ON TOP of the roster, eating its clicks while a click
+   near them scrubs the zoom. That is a blocking defect an overlay earns silently. */
+.wp-split .wp { height: 100%; }
 .wp-split > .wp-list {
   flex: 0 0 clamp(240px, 26%, 380px); min-width: 0; overflow-y: auto; overflow-x: hidden;
   border-left: 1px solid var(--vscode-panel-border, transparent);

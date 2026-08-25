@@ -491,6 +491,51 @@ export const SNOOZE: Piece = {
   pal: { z: "var(--mark)" },
 };
 
+/* ── Presence — the world noticing the person at the glass ───────────────────────────────────
+ *
+ *  Three small pieces for the three beats of being noticed: a hand raised in greeting when the
+ *  pointer rests on somebody, a startled mark when they are poked, and a claim ring under the one
+ *  who has been picked up. All drawn in the engine's own rectangles — a rotated CSS arm or a
+ *  border-radius ring is a soft shape in a scene made entirely of hard ones. */
+
+/** Two frames of a wave: the hand crosses its own arc, pivoting over the wrist pixel. The skin
+ *  var is the actor's own, so every character waves with their own hand. */
+export const WAVE_A: Grid = [
+  "kk...",
+  "kkk..",
+  "..k..",
+];
+export const WAVE_B: Grid = [
+  "...kk",
+  "..kkk",
+  "..k..",
+];
+export const WAVE_PAL: Palette = { k: "var(--c-skin, #e0a877)" };
+
+/** The startle. A poked character says "!" the way a unit in any tile game does — above the
+ *  head, loud, and gone in half a second. */
+export const BANG: Piece = {
+  /* A fixed loud yellow, not the theme's chart tan: a startle that lasts half a second earns the
+     one saturated pixel colour in the building, in both themes. */
+  grid: ["yy", "yy", "yy", "yy", "..", "yy"],
+  pal: { y: "#ffd94a" },
+};
+
+/** The claim ring: picked up, the way a unit is picked up. Stepped, never round, and drawn in
+ *  the pod's own accent so WHOSE team you are holding is part of the mark. */
+export const RING: Piece = {
+  grid: [
+    "..rrrrrrrr..",
+    ".r........r.",
+    "r..........r",
+    ".r........r.",
+    "..rrrrrrrr..",
+  ],
+  /* The accent lifted toward the foreground: the raw pod hue is tuned for shirts and pools and
+     sinks into the floor as a one-pixel line. */
+  pal: { r: "color-mix(in srgb, var(--accent, var(--wp-h1, #4daafc)) 62%, var(--wp-fg, #ccc))" },
+};
+
 /* ── Travel ──────────────────────────────────────────────────────────────────────────────────
  *
  *  `POSE_MOVE` played fast reads as "busy", which is what it was authored for — the hands move,

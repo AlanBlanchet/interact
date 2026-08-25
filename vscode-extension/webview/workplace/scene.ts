@@ -25,6 +25,7 @@ import { closeSheet, draw, drawFrames, openSheet, place } from "./pixels";
 import type { Grid } from "./pixels";
 import {
   FACULTY_ART,
+  BANG,
   NOTE,
   POSE_MOVE,
   POSE_REST,
@@ -35,9 +36,13 @@ import {
   POSE_SLUMP,
   POSE_WALK_A,
   POSE_WALK_B,
+  RING,
   SKIN_PAL,
   SNOOZE,
   VISITOR_PAL,
+  WAVE_A,
+  WAVE_B,
+  WAVE_PAL,
 } from "./art";
 import { TILES, TILE_CELLS, TILE_PX } from "./tiles";
 
@@ -200,7 +205,7 @@ export const FLAT: ReadonlySet<TileId> = new Set<TileId>([
   // ever arrive as terrain runs rather than as props today — so nothing cast them and nothing
   // caught it. The shadow invariant reads this set, which is what surfaced it; a ground tile
   // dropped into `scenery` would otherwise have thrown a silhouette of a patch of grass.
-  "meadow", "earth",
+  "meadow", "earth", "litter",
   // HUNG: the wall face, whose masonry already has its own band in `wallShadow`.
   ...WALL_FIXTURES,
 ]);
@@ -334,7 +339,7 @@ function renderMap(world: World): string {
     `<svg class="wp-map" width="${world.cols * TILE_PX}" height="${world.rows * TILE_PX}" ` +
     `viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true" focusable="false">` +
     `<defs>${patterns([
-      "floor", "carpet", "grass", "meadow", "earth", "pond", "wall", "path", "lino", "runner",
+      "floor", "carpet", "grass", "meadow", "litter", "earth", "pond", "wall", "path", "lino", "runner",
       "face", "mass", "dais", "rug",
     ])}</defs>`;
 
@@ -697,7 +702,13 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
      person cross-legged on a lawn. */
   const posture: Posture = seat.perch === false && how.posture !== "stand" ? "stand" : how.posture;
   const st = worldStampFor(w);
-  const say = w.activity ? clip(w.activity, 64) : "";
+  /* A body at REST does not narrate its restfulness. A real registry is mostly finished runs, so
+     letting the activity line speak here filled the cold open with a row of white bubbles all
+     saying the done-word — the exact word the posture system exists to replace. The lounge on
+     the couch IS the sentence; the full detail stays on the title for whoever asks. Working
+     bodies keep their line: reading a file is news, being done is not. */
+  const resting = how.post === "rest";
+  const say = !resting && w.activity ? clip(w.activity, 64) : "";
   const label =
     `${w.name} — ${w.status}, ${LABELS.get(w.zone) ?? w.zone}` + (w.activity ? `: ${w.activity}` : "");
   return (
@@ -720,8 +731,15 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
     (st ? `<span class="wp-mark">${stampHtml(st)}</span>` : "") +
     (say ? `<span class="wp-say"><b>${esc(say)}</b></span>` : "") +
     `<span class="wp-shade"></span>` +
+    /* The three presence pieces, hidden until the pointer earns them: the claim ring under the
+       picked character, the wave when hovered, the startle when poked. In every actor rather than
+       injected on demand, so the engine can grant them with a class and the sheet dedupes the
+       art to one body each. */
+    `<span class="wp-ring">${draw(RING.grid, RING.pal, { scale: 3, outline: false })}</span>` +
     `<span class="wp-body">${spriteOf(w, posture)}` +
     (stalled ? `<span class="wp-zzz">${draw(SNOOZE.grid, SNOOZE.pal, { scale: 2, outline: false })}</span>` : "") +
+    `<span class="wp-hi">${drawFrames([WAVE_A, WAVE_B], WAVE_PAL, { scale: 2, className: "wp-wavehand" })}</span>` +
+    `<span class="wp-bang">${draw(BANG.grid, BANG.pal, { scale: 3 })}</span>` +
     `</span>` +
     `<span class="wp-tag">${esc(clip(w.name, 16))}` +
     (w.idle_seconds >= 30 ? `<i>${esc(shortDuration(w.idle_seconds))}</i>` : "") +

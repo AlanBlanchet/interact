@@ -247,7 +247,11 @@ function brainOf(runs: readonly RunLike[]): string | null {
   const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
   if (!roots.length) return null;
   return roots.reduce((first, r) =>
-    (r.started_at ?? Infinity) < (first.started_at ?? Infinity) ? r : first).run_id;
+    (r.started_at ?? Infinity) < (first.started_at ?? Infinity)
+    // A total order even on a tie: input order chose the brain before, and the crown moved
+    // between renders.
+    || ((r.started_at ?? Infinity) === (first.started_at ?? Infinity)
+        && r.run_id.localeCompare(first.run_id) < 0) ? r : first).run_id;
 }
 
 /** What a run can do, or nothing.

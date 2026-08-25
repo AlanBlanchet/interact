@@ -598,3 +598,17 @@ test("one body carries the cost of ALL its errands", () => {
   assert.equal(team.workers[0].cost_usd, 4, "half the money vanished with the dedup");
   assert.equal(team.workers[0].input_tokens, 150);
 });
+
+test("the speaking run never flickers between renders", () => {
+  /* Two errands, same status, same start: the old sort left the winner to engine whim, and the
+     nameplate flickered between two runs' ages live. A tie breaks the same way every frame. */
+  const runs = [
+    { run_id: "zz", name: "x", agent: "x", status: "done", started_at: 5 },
+    { run_id: "aa", name: "x", agent: "x", status: "done", started_at: 5 },
+  ];
+  const pick = () => buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    () => ({ id: "x", label: "x" })).workers[0].run_id;
+  const first = pick();
+  runs.reverse();
+  assert.equal(pick(), first, "input order must not choose the face of the character");
+});

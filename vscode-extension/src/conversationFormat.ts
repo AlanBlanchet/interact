@@ -374,7 +374,10 @@ export function renderTurn(turn: Turn): string {
   if (NOT_A_TURN.has(turn.kind)) return ""; // run infrastructure, not something the agent said
   // A harness injection (a stop-hook review, a system reminder) is not something HE said, and
   // rendering it verbatim under "YOU" claims he wrote it. It folds as system machinery.
-  if (turn.kind === "message" && /^(Stop hook feedback:|\[Request interrupted|<system-reminder>)/.test((turn.text ?? "").trim())) {
+  // BOTH kinds: what a person or the harness types arrives as "prompt" in the real stream, and
+  // "message" only for agent-to-agent mail. Gating on "message" alone meant the fold structurally
+  // never fired, and a real stop-hook review rendered verbatim as YOU.
+  if ((turn.kind === "message" || turn.kind === "prompt") && /^(Stop hook feedback:|\[Request interrupted|<system-reminder>)/.test((turn.text ?? "").trim())) {
     const words = (turn.text ?? "").trim().split(/\s+/).length;
     return `<details class="turn turn-thinking"><summary>⚙ harness <span class="think-count">${words} words</span>` +
       `</summary><pre class="io-body">${foldLongOutput(turn.text ?? "")}</pre></details>`;

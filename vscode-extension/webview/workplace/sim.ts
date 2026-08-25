@@ -354,6 +354,10 @@ function place(b, t) {
     } else if (status === "error") {
       bob = 1;
     }
+    /* Noticed: a body watching the hand leans toward it. The mirror flip alone is nearly
+       invisible on front-facing art; four degrees of lean is what makes a room full of resting
+       people visibly TURN with the pointer. */
+    if (b.gazing) lean = b.face * 4;
   }
   el.style.transform = "translate3d(" + px.toFixed(1) + "px," + (py + bob).toFixed(1) + "px,0)";
   el.style.zIndex = String(100 + Math.round(b.y * 4));
@@ -595,6 +599,8 @@ function camFit() {
   if (!box.width || !box.height) return;
   CAM.vw = box.width;
   CAM.vh = box.height;
+  /* The hand's cached view origin moved with the layout; re-derive it on the next aim. */
+  HAND.rok = false;
   if (!CAM.ready) {
     CAM.ready = true;
     CAM.step = camOpenStep();
@@ -955,6 +961,66 @@ function speechLayout(t) {
   SAID = next;
 }
 
+/* ── the hand at the glass ───────────────────────────────────────────────────────────────────
+   The pointer, in TILE coordinates, so the world can notice the person looking at it. Tracked
+   from the view's own pointer events; converted through the PAINTED camera because that is the
+   picture the hand is actually over. */
+var HAND = { on: false, tx: -1e9, ty: -1e9, cx: 0, cy: 0, rx: 0, ry: 0, rok: false };
+/* How far a resting body's attention reaches, in tiles. */
+var GAZE = 4.5;
+
+/* The event stores CLIENT pixels and nothing else — a rect read per pointermove forces layout in
+   the middle of a frame, and the conversion has to happen per FRAME anyway so a stationary
+   pointer stays aimed at the same tile while the camera glides under it. The view's rect is
+   cached and invalidated by camFit (resize and bind both land there); a transform never moves
+   it, so the cache is exact. */
+function handTrack(cx, cy) {
+  HAND.cx = cx;
+  HAND.cy = cy;
+  HAND.on = true;
+}
+
+function handAim() {
+  if (!HAND.on || !VIEW.zoom) return;
+  if (!HAND.rok) {
+    var view = document.querySelector(".wp-view");
+    if (!view) return;
+    var r = view.getBoundingClientRect();
+    HAND.rx = r.left;
+    HAND.ry = r.top;
+    HAND.rok = true;
+  }
+  HAND.tx = ((HAND.cx - HAND.rx) / VIEW.zoom + VIEW.x) / W.tile;
+  HAND.ty = ((HAND.cy - HAND.ry) / VIEW.zoom + VIEW.y) / W.tile;
+}
+
+/* Heads turn. A body at rest inside GAZE tiles of the pointer faces it and follows it — the
+   cheapest possible proof that these are people in a place and not stickers on a picture. Two
+   deliberate exclusions: a WORKING body keeps typing unless the pointer is directly on it (work
+   is not interrupted by being watched), and a body mid-walk or mid-conversation already has
+   somewhere better to look. When the hand moves on, everyone settles back the way their seat
+   faces rather than staying frozen mid-stare. */
+function presence() {
+  handAim();
+  var t = TICK.t;
+  for (var id in BODIES) {
+    var b = BODIES[id];
+    if (!b.el || !b.el.isConnected) continue;
+    if (b.path || (b.talkUntil && b.talkUntil > t)) { b.gazing = false; continue; }
+    var met = b.el.classList.contains("is-met");
+    var dx = HAND.tx - b.x;
+    var near = HAND.on && Math.abs(dx) <= GAZE && Math.abs(HAND.ty - b.y) <= GAZE;
+    var react = met || (near && b.el.getAttribute("data-attention") !== "working");
+    if (react) {
+      if (Math.abs(dx) > 0.2) b.face = dx > 0 ? 1 : -1;
+      b.gazing = true;
+    } else if (b.gazing) {
+      b.gazing = false;
+      settleFace(b);
+    }
+  }
+}
+
 /* ── rooms light up, doors open ──────────────────────────────────────────────────────────────
    Both driven off where bodies ACTUALLY are rather than off the snapshot, so a room goes dark and
    a door swings shut the moment the last person walks out of it. */
@@ -999,6 +1065,9 @@ function doors() {
       if (!b.el || !b.el.isConnected) continue;
       if (Math.abs(b.x - d.x) <= 1.1 && Math.abs(b.y - d.y) <= 1.4) { near = true; break; }
     }
+    /* The hand opens doors too. Sweeping the pointer along a corridor and watching each leaf
+       swing for you is the world answering the hand the same way it answers a walker. */
+    if (!near && HAND.on && Math.abs(HAND.tx - d.x) <= 1.2 && Math.abs(HAND.ty - d.y) <= 1.4) near = true;
     if (near === d.on) continue;
     d.on = near;
     d.el.classList.toggle("is-open", near);
@@ -1155,6 +1224,8 @@ function frame(ts) {
      glide, paint, THEN place. */
   camStep(dt);
   if (camGlide(dt)) camApply();
+  /* Before the bodies are placed, so a turned head is painted the same frame it turns. */
+  presence();
   var busy = 0;
   for (var id in BODIES) {
     var b = BODIES[id];

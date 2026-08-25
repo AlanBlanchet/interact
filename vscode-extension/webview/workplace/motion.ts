@@ -65,9 +65,15 @@ export const SCRIPT =
       place(b, TICK.t);
     }
     for (var id in BODIES) if (!seen[id]) delete BODIES[id];
+    /* The claim ring survives the swap: the element died, the pick did not. */
+    if (PICKED) {
+      var held = document.querySelector('.wp-actor[data-run-id="' + PICKED + '"]');
+      if (held) held.classList.add("is-picked");
+    }
     window.__wp.bodies = BODIES;
     window.__wp.world = W;
     window.__wp.cam = CAM;
+    window.__wp.hand = HAND;
     /* The PAINTED camera, so motion can be measured rather than eyeballed: a glide is only
        observable as the gap between where the camera is and what is on screen. */
     window.__wp.view = VIEW;
@@ -262,11 +268,17 @@ export const SCRIPT =
     });
     var release = function () {
       if (!drag) return;
+      if (drag.moved) draggedAt = Date.now();
       drag = null;
       view.classList.remove("is-dragging");
     };
     view.addEventListener("pointerup", release);
     view.addEventListener("pointercancel", release);
+
+    /* The hand, handed to the engine. A second pointermove listener on purpose: the drag one
+       returns early when nothing is dragging, and this one has to run every time. */
+    view.addEventListener("pointermove", function (e) { handTrack(e.clientX, e.clientY); });
+    view.addEventListener("pointerleave", function () { HAND.on = false; });
     view.addEventListener("dblclick", function (e) {
       if (e.target.closest && e.target.closest(".wp-actor, .wp-plan")) return;
       camWhole();
@@ -295,12 +307,59 @@ export const SCRIPT =
 
   /* ── clicking a character aims the rest of the panel at them ─────────────────────────────── */
 
+  /* The one character the reader is holding, kept by id because the elements are swapped on
+     every refresh — bind() re-hangs the ring on whoever carries the id now. */
+  var PICKED = null;
+  var draggedAt = 0;
+
+  /* A click LANDS before it opens anything. The body squashes, hops and says the startled mark;
+     the claim ring moves to it. Selecting an agent used to feel like selecting a table row —
+     now it feels like picking up a unit, and the panel opening is the second thing that happens. */
+  function poke(el) {
+    var was = document.querySelector(".wp-actor.is-picked");
+    if (was && was !== el) was.classList.remove("is-picked");
+    el.classList.add("is-picked");
+    PICKED = el.getAttribute("data-run-id");
+    el.classList.remove("is-poked");
+    void el.offsetWidth; /* restart the one-shot for a second poke on the same body */
+    el.classList.add("is-poked");
+    clearTimeout(el.__wpPoke);
+    el.__wpPoke = setTimeout(function () { el.classList.remove("is-poked"); }, 820);
+  }
+
+  function unpick() {
+    var was = document.querySelector(".wp-actor.is-picked");
+    if (was) was.classList.remove("is-picked");
+    PICKED = null;
+  }
+
   function pick(target) {
     var el = target && target.closest ? target.closest("[data-run-id]") : null;
-    if (!el || !api) return;
-    api.postMessage({ type: "select", run_id: el.getAttribute("data-run-id") });
+    if (!el) return;
+    if (el.classList.contains("wp-actor")) poke(el);
+    if (api) api.postMessage({ type: "select", run_id: el.getAttribute("data-run-id") });
   }
-  document.addEventListener("click", function (e) { pick(e.target); });
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var actor = t && t.closest ? t.closest("[data-run-id]") : null;
+    if (actor) { pick(t); return; }
+    /* Clicking open floor puts the unit down — unless this click is the tail of a pan. */
+    if (t && t.closest && t.closest(".wp-view") && !t.closest(".wp-plan, .wp-hud, button") &&
+        Date.now() - draggedAt > 300) unpick();
+  });
+
+  /* Hovering a character is MEETING it: it turns to you, perks up and waves. Delegated, because
+     every actor element is replaced on every refresh. */
+  document.addEventListener("pointerover", function (e) {
+    var el = e.target && e.target.closest ? e.target.closest(".wp-actor") : null;
+    var was = document.querySelector(".wp-actor.is-met");
+    if (was && was !== el) was.classList.remove("is-met");
+    if (el) el.classList.add("is-met");
+  });
+  document.addEventListener("pointerout", function (e) {
+    var el = e.target && e.target.closest ? e.target.closest(".wp-actor") : null;
+    if (el && !(e.relatedTarget && el.contains(e.relatedTarget))) el.classList.remove("is-met");
+  });
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Enter" && e.key !== " ") return;
     var el = e.target && e.target.closest ? e.target.closest(".wp-actor[data-run-id]") : null;

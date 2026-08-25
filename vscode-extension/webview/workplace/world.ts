@@ -1041,6 +1041,33 @@ export function buildWorld(
     }
   }
 
+  /* ── DECOR YIELDS TO FURNITURE ────────────────────────────────────────────────────────────
+     "Trees are still floating" had a SECOND mechanism the shadow work never touched, found only
+     by rendering the real registry: a potted plant sharing a cell with a whiteboard in the
+     chamber, and a plant standing directly NORTH of the front desk. The painter draws south
+     over north, so the southern prop swallows the plant's pot and trunk and the CANOPY appears
+     to grow out of the furniture — a tree planted on a desk. Equipment north of a desk is a
+     deliberate composition (a globe DISPLAYED on it); foliage is not, because foliage claims to
+     stand in soil. So: a leafy prop never shares a cell with another prop and never stands
+     directly north of one. The plant is the thing dropped — furniture is load-bearing, decor is
+     not. Grounds are exempt (a copse is touching crowns by design), and this runs BEFORE the
+     solidity pass so a dropped plant does not leave an invisible obstacle behind. */
+  const LEAFY_DECOR = new Set<TileId>(["plant", "tree", "treeBig", "pine", "bush"]);
+  const scrub = (props: Prop[]): Prop[] => {
+    const firm = new Set(
+      props.filter((p) => !LEAFY_DECOR.has(p.tile)).map((p) => p.x + ":" + p.y),
+    );
+    return props.filter(
+      (p) =>
+        !LEAFY_DECOR.has(p.tile) ||
+        (!firm.has(p.x + ":" + p.y) && !firm.has(p.x + ":" + (p.y + 1))),
+    );
+  };
+  for (const room of rooms) room.props = scrub(room.props);
+  const scrubbedHall = scrub(hallProps);
+  hallProps.length = 0;
+  for (const p of scrubbedHall) hallProps.push(p);
+
   // Every room's own shape, and the same pass that hands the renderer its rectangles.
   for (const room of rooms) {
     if (room.open) {
@@ -1395,6 +1422,37 @@ export function buildWorld(
     }
   }
   scenery.push(...rim);
+
+  /* ── THE FOREST FLOOR ─────────────────────────────────────────────────────────────────────
+     The fourth report of "floating trees" was made at MAP scale, and at map scale the shadow
+     system cannot answer it: a cast shadow spans three cells, a cell at the whole-floor rung is
+     eight device pixels, and no alpha makes three pixels read as contact. What DOES read at every
+     rung is GROUND — the one mark on a site bigger than a prop — so every canopy stands on a
+     patch of forest floor: its own cell plus a ring biased SOUTH-EAST, the side its shadow
+     already claims, unioned across a copse into one organic clearing. Grass does not grow under
+     a dense crown; now the drawing says so, and a tree is attached to the earth before a single
+     shadow pixel is spent. */
+  const soilAt = (x: number, y: number): TileId | null => {
+    for (const [kind, cells] of soil) if (cells.has(y * cols + x)) return kind;
+    return null;
+  };
+  for (const at of scenery) {
+    if (!CANOPY.has(at.tile)) continue;
+    for (const [ox, oy] of [[0, 0], [1, 0], [0, 1], [1, 1], [-1, 0], [0, -1], [-1, 1], [1, -1]]) {
+      const x = at.x + ox;
+      const y = at.y + oy;
+      /* The core (the crown's own cell and its south-east contact) is always floored; the rim
+         cells drop out on their own hash so the clearing has a ragged, grown edge rather than a
+         drawn one. */
+      const core = ox >= 0 && oy >= 0;
+      if (!core && hash32("u:" + x + ":" + y) % 3 !== 0) continue;
+      if (!site(x, y)) continue;
+      const k = soilAt(x, y);
+      // Never over water, its bank, or a made path — only lawn and meadow yield to the wood.
+      if (k && k !== "meadow") continue;
+      lay(x, y, "litter");
+    }
+  }
 
   const byId = new Map(rooms.map((r) => [r.id, r]));
   return {

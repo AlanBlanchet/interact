@@ -98,6 +98,16 @@ test("long output folds behind its count — one truncation rule, not four", () 
 });
 
 test("a harness injection folds as machinery, never as something HE said", () => {
+  /* The real stream writes what a person or the harness types as kind "prompt" — "message" is
+     agent-to-agent mail. The first version gated on "message" alone, so on real transcripts the
+     fold never fired once; both kinds are covered and both are pinned. */
+  for (const kind of ["message", "prompt"]) {
+    const html = renderTranscript([
+      { kind, from_run: "operator", text: "Stop hook feedback: [Review the turn...]" },
+    ] as never[]);
+    assert.ok(html.includes("harness"), `${kind}: machinery must be named as machinery`);
+    assert.ok(!/>YOU</i.test(html), `${kind}: and never attributed to him`);
+  }
   const html = renderTranscript([
     { kind: "message", from_run: "operator", text: "Stop hook feedback: [Review the turn...]" },
   ] as never[]);
