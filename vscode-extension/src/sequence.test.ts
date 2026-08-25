@@ -22,12 +22,13 @@ const runs = [
   },
 ] as never[];
 
-test("every agent gets exactly one lane, in start order", () => {
+test("participants get a lane in start order; the silent are a count", () => {
+  /* The rule changed with the professional sweep: seventeen columns for two participants hid the
+     diagram's subject behind its cast list. Here the reviewer neither spawned, was spawned, nor
+     spoke — so it is the count, not an empty column. */
   const s = buildSequence(runs, []);
-  assert.deepEqual(
-    s.lanes.map((l) => l.name),
-    ["lead", "reviewer", "perf"],
-  );
+  assert.deepEqual(s.lanes.map((l) => l.name), ["lead", "perf"]);
+  assert.equal(s.silent, 1);
 });
 
 test("a message becomes an arrow between the right lanes", () => {
@@ -44,7 +45,8 @@ test("a spawn is an arrow too — it is how a team actually forms", () => {
   const spawn = s.arrows.find((x) => x.kind === "spawn");
   assert.ok(spawn, "the parent/child relationship was not drawn");
   assert.equal(spawn.fromLane, 0);
-  assert.equal(spawn.toLane, 2);
+  // Lane 1 now, not 2: the silent reviewer no longer holds a column between them.
+  assert.equal(spawn.toLane, 1);
 });
 
 test("an arrow to an unknown run is dropped, not drawn to nowhere", () => {

@@ -126,6 +126,13 @@ body {
 }
 .chip:hover { background: var(--vscode-list-hoverBackground); }
 .chip:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+.seek {
+  font: inherit; width: 100%; margin-top: 6px; padding: 3px 9px; border-radius: 6px;
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background, transparent);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, transparent));
+}
+.seek:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .crumbs { display: flex; align-items: baseline; gap: 5px; margin-top: 6px; font-size: .92em; }
 .crumb {
   font: inherit; cursor: pointer; padding: 0 5px; border-radius: 4px;
@@ -203,6 +210,18 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 }
 
 /** The roster itself: header, chips, breadcrumb, rows. No document, no script — a fragment. */
+/** "3h ago", "just now" — WHEN is the one fact a professional expects instantly and nothing
+ *  showed: durations everywhere, dates nowhere. Relative and terse; the tooltip has nothing more
+ *  because the registry stores seconds, not stories. */
+function agoOf(startedAt: number | null | undefined): string {
+  if (!startedAt) return "";
+  const s = Math.max(0, Date.now() / 1000 - startedAt);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
 export function railBody(
   rail: Rail,
   voiceOf: (attention: string) => Voice,
@@ -222,12 +241,13 @@ export function railBody(
         style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
         <span class="mark">${esc(voice.mark)}</span>
         <span class="who">${(r.tasks ?? 1) > 1 ? esc(roleOf(r.run).label) : esc(titleOf(r.run))}${
-          (r.tasks ?? 1) > 1 ? `<span class="tasks" title="${r.tasks} tasks">×${r.tasks}</span>` : ""}${
+          (r.tasks ?? 1) > 1 ? `<button class="tasks" data-agent="${esc(roleOf(r.run).id)}" title="Show all ${r.tasks} tasks">×${r.tasks}</button>` : ""}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         ${voice.quiet ? "" : `<span class="stamp">${esc(voice.word)}</span>`}
-        <button class="role" data-agent="${esc(roleOf(r.run).id)}"
-          title="Show every conversation with ${esc(roleOf(r.run).label)}">${esc(roleOf(r.run).label)}</button>
-        ${voice.quiet ? "" : `<span class="note">${esc(r.note)}</span>`}
+        ${(r.tasks ?? 1) > 1 && (r.run.task ?? "").trim()
+          ? `<span class="oneliner">${esc(titleOf(r.run))}</span>` : ""}
+        <span class="when">${esc(agoOf(r.run.started_at))}</span>
+        ${r.run.cost_usd != null ? `<span class="cost">$${r.run.cost_usd.toFixed(2)}</span>` : ""}
         <span class="acts">${actionsFor(r.run).map((a) =>
           `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
           ` title="${esc(a.label)}">${a.mark}</button>`).join("")}</span>
@@ -243,6 +263,8 @@ export function railBody(
     title="Show agents from another project">${esc(rail.header.scope || "all workspaces")}</button><span
     class="counts">${esc(headerLine(rail.header))}</span></div>
   <div class="chips">${chips}</div>
+  <input class="seek" id="seek" type="search" placeholder="Filter agents and tasks"
+    aria-label="Filter the roster" />
   ${rail.filter ? `<div class="crumbs"><button class="crumb" data-agent="">‹ Team</button>` +
     `<span class="crumbSep">/</span><span class="crumbNow">${esc(rail.filter)}</span></div>` : ""}
 </div>
@@ -261,7 +283,18 @@ export function railScript(): string {
   document.querySelectorAll(".row").forEach((r) => {
     r.addEventListener("click", () => api.postMessage({ type: "open", runId: r.dataset.run }));
   });
-  document.querySelectorAll(".role, .crumb").forEach((b) => {
+  {
+    // The filter a professional reaches for before scrolling. Client-side, over what the row SAYS,
+    // because that is what the person is matching on too.
+    const seek = document.getElementById("seek");
+    if (seek) seek.addEventListener("input", () => {
+      const q = seek.value.trim().toLowerCase();
+      document.querySelectorAll(".row").forEach((row) => {
+        row.style.display = !q || row.textContent.toLowerCase().includes(q) ? "" : "none";
+      });
+    });
+  }
+  document.querySelectorAll(".tasks, .crumb").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();  // going to the agent must not also open the conversation under it
       api.postMessage({ type: "agent", id: b.dataset.agent });

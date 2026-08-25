@@ -10,7 +10,7 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { attentionOf, brainOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS, SCOPE_COMMAND } from "./rail.ts";
+import { attentionOf, brainOf, buildRail, railAction, railRoute, CHIPS, HELD_SECONDS, RANK, SCOPE_COMMAND } from "./rail.ts";
 import { buildTeam } from "./teamState.ts";
 import { actionsFor } from "./agentActions.ts";
 
@@ -345,4 +345,26 @@ test("the roster lists the ready company after the working one", () => {
   assert.equal(rail.runs[0].run.run_id, "f1", "an error outranks a ready desk");
   assert.equal(rail.runs[1].attention, "ready");
   assert.equal(rail.runs[1].tasks, 0);
+});
+
+test("a stopped run outranks the finished and never wears their mark", () => {
+  const stopped = attentionOf({ run_id: "a", status: "stopped" } as never, 0);
+  assert.equal(stopped, "stopped");
+  const done = attentionOf({ run_id: "b", status: "completed" } as never, 0);
+  assert.equal(done, "finished");
+  assert.ok(RANK.indexOf("stopped") < RANK.indexOf("finished"),
+    "worst-of-members must pick STOPPED over ✓ when a group holds both");
+});
+
+test("a grouped row speaks the worst of its members", () => {
+  /* tester×3 with two done and one stopped must not say ✓. */
+  const runs = [
+    { run_id: "1", provider: "claude", agent: "t", name: "t", status: "completed", started_at: 3 },
+    { run_id: "2", provider: "claude", agent: "t", name: "t", status: "stopped", started_at: 2 },
+    { run_id: "3", provider: "claude", agent: "t", name: "t", status: "completed", started_at: 1 },
+  ];
+  const rail = buildRail(runs as never[], "s", () => 0, undefined, undefined,
+    ((r: { agent?: string }) => ({ id: r.agent ?? "x", label: r.agent ?? "x" })) as never);
+  assert.equal(rail.runs.length, 1);
+  assert.equal(rail.runs[0].attention, "stopped");
 });

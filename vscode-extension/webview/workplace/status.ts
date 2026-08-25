@@ -61,6 +61,9 @@ const SHAPES: Record<StampKind, string> = {
   held: "held",
   finished: "done",
   "not-ours": "foreign",
+  /* Reuses the held drawing until the artist cuts a dedicated one — the WORD carries the meaning
+     (STOPPED), and a wrong-but-present placard beats a compile error in a shared file. */
+  stopped: "held",
 };
 
 function stampOf(kind: StampKind): Stamp {
@@ -74,6 +77,7 @@ export const STAMPS: Record<StampKind, Stamp> = {
   held: stampOf("held"),
   finished: stampOf("finished"),
   "not-ours": stampOf("not-ours"),
+  stopped: stampOf("stopped"),
 };
 
 /** What a counter calls each state. Lowercase here — a tally is prose, a stamp is a stamp — but
@@ -170,6 +174,8 @@ const BEHAVIOUR: Record<Attention, Behaviour> = {
      first job stands at its station. Thirty declared-but-idle agents at their desks reading as
      a staffed floor waiting for work is the honest picture of a big roster. */
   ready: { posture: "stand", post: "desk", stamp: false },
+  /* Killed by a person: stands at its desk wearing the word — not success, not an alarm. */
+  stopped: { posture: "stand", post: "desk", stamp: true },
 };
 
 export function behaviourOf(a: Attention): Behaviour {

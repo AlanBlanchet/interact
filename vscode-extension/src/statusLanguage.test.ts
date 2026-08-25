@@ -80,3 +80,13 @@ test("a finished agent says nothing — the checkmark is the whole message", () 
   assert.ok(!STATUS.error.quiet, "an error must still SAY so");
   assert.ok(!STATUS.asked.quiet, "a question waiting on him must still say so");
 });
+
+test("a killed run never reads as success", () => {
+  /* The professional sweep found tester×3 wearing ✓ while the agent card said "stopped" for the
+     same runs, 200px apart. A run somebody killed did not finish its job; folding it into
+     "finished" hides exactly the runs a person stopped for a reason. */
+  assert.equal(STATUS.stopped.mark !== STATUS.finished.mark, true, "stopped must not wear the checkmark");
+  assert.equal(STATUS.stopped.word, "STOPPED");
+  assert.ok(!STATUS.stopped.quiet, "it is not an alarm, but it must SAY what it is");
+  assert.equal(STATUS.stopped.tinted, false, "neutral ink: attention-worthy, not alarming");
+});

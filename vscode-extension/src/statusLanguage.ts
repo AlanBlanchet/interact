@@ -14,7 +14,7 @@
  *  of people and invisible in a screenshot glanced at across a desk.
  */
 
-export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours" | "ready";
+export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours" | "ready" | "stopped";
 
 export type StatusVoice = {
   /** Shape first: readable without colour. */
@@ -50,6 +50,9 @@ export const STATUS: Record<Attention, StatusVoice> = {
   "not-ours": { mark: "○", word: "NOT OURS", phrase: "another project", accent: "--vscode-charts-purple", tinted: false },
   /** Declared in the company file, never yet asked for anything. Present, named, quiet — "some
    *  other agents exist but aren't used" was the whole roster rendering as absence. */
+  /** Somebody KILLED this run. Not an alarm, but never success: folding it into "finished" hid
+   *  exactly the runs a person stopped for a reason. Neutral ink, says its word. */
+  stopped: { mark: "■", word: "STOPPED", phrase: "stopped", accent: "--vscode-descriptionForeground", tinted: false },
   ready: { mark: "·", word: "READY", phrase: "ready", accent: "--vscode-descriptionForeground", tinted: false, quiet: true },
 };
 

@@ -46,6 +46,9 @@ export interface Sequence {
   arrows: Arrow[];
   width: number;
   height: number;
+  /** Agents in scope who neither spawned, were spawned, nor spoke — shown as a count, never as
+   *  empty columns. */
+  silent: number;
 }
 
 const LANE_W = 190;
@@ -55,7 +58,18 @@ const TOP = 74;
 
 /** Lanes in START order — the diagram reads as the team forming, left to right. */
 export function buildSequence(runs: SeqRun[], messages: SeqMessage[]): Sequence {
-  const ordered = [...runs].sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0));
+  // A lane is EARNED by participating — spawning, being spawned, or exchanging a message. The
+  // whole roster used to get one each: seventeen columns for two participants, the subject hidden
+  // by its own cast list. When nobody interacted at all, everyone keeps a lane: a team that never
+  // spoke is still a team, and an empty stage reads as a bug.
+  const spoke = new Set<string>();
+  for (const r of runs) {
+    if (r.parent_run_id) { spoke.add(r.run_id); spoke.add(r.parent_run_id); }
+  }
+  for (const m of messages) { spoke.add(m.from_run); spoke.add(m.to_run); }
+  const cast = spoke.size ? runs.filter((r) => spoke.has(r.run_id)) : runs;
+  const silent = runs.length - cast.length;
+  const ordered = [...cast].sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0));
   const lanes: Lane[] = ordered.map((r, i) => ({
     run_id: r.run_id,
     name: r.name,
@@ -96,6 +110,7 @@ export function buildSequence(runs: SeqRun[], messages: SeqMessage[]): Sequence 
   return {
     lanes,
     arrows,
+    silent,
     width: LANE_X0 + Math.max(1, lanes.length) * LANE_W,
     height: TOP + Math.max(1, arrows.length) * ROW_H + 30,
   };
@@ -158,5 +173,10 @@ export function renderSequence(seq: Sequence): string {
       `<text class="arrow-label ${cls}" x="${mid}" y="${arrow.y - 7}" text-anchor="middle">${esc(arrow.label)}</text>`,
     );
   }
-  return `<svg viewBox="0 0 ${seq.width} ${seq.height}" width="${seq.width}" height="${seq.height}" role="img" aria-label="Agent sequence">${parts.join("")}</svg>`;
+  // The silent are a sentence, not columns: "15 silent" tells the reader the cast was bigger
+  // without hiding the two who actually spoke behind fifteen empty lanes.
+  const silent = seq.silent > 0
+    ? `<text x="${seq.width - 12}" y="${18}" text-anchor="end" class="seq-silent">${seq.silent} silent</text>`
+    : "";
+  return `<svg viewBox="0 0 ${seq.width} ${seq.height}" width="${seq.width}" height="${seq.height}" role="img" aria-label="Agent sequence">${parts.join("")}${silent}</svg>`;
 }

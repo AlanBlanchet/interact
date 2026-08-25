@@ -55,7 +55,7 @@ const ALL: (AgentAction & { when: (s: ActionSubject) => boolean })[] = [
   },
   {
     id: "prompt", label: "See their instructions", mark: "◱",
-    command: "interact.agents.openConversation",
+    command: "interact.agents.definition",
     when: (s) => Boolean(s.definition_path),
   },
   {

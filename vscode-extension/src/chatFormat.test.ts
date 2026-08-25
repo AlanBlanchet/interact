@@ -154,11 +154,16 @@ test("context size is shown as tokens, not only as cost", () => {
   assert.match(html, /120,000|120k/i);
 });
 
-test("identity a person needs to find the process is there", () => {
+test("identity a person can USE is there; machine identity is not", () => {
+  /* The professional sweep measured the about-block as half plumbing — a dead pid, a full UUID
+     nobody can act on. Provider and model stay (a person chooses by them); the process number and
+     session id live in the registry, where machines look. */
   const html = chatDocument({ nonce: "n", name: "code-reviewer", status: "running", turns: [], run: RUN });
-  for (const fact of ["claude", "sonnet", "4242", "abcd1234"]) {
+  for (const fact of ["claude", "sonnet"]) {
     assert.ok(html.includes(fact), `missing ${fact}`);
   }
+  assert.ok(!html.includes("4242"), "a pid is plumbing, not information");
+  assert.ok(!html.includes("abcd1234"), "so is a session id");
 });
 
 test("a run with no definition does not render an empty system-prompt row", () => {

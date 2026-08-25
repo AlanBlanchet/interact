@@ -380,12 +380,15 @@ function toolBox(call: Turn, answer: Turn | undefined): string {
     // Beyond a handful of lines the output folds: show the head, fold the rest behind its count.
     // Four different truncation conventions had grown across the panel; this is the one rule.
     const lines = body.split("\n");
-    if (lines.length > 6) {
-      const head = escapeHtml(lines.slice(0, 5).join("\n"));
-      const rest = escapeHtml(lines.slice(5).join("\n"));
+    if (lines.length > 3) {
+      // "2-line summary at rest" — the professional sweep measured fourteen raw lines of
+      // line-numbered HTML sitting open in the transcript. Two lines carry the scent; the count
+      // carries the size; the click carries the rest.
+      const head = escapeHtml(lines.slice(0, 2).join("\n"));
+      const rest = escapeHtml(lines.slice(2).join("\n"));
       return `<div class="io"><span class="io-tag">${tag}</span>` +
         `<pre class="io-body">${head}\n</pre></div>` +
-        `<details class="io-more"><summary>${lines.length - 5} more lines</summary>` +
+        `<details class="io-more"><summary>${lines.length - 2} more lines</summary>` +
         `<pre class="io-body">${rest}</pre></details>`;
     }
     return `<div class="io"><span class="io-tag">${tag}</span>` +
@@ -1257,11 +1260,13 @@ export function renderDetails(
   rows.push([
     "context",
     `${tokens(run.input_tokens)} in · ${tokens(run.output_tokens)} out` +
-      (run.cost_usd != null ? ` · ~$${run.cost_usd.toFixed(4)}` : ""),
+      (run.cost_usd != null ? ` · ~$${run.cost_usd.toFixed(2)}` : ""),
   ]);
   if (run.cwd) rows.push(["working dir", run.cwd]);
-  rows.push(["process", run.pid ? String(run.pid) : "not running"]);
-  rows.push(["session", run.run_id]);
+  // No pid, no UUID: the professional sweep measured the about-block as half plumbing — two
+  // absolute paths wrapped over nine lines each, a dead process number, a full session id nobody
+  // can do anything with. What a person needs are the LINKS (rendered as files below); identity
+  // for machines stays in the registry.
 
   const table = rows
     .map(([k, v]) => `<div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div>`)

@@ -28,7 +28,7 @@ test("every destination is in the document at rest, with its word", () => {
   // Two destinations now, not four: the dashboard and the sequence view are their own surfaces and
   // live in the palette. What a panel this narrow must still offer at rest is the world and a way
   // to start someone — see CHIPS.
-  for (const label of ["Team", "Company"]) {
+  for (const label of ["Team", "+ New"]) {
     assert.ok(doc.includes(`>${label}<`), `"${label}" is not present without hovering`);
   }
 });
@@ -49,7 +49,9 @@ test("an empty team still renders every destination", () => {
 test("a run that needs you is marked, not merely listed", () => {
   const doc = html([run({ run_id: "bad", name: "perf-critic", status: "crashed" })]);
   assert.ok(doc.includes("perf-critic"));
-  assert.ok(doc.includes("stopped with an error"));
+  /* The prose note ("stopped with an error") left with the one-row grammar — the WORD carries the
+     state now, exactly as the workplace stamps it, and the row spends its width on what/when/cost. */
+  assert.ok(doc.includes(">ERROR<"));
   assert.match(doc, /data-attention="error"/);
 });
 

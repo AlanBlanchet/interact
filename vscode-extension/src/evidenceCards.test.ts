@@ -96,8 +96,10 @@ test("long output folds behind its count — one truncation rule, not four", () 
   const html = renderTranscript([
     { kind: "tool", tool: "Bash", tool_input: "make" }, { kind: "tool_result", text: out },
   ] as never[]);
-  assert.match(html, /<summary>25 more lines<\/summary>/);
-  assert.ok(html.includes("line 4") && html.includes("line 29"), "nothing is thrown away");
+  assert.match(html, /<summary>28 more lines<\/summary>/);
+  assert.ok(html.includes("line 1") && html.includes("line 29"), "nothing is thrown away");
+  assert.ok(!/io-body[^>]*>[^<]*line 4/.test(html.split("<details")[0]),
+    "at rest the summary is two lines, not five — the click has the rest");
 });
 
 test("a harness injection folds as machinery, never as something HE said", () => {

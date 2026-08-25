@@ -6,7 +6,7 @@ import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
-import { readOrg, spawnArgs, spawnChoices } from "./org";
+import { definitionFile, readOrg, spawnArgs, spawnChoices } from "./org";
 import { chooseModel, clearChoice, modelChosenFor } from "./agentModels";
 import { knownModes, modeChoices } from "./permissionModes";
 import {
@@ -399,6 +399,15 @@ export async function activate(
     // Choosing what runs on what. The company file DECLARES a model per agent, but it is generated
     // from the prompt repo — so a choice made here is stored beside interact's own state, where no
     // generator owns it, and shown as overriding rather than replacing the declaration.
+    // "See their instructions" opened the TRANSCRIPT — a label that lied, caught by the sweep.
+    // This opens the definition file itself, resolved against the prompt repo's real location.
+    vscode.commands.registerCommand("interact.agents.definition", (arg?: { run?: { agent?: string | null; definition_path?: string | null } }) => {
+      const run = arg?.run;
+      const path = run?.definition_path
+        ?? (run?.agent ? definitionFile(run.agent, readOrg()) : null);
+      if (path) void vscode.window.showTextDocument(vscode.Uri.file(path));
+      else void vscode.window.showInformationMessage("This run has no definition file — it is a bare session.");
+    }),
     // The middle depth: an agent and the tasks it was given.
     vscode.commands.registerCommand("interact.agents.agent", async (arg?: string | { run?: { agent?: string } }) => {
       let agent = typeof arg === "string" ? arg : arg?.run?.agent;
@@ -600,12 +609,13 @@ export async function activate(
             : "dismiss to leave your CLI's own setting alone",
           matchOnDetail: true,
         });
-        // Dismissing keeps the workspace default rather than choosing the first item: a picker
-        // whose top entry silently applies when you press Escape is a trap.
-        if (mode) {
-          permissionMode = mode.id;
-          await context.workspaceState.update(DEFAULT_MODE_KEY, mode.id);
-        }
+        // Escape CANCELS. It used to fall through and spawn with the default — a paid process
+        // launched from the cancel gesture, observed live by an independent sweep. The default is
+        // an explicit row in the picker ("Your CLI's default"), so nothing is lost by making the
+        // dismiss gesture mean what it means everywhere else.
+        if (mode === undefined) return;
+        permissionMode = mode.id;
+        if (mode.id) await context.workspaceState.update(DEFAULT_MODE_KEY, mode.id);
       }
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const args = spawnArgs({

@@ -32,9 +32,9 @@ import type { AgentRun } from "./agents";
 export const HELD_SECONDS = 120;
 
 /** Why a run wants attention, worst first. The ORDER of this list IS the sort. */
-export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours" | "ready";
+export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours" | "ready" | "stopped";
 
-const RANK: Attention[] = ["error", "asked", "held", "working", "finished", "ready", "not-ours"];
+export const RANK: Attention[] = ["error", "asked", "held", "stopped", "working", "finished", "ready", "not-ours"];
 
 export interface RailRun {
   run: AgentRun;
@@ -64,6 +64,8 @@ export function attentionOf(run: AgentRun, idleSeconds: number, awaitingReply = 
   // Declared in the company file, never asked: present and quiet, below everything with history.
   if (run.status === "declared") return "ready";
   if (run.status === "failed" || run.status === "crashed") return "error";
+  // Killed by a person: never success, mildly attention-worthy — the kill had a reason.
+  if (run.status === "stopped") return "stopped";
   if (run.status === "running") {
     if (awaitingReply) return "asked";
     return idleSeconds >= HELD_SECONDS ? "held" : "working";
@@ -93,7 +95,9 @@ export interface RailChip {
  */
 export const CHIPS: RailChip[] = [
   { id: "team", label: "Team", command: "interact.agents.team" },
-  { id: "company", label: "Company", command: "interact.agents.spawn" },
+  // "+ New", because that is what it DOES — the sweep reproduced "Company" opening the spawn
+  // picker twice and called the label a lie. The company itself is the world.
+  { id: "company", label: "+ New", command: "interact.agents.spawn" },
 ];
 
 export interface RailHeader {
@@ -117,6 +121,7 @@ export interface Rail {
 
 const NOTES: Record<Attention, string> = {
   ready: "ready",
+  stopped: "stopped",
   error: "stopped with an error",
   asked: "asked you something",
   held: "nothing for a while",
@@ -267,6 +272,10 @@ const ROW_COMMANDS = new Set([
   "interact.agents.openConversation",
   "interact.agents.showEvents",
   "interact.agents.stop",
+  "interact.agents.model",
+  // Opens the definition FILE — "See their instructions" used to open the transcript, a label
+  // the professional sweep caught lying.
+  "interact.agents.definition",
 ]);
 
 export type RailAction =
