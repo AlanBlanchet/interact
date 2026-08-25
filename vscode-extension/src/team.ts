@@ -47,7 +47,11 @@ export interface Worker {
   agent: string | null;
   /** How many errands this agent was given. One body stands for all of them. */
   tasks?: number;
-  status: "running" | "done" | "error" | "foreign";
+  status: "running" | "done" | "error" | "foreign"
+    /** Declared in the company, never asked. The world draws it STANDING at ease — crisp, no
+     *  fade, waiting for its first job — where finished LOUNGES having done one. Different
+     *  stories, different postures; the artist owns the posture table. */
+    | "ready";
   zone: ZoneId;
   /** What they are doing, in words a person would say: "reading registry.py". */
   activity: string;

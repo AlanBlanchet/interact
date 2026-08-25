@@ -143,7 +143,7 @@ export function activityOf(step: Step | undefined): string {
 
 /** Which state most needs you, worst first. A character with a failed errand and two finished ones
  *  is not "done" — the eye has to land on the one that needs him. */
-const NEEDS_YOU: readonly string[] = ["error", "running", "done", "foreign"];
+const NEEDS_YOU: readonly string[] = ["error", "running", "done", "ready", "foreign"];
 
 const VERBS: Record<string, string> = {
   Read: "reading",
@@ -271,9 +271,10 @@ function safeFaculties(run: RunLike, resolve: (run: RunLike) => string[]): strin
 }
 
 export function floorStatus(status: string | undefined): Worker["status"] {
-  // Declared in the company, never asked: the body RESTS. Ready is a rail word; in the world the
-  // posture already says it.
-  if (status === "declared") return "done";
+  // Declared in the company, never asked: READY reaches the world as itself, so the posture
+  // table can draw it standing at ease — collapsing it to "done" made every never-asked agent a
+  // lounger who looked like they had finished something.
+  if (status === "declared") return "ready";
   switch (status) {
     case "failed":
     case "crashed":

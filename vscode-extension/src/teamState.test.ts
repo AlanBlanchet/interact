@@ -630,7 +630,8 @@ test("every declared agent stands in the world, asked or not", () => {
   assert.equal(team.workers.length, 3);
   const ready = team.workers.find((w) => w.agent === "fiscal-auditor")!;
   assert.equal(ready.tasks, 0, "never asked means zero errands, not a fake one");
-  assert.equal(ready.status, "done", "a ready body rests; rest is the posture for 'not working'");
+  assert.equal(ready.status, "ready",
+    "ready reaches the world as itself — standing at ease, not lounging like a finisher");
 });
 
 test("a declared agent can never be crowned the brain", () => {
