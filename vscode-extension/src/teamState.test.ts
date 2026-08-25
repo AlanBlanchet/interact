@@ -612,3 +612,35 @@ test("the speaking run never flickers between renders", () => {
   runs.reverse();
   assert.equal(pick(), first, "input order must not choose the face of the character");
 });
+
+test("every declared agent stands in the world, asked or not", () => {
+  /* "We don't have all the agents! Some other agents exist but aren't used... We should have rooms
+     for all areas of agents... Even all the finance agents... In any projects..."
+
+     The world drew only agents WITH runs, so a 13-member Wealth Desk rendered as an empty room and
+     'production' looked like one lonely teacher. The company file declares the roster; the world
+     seats it. An agent nobody has asked yet is READY at its desk, not absent. */
+  const runs = [
+    { run_id: "r1", name: "researcher", agent: "researcher", status: "running", started_at: 5 },
+    { run_id: "decl:fiscal-auditor", name: "Fiscal auditor", agent: "fiscal-auditor", status: "declared" },
+    { run_id: "decl:artist", name: "Artist", agent: "artist", status: "declared" },
+  ];
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    (r) => ({ id: (r as { agent?: string }).agent ?? "main", label: (r as { name?: string }).name ?? "x" }));
+  assert.equal(team.workers.length, 3);
+  const ready = team.workers.find((w) => w.agent === "fiscal-auditor")!;
+  assert.equal(ready.tasks, 0, "never asked means zero errands, not a fake one");
+  assert.equal(ready.status, "done", "a ready body rests; rest is the posture for 'not working'");
+});
+
+test("a declared agent can never be crowned the brain", () => {
+  /* The brain is the first agent YOU asked. With no runs at all there is no brain — crowning a
+     random ready agent would invent an orchestrator nobody hired. */
+  const runs = [
+    { run_id: "decl:a", name: "a", agent: "a", status: "declared" },
+    { run_id: "decl:b", name: "b", agent: "b", status: "declared" },
+  ];
+  const team = buildTeam(runs as never[], () => [], 100, [], () => [], () => null,
+    (r) => ({ id: (r as { agent?: string }).agent ?? "x", label: "x" }));
+  assert.ok(!team.workers.some((w) => w.brain), "an empty project has no brain");
+});

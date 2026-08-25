@@ -321,16 +321,55 @@ function imagePathsOf(text: string): string[] {
  *  where code belongs. The result turn for a file tool is a mechanical acknowledgement ("The file
  *  has been updated…") and is folded away entirely.
  */
+/** One quoted argument out of a summarised tool input. Python writes old_string='...' with the
+ *  content's newlines escaped as literal backslash-n; the clip suffix ("... (+N chars)") rides
+ *  inside the quotes and is stripped. */
+function argOf(input: string, name: string): string | null {
+  // Concatenation, not a template literal: the quote-and-backslash soup inside this pattern
+  // defeats the check-css template scanner's lexer and every later comment gets falsely flagged.
+  const m = new RegExp(name + "='((?:[^'\\\\]|\\\\.)*)'").exec(input);
+  if (!m) return null;
+  return m[1].replace(/… \(\+\d+ chars\)$/, "");
+}
+
+/** A few lines of a change, coloured the way every diff is coloured.
+ *
+ *  "The code updated / modifications aren't in color, and show too much instead of a preview." So:
+ *  at most cap minus lines and cap plus lines, in the theme's own diff tints, with a count for
+ *  what the click holds. The preview is a SCENT of the change, never the change.
+ */
+function diffPreview(oldText: string | null, newText: string | null, cap = 3): string {
+  const split = (t: string) => t.split("\\n").filter((l) => l.trim() !== "");
+  const row = (cls: string, sign: string, line: string) =>
+    `<div class="${cls}"><span class="diff-sign">${sign}</span>${escapeHtml(line)}</div>`;
+  const side = (text: string | null, cls: string, sign: string) => {
+    if (!text) return "";
+    const lines = split(text);
+    const shown = lines.slice(0, cap).map((l) => row(cls, sign, l)).join("");
+    const more = lines.length > cap ? `<div class="diff-more">· ${lines.length - cap} more</div>` : "";
+    return shown + more;
+  };
+  const body = side(oldText, "diff-del", "−") + side(newText, "diff-add", "+");
+  return body ? `<div class="diff">${body}</div>` : "";
+}
+
 function fileCard(call: Turn, path: string): string {
   const verb = FILE_TOOLS[call.tool ?? ""] ?? "touched";
   const base = escapeHtml(path.split("/").pop() ?? path);
   const dir = escapeHtml(path.slice(0, path.length - (path.split("/").pop() ?? "").length));
+  const input = call.tool_input ?? "";
+  // Edits preview old→new; a write previews its opening lines as additions; a read changes
+  // nothing and previews nothing.
+  const preview = call.tool === "Read" ? "" : diffPreview(
+    argOf(input, "old_string"),
+    argOf(input, "new_string") ?? argOf(input, "content"),
+  );
   return `<div class="turn turn-tool turn-file"><button class="file-open" data-open="${escapeHtml(path)}"` +
     ` title="Open ${escapeHtml(path)}">` +
     `<span class="file-verb">${escapeHtml(verb)}</span>` +
     `<span class="file-name">${base}</span>` +
     `<span class="file-dir">${dir}</span>` +
-    `</button></div>`;
+    `</button>${preview}</div>`;
 }
 
 function toolBox(call: Turn, answer: Turn | undefined): string {
@@ -921,6 +960,19 @@ const STYLE = `
   .io-more { padding: 0 .7em .45em 2.6em; }
   .io-more > summary { cursor: pointer; color: var(--wp-dim); font-size: .82em; list-style: none; }
   .io-more > summary::-webkit-details-marker { display: none; }
+  /* The diff preview: the theme's own diff tints, monospace, a sign column. */
+  .diff { padding: .1em .7em .5em; font-family: var(--vscode-editor-font-family); font-size: .88em; }
+  .diff-del, .diff-add { padding: 0 .4em; border-radius: 3px; white-space: pre-wrap; overflow-wrap: break-word; }
+  .diff-del {
+    background: var(--vscode-diffEditor-removedTextBackground, color-mix(in srgb, var(--vscode-charts-red) 14%, transparent));
+    color: var(--vscode-editor-foreground);
+  }
+  .diff-add {
+    background: var(--vscode-diffEditor-insertedTextBackground, color-mix(in srgb, var(--vscode-charts-green) 14%, transparent));
+    color: var(--vscode-editor-foreground);
+  }
+  .diff-sign { display: inline-block; width: 1.1em; color: var(--wp-dim); user-select: none; }
+  .diff-more { color: var(--wp-dim); font-size: .85em; padding: 1px .4em; }
   .io-shot { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
   /* A thought, folded to a whisper. */
   details.turn-thinking > summary { cursor: pointer; list-style: none; color: var(--wp-dim);

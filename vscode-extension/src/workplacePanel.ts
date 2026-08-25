@@ -51,6 +51,11 @@ export class WorkplacePanel {
       if (runId) {
         // A character IS an agent now, so clicking one opens that agent and the errands it was
         // given, rather than dropping you into whichever single run happened to speak for it.
+        // A READY character has no real run behind it — its id names the agent directly.
+        if (runId.startsWith("decl:")) {
+          void vscode.commands.executeCommand("interact.agents.agent", runId.slice(5));
+          return;
+        }
         const run = readAgentRuns().find((r) => r.run_id === runId);
         const company = companyOf(readOrg()) ?? undefined;
         const who = run ? roleOf(run as never, company) : null;
@@ -103,7 +108,7 @@ export class WorkplacePanel {
   /** Everyone in the building right now, placed by what they are doing. */
   private state(): TeamState {
     return buildTeam(
-      (scopeStore()?.runs() ?? readAgentRuns()) as never,
+      WorkplacePanel.withDeclared(scopeStore()?.runs() ?? readAgentRuns()) as never,
       // The whole recent window, not one event: the vendor emits housekeeping constantly, and a
       // finished worker's room is found by walking back to the last thing it actually did.
       (runId) => readAgentActivity(runId, STEP_WINDOW),
@@ -177,7 +182,7 @@ export class WorkplacePanel {
   private roster(): string {
     const company = companyOf(readOrg()) ?? undefined;
     const store = scopeStore();
-    const runs = store?.runs() ?? readAgentRuns();
+    const runs = WorkplacePanel.withDeclared(store?.runs() ?? readAgentRuns());
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const now = Date.now() / 1000;
     const rail = buildRail(
@@ -203,6 +208,31 @@ export class WorkplacePanel {
    *  animation in it. */
   private pushRoster(): void {
     void this.panel.webview.postMessage({ type: "roster", html: this.roster() });
+  }
+
+  /** The whole declared company, as synthetic READY runs for every agent with no real errand.
+   *
+   *  "We don't have all the agents! Some other agents exist but aren't used... rooms for all
+   *  areas... Even all the finance agents... In any projects." The world drew only agents WITH
+   *  runs, so a 13-member Wealth Desk rendered as an empty room. The company file declares the
+   *  roster; the world seats it — project-independent, because the company exists whether or not
+   *  this folder has asked it anything yet.
+   */
+  private static withDeclared(runs: readonly import("./agents").AgentRun[]): import("./agents").AgentRun[] {
+    const org = readOrg();
+    if (!org) return [...runs];
+    const company = companyOf(org) ?? undefined;
+    const present = new Set(runs.map((r) => roleOf(r as never, company).id));
+    const ready = org.agents
+      .filter((a) => !present.has(a.name))
+      .map((a) => ({
+        run_id: `decl:${a.name}`,
+        provider: a.providers?.[0] ?? "claude",
+        name: a.title ?? a.name,
+        agent: a.name,
+        status: "declared",
+      } as unknown as import("./agents").AgentRun));
+    return [...runs, ...ready];
   }
 
   private render(): void {

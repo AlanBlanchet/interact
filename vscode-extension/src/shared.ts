@@ -41,7 +41,10 @@ export type AgentStatus =
   | "failed"
   | "crashed"
   | "stopped"
-  | "foreign";
+  | "foreign"
+  /** Declared in the company file, never asked. Only the Team panel synthesizes these today; the
+   *  board never receives one, but the type is one vocabulary across surfaces on purpose. */
+  | "declared";
 
 /**
  * One agent as the board draws it: an identity plus an interval on a shared clock.

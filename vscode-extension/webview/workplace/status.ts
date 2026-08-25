@@ -38,7 +38,7 @@ export const STALL_SECONDS = 120;
  *  states (`done` / `error` / `held` / `foreign`) beside a rail that named six — same taxonomy,
  *  two spellings, which is how one product ends up looking like two.
  */
-export type StampKind = Exclude<Attention, "working">;
+export type StampKind = Exclude<Attention, "working" | "ready">;
 
 export interface Stamp {
   kind: StampKind;
@@ -113,7 +113,8 @@ export function attentionOf(w: Standing): Attention {
 
 export function stampFor(w: Standing): Stamp | null {
   const a = attentionOf(w);
-  return a === "working" ? null : STAMPS[a];
+  // Working and ready carry no placard: one is busy, the other has simply not been asked yet.
+  return a === "working" || a === "ready" ? null : STAMPS[a];
 }
 
 /* ── the state a BODY carries, rather than a placard ─────────────────────────────────────────
@@ -158,6 +159,9 @@ const BEHAVIOUR: Record<Attention, Behaviour> = {
   asked: { posture: "stand", post: "desk", stamp: true },
   finished: { posture: "lounge", post: "rest", stamp: false },
   "not-ours": { posture: "lounge", post: "rest", stamp: false },
+  /* Declared in the company, never asked: at ease in its own room, no placard, no caption —
+     presence IS the message ("some other agents exist but aren't used"). */
+  ready: { posture: "lounge", post: "rest", stamp: false },
 };
 
 export function behaviourOf(a: Attention): Behaviour {

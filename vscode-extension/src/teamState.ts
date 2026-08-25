@@ -242,7 +242,9 @@ function placeByDomain(
  *  putting one at the head of the company would claim an authority this view does not have.
  */
 function brainOf(runs: readonly RunLike[]): string | null {
-  const ours = runs.filter((r) => r.status !== "foreign");
+  // Declared-but-never-asked agents are not candidates: with no runs at all there is no brain,
+  // and crowning a ready desk would invent an orchestrator nobody hired.
+  const ours = runs.filter((r) => r.status !== "foreign" && r.status !== "declared");
   const ids = new Set(ours.map((r) => r.run_id));
   const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
   if (!roots.length) return null;
@@ -269,6 +271,9 @@ function safeFaculties(run: RunLike, resolve: (run: RunLike) => string[]): strin
 }
 
 export function floorStatus(status: string | undefined): Worker["status"] {
+  // Declared in the company, never asked: the body RESTS. Ready is a rail word; in the world the
+  // posture already says it.
+  if (status === "declared") return "done";
   switch (status) {
     case "failed":
     case "crashed":
@@ -342,7 +347,7 @@ export function buildTeam(
       run_id: run.run_id,
       name: identify(run).label,
       /** How many errands this agent was given — the roster and the side panel list them. */
-      tasks: held.length,
+      tasks: held.every((r) => r.status === "declared") ? 0 : held.length,
       agent: run.agent ?? null,
       status: floorStatus(worst.status),
       faculties: safeFaculties(run, facultiesFor),

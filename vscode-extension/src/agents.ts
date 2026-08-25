@@ -24,7 +24,10 @@ export interface AgentRun {
   /** The repo/package this run belongs to, derived by Python from the repo root — NOT the working
    *  directory's own name, which splits one project across several groups. */
   project?: string;
-  status: "running" | "done" | "failed" | "crashed" | "stopped" | "foreign";
+  status: "running" | "done" | "failed" | "crashed" | "stopped" | "foreign"
+    /** Declared in the company file, never yet asked for anything — a synthetic entry the panel
+     *  makes so the whole roster stands in the world ("some other agents exist but aren't used"). */
+    | "declared";
   pid?: number | null;
   /** The DEFINITION this run is — resolves to the file holding its system prompt. */
   agent?: string | null;

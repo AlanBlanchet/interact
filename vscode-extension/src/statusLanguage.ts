@@ -14,7 +14,7 @@
  *  of people and invisible in a screenshot glanced at across a desk.
  */
 
-export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours";
+export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours" | "ready";
 
 export type StatusVoice = {
   /** Shape first: readable without colour. */
@@ -48,6 +48,9 @@ export const STATUS: Record<Attention, StatusVoice> = {
   finished: { mark: "✓", word: "DONE", phrase: "finished", accent: "--vscode-charts-green", tinted: true, quiet: true },
   working: { mark: "●", word: "WORKING", phrase: "working", accent: "--vscode-charts-blue", tinted: true, quiet: true },
   "not-ours": { mark: "○", word: "NOT OURS", phrase: "another project", accent: "--vscode-charts-purple", tinted: false },
+  /** Declared in the company file, never yet asked for anything. Present, named, quiet — "some
+   *  other agents exist but aren't used" was the whole roster rendering as absence. */
+  ready: { mark: "·", word: "READY", phrase: "ready", accent: "--vscode-descriptionForeground", tinted: false, quiet: true },
 };
 
 /** The voice for a state, falling back to `working` rather than rendering a blank cell — an

@@ -331,3 +331,18 @@ test("the roster's rows are the map's sprites — one entity model per screen", 
     { agent: "researcher", roleOf: (r) => identify(r as never).id }, identify as never);
   assert.equal(drilled.runs.length, 2, "inside an agent, the rows are its errands again");
 });
+
+test("the roster lists the ready company after the working one", () => {
+  /* Rows = sprites still holds with the full company drawn: a declared agent is a quiet row at the
+     bottom — present, named, zero-count — never competing with an errand that needs him. */
+  const runs = [
+    { run_id: "f1", provider: "claude", name: "x", agent: "x", status: "failed", started_at: 9 },
+    { run_id: "decl:y", provider: "claude", name: "y", agent: "y", status: "declared" },
+  ];
+  const identify = (r: { agent?: string | null }) => ({ id: r.agent ?? "m", label: r.agent ?? "m" });
+  const rail = buildRail(runs as never[], "s", () => 0, undefined, undefined, identify as never);
+  assert.equal(rail.runs.length, 2);
+  assert.equal(rail.runs[0].run.run_id, "f1", "an error outranks a ready desk");
+  assert.equal(rail.runs[1].attention, "ready");
+  assert.equal(rail.runs[1].tasks, 0);
+});

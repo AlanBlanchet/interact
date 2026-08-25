@@ -32,9 +32,9 @@ import type { AgentRun } from "./agents";
 export const HELD_SECONDS = 120;
 
 /** Why a run wants attention, worst first. The ORDER of this list IS the sort. */
-export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours";
+export type Attention = "error" | "asked" | "held" | "finished" | "working" | "not-ours" | "ready";
 
-const RANK: Attention[] = ["error", "asked", "held", "finished", "working", "not-ours"];
+const RANK: Attention[] = ["error", "asked", "held", "working", "finished", "ready", "not-ours"];
 
 export interface RailRun {
   run: AgentRun;
@@ -61,6 +61,8 @@ export interface RailRun {
  */
 export function attentionOf(run: AgentRun, idleSeconds: number, awaitingReply = false): Attention {
   if (run.status === "foreign") return "not-ours";
+  // Declared in the company file, never asked: present and quiet, below everything with history.
+  if (run.status === "declared") return "ready";
   if (run.status === "failed" || run.status === "crashed") return "error";
   if (run.status === "running") {
     if (awaitingReply) return "asked";
@@ -114,6 +116,7 @@ export interface Rail {
 }
 
 const NOTES: Record<Attention, string> = {
+  ready: "ready",
   error: "stopped with an error",
   asked: "asked you something",
   held: "nothing for a while",
@@ -137,7 +140,7 @@ const NOTES: Record<Attention, string> = {
  *  would make one of them untestable. Six lines copied beats a module that cannot be tested.
  */
 export function brainOf(runs: readonly AgentRun[]): string | null {
-  const ours = runs.filter((r) => r.status !== "foreign");
+  const ours = runs.filter((r) => r.status !== "foreign" && r.status !== "declared");
   const ids = new Set(ours.map((r) => r.run_id));
   const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
   if (!roots.length) return null;
@@ -184,7 +187,7 @@ export function buildRail(
       })[0];
       const attention = attentionOf(speaks, idleOf(speaks), awaitingReply(speaks));
       return { run: speaks, attention, depth: 0, brain: false, note: NOTES[attention],
-               tasks: bucket.length };
+               tasks: bucket.every((r) => r.status === "declared") ? 0 : bucket.length };
     });
   } else {
     rows = inScope.map((run) => {

@@ -20,7 +20,10 @@
  *  a transcript and then vanished is reported finished; one that vanished having said nothing is
  *  the shape a real crash leaves.
  */
-export type RunStatus = "running" | "done" | "failed" | "crashed" | "stopped" | "foreign";
+export type RunStatus = "running" | "done" | "failed" | "crashed" | "stopped" | "foreign"
+  /** Declared in the company file, never asked — synthesized by the panel so the whole roster
+   *  stands in the world; liveness has nothing to probe on it. */
+  | "declared";
 
 export function livenessOf(
   recorded: RunStatus,

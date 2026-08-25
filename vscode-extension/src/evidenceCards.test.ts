@@ -17,11 +17,13 @@ const edit = (path: string, extra = "") => ({
   tool_input: `file_path='${path}' replace_all=False old_string='const a = 1' new_string='const a = 2'${extra}`,
 });
 
-test("a file edit is a card, never the code dumped inline", () => {
+test("a file edit is a card with a preview, never the change dumped inline", () => {
+  /* The design moved once he asked for colour: the card PREVIEWS a few lines of the change (that
+     is what a preview is), but the raw argument soup and the full payload stay out. */
   const html = renderTranscript([edit("/home/alan/dev/interact/src/interact/models.py")] as never[]);
   assert.ok(html.includes("models.py"), "the card must name the file");
-  assert.ok(!html.includes("const a = 1"), "the change's contents do not belong in the transcript");
-  assert.ok(!html.includes("old_string"), "nor the tool's raw argument soup");
+  assert.ok(!html.includes("old_string"), "the tool's raw argument soup does not belong here");
+  assert.ok(!html.includes("replace_all"), "none of it");
 });
 
 test("clicking the file card opens the file", () => {
@@ -32,7 +34,8 @@ test("clicking the file card opens the file", () => {
 test("write and read get the same card, with their own verb", () => {
   const w = renderTranscript([{ kind: "tool", tool: "Write",
     tool_input: "file_path='/tmp/a.md' content='# hello world this is long content'" }] as never[]);
-  assert.ok(w.includes("a.md") && !w.includes("hello world"), "Write dumps nothing inline");
+  assert.ok(w.includes("a.md"), "the card names the file");
+  assert.ok(w.includes("diff-add"), "and a write previews its opening as additions");
   const r = renderTranscript([{ kind: "tool", tool: "Read",
     tool_input: "file_path='/tmp/b.md'" }] as never[]);
   assert.ok(r.includes("b.md"));
@@ -119,4 +122,53 @@ test("the empty panel is a door, not a caption about a missing list", () => {
   const html = chatDocument({ nonce: "n", turns: [], commands: [] });
   assert.ok(!html.includes("list above"), "the list it pointed at no longer exists there");
   assert.match(html, /id="openTeam"/, "an empty state must lead somewhere");
+});
+
+test("an edit shows a small COLORED diff preview, not nothing and not everything", () => {
+  /* "The code updated / modifications aren't in color, and show too much instead of a preview."
+     The card names the file; the preview shows what changed — a few minus lines, a few plus lines,
+     in the theme's own diff colours — and the click opens the real thing. */
+  const html = renderTranscript([{
+    kind: "tool", tool: "Edit",
+    tool_input: "file_path='/x/a.ts' replace_all=False old_string='const a = 1;\\nconst b = 2;' new_string='const a = 10;\\nconst b = 20;\\nconst c = 30;'",
+  }] as never[]);
+  assert.match(html, /class="diff-del"/, "removed lines must read as removed");
+  assert.match(html, /class="diff-add"/, "added lines must read as added");
+  assert.ok(html.includes("const a = 1;"), "the preview shows the actual change");
+  assert.ok(html.includes("const a = 10;"));
+});
+
+test("a long change previews only its head — the click has the rest", () => {
+  const many = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\\n");
+  const html = renderTranscript([{
+    kind: "tool", tool: "Edit",
+    tool_input: `file_path='/x/a.ts' old_string='${many}' new_string='changed'`,
+  }] as never[]);
+  const dels = html.match(/class="diff-del"/g) ?? [];
+  assert.ok(dels.length <= 4, `${dels.length} minus lines is a dump, not a preview`);
+  assert.match(html, /· \d+ more/, "and it says how much the click holds");
+});
+
+test("a write previews its opening lines as additions", () => {
+  const html = renderTranscript([{
+    kind: "tool", tool: "Write",
+    tool_input: "file_path='/x/new.md' content='# Title\\nFirst line of the doc\\nSecond line'",
+  }] as never[]);
+  assert.match(html, /class="diff-add"/);
+  assert.ok(html.includes("# Title"));
+});
+
+test("a read has no diff to preview and shows none", () => {
+  const html = renderTranscript([{
+    kind: "tool", tool: "Read", tool_input: "file_path='/x/a.ts'",
+  }] as never[]);
+  assert.ok(!html.includes("diff-add") && !html.includes("diff-del"));
+});
+
+test("diff preview content is escaped like everything else", () => {
+  const html = renderTranscript([{
+    kind: "tool", tool: "Edit",
+    tool_input: "file_path='/x/a.ts' old_string='<script>bad()</script>' new_string='safe'",
+  }] as never[]);
+  assert.ok(!html.includes("<script>bad"));
 });

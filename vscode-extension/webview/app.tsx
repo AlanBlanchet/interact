@@ -585,6 +585,12 @@ const STATUS_GLYPH: Record<AgentStatus, () => (Node | null)[]> = {
       stroke-dasharray="2.2 2.2"
     />,
   ],
+  // Declared in the company, never asked: an empty seat — the outline of a circle with a dot,
+  // present but quiet. The board never receives one today; the Record is total on purpose.
+  declared: () => [
+    <circle cx="7" cy="7" r="5.4" className="g-stroke" fill="none" stroke-dasharray="1 2.4" />,
+    <circle cx="7" cy="7" r="1" className="g-fill" />,
+  ],
 };
 
 const STATUS_LABEL: Record<AgentStatus, string> = {
@@ -594,6 +600,7 @@ const STATUS_LABEL: Record<AgentStatus, string> = {
   crashed: "crashed",
   stopped: "stopped",
   foreign: "foreign",
+  declared: "ready",
 };
 
 /** Provider → one of VS Code's own chart hues, so a cross-provider team is legible in both themes
