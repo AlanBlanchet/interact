@@ -90,6 +90,20 @@ const T: Palette = {
   j: "var(--t-bloom)",
   Y: "var(--t-water)",
   C: "var(--t-water-hi)",
+  /* THE FURNITURE RAMPS. Every material a prop is made of carries a lit and a shaded step derived
+     from its base tone, mixed toward the scene's one warm light and one cool shade — the exact
+     rule the trees already obey and the people now obey, extended to the desks and the shelves,
+     because half of "the sprites are weird" was bodies and props being lit by different laws.
+     Metal gets the widest ramp (it is the shiniest thing in the room), cloth the narrowest. */
+  "1": "color-mix(in oklab, var(--t-metal) 66%, #eef4ff)",
+  "2": "color-mix(in oklab, var(--t-metal) 62%, var(--px-shade, #2c2344))",
+  "3": "color-mix(in oklab, var(--t-wood) 62%, var(--px-shade, #2c2344))",
+  "4": "color-mix(in oklab, var(--t-fabric) 80%, var(--px-glint, #ffdfae))",
+  "5": "color-mix(in oklab, var(--t-fabric) 74%, var(--px-shade, #2c2344))",
+  "6": "color-mix(in oklab, var(--t-screen) 60%, #ffffff)",
+  "7": "color-mix(in oklab, var(--t-glass) 72%, var(--px-shade, #2c2344))",
+  "8": "color-mix(in oklab, var(--t-warm) 70%, var(--px-glint, #ffdfae))",
+  "9": "color-mix(in oklab, var(--t-hall) 55%, var(--px-shade, #2c2344))",
 };
 
 const tile = (grid: Grid, extra: Partial<Tile> = {}): Tile => ({ grid, pal: T, rim: false, ...extra });
@@ -205,56 +219,56 @@ export const DOOR_V = tile([
 
 export const DESK = tile(
   [
-    "........",
-    "..eeee..",
-    "..elle..",
-    "..eeee..",
-    "..o..o..",
-    "oooooooo",
-    "onnnnnno",
-    "o......o",
+    ".eeeeee.",
+    ".e6GGGe.",
+    ".eGGGGe.",
+    ".eeeee2.",
+    "...ee...",
+    "nnnnnnnn",
+    "oooooo33",
+    "o3....33",
   ],
   { solid: true },
 );
 
 export const SHELF = tile(
   [
-    "oooooooo",
-    "obybybyo",
-    "obybybyo",
-    "oooooooo",
-    "oybybybo",
-    "oybybybo",
-    "oooooooo",
-    "o......o",
+    "nnnnnnnn",
+    "obbyb3y3",
+    "obyybby3",
+    "onnnnnn3",
+    "oybb3by3",
+    "obbybyy3",
+    "onnnnnn3",
+    "o3....33",
   ],
   { solid: true },
 );
 
 export const RACK = tile(
   [
-    "eeeeeeee",
-    "elllllle",
-    "eeeeeeee",
-    "elllllle",
-    "eeeeeeee",
-    "elllllle",
-    "eeeeeeee",
-    "e......e",
+    "11111112",
+    "1eeleee2",
+    "12222222",
+    "1eeelee2",
+    "12222222",
+    "1eleeee2",
+    "12222222",
+    ".e....2.",
   ],
   { solid: true },
 );
 
 export const PLANT = tile(
   [
-    "...LL...",
-    "..LLLL..",
-    ".LLLLLL.",
-    "LLLLLLLL",
-    "..LLLL..",
-    "...oo...",
-    "..oooo..",
-    "..onno..",
+    "...MM...",
+    "..MLLN..",
+    ".MLLLLN.",
+    ".LLNLLN.",
+    "..LNLN..",
+    "...tT...",
+    "..noon..",
+    "..o33o..",
   ],
   { solid: true },
 );
@@ -262,12 +276,12 @@ export const PLANT = tile(
 export const SOFA = tile(
   [
     "........",
-    "..uuuu..",
-    ".uuuuuu.",
-    "uuuuuuuu",
-    "uuuuuuuu",
-    "u.uuuu.u",
-    "u......u",
+    ".444444.",
+    "4uuuuuu5",
+    "4uuuuuu5",
+    "44uu5uu5",
+    "4uuuuuu5",
+    ".3....3.",
     "........",
   ],
   { solid: true },
@@ -276,10 +290,10 @@ export const SOFA = tile(
 export const BOARD = tile(
   [
     "xxxxxxxx",
-    "xaaaaaax",
-    "xasaaaax",
-    "xaaassax",
-    "xaaaaaax",
+    "x6aaaaax",
+    "xasaa7ax",
+    "xaa7ssax",
+    "xaaaaa7x",
     "xxxxxxxx",
     "...xx...",
     "..x..x..",
@@ -290,13 +304,13 @@ export const BOARD = tile(
 export const BENCH = tile(
   [
     "........",
-    "..a..a..",
-    "..a..a..",
-    ".aaa.aa.",
-    "oooooooo",
-    "onnnnnno",
-    "o......o",
-    "o......o",
+    "..7..a..",
+    "..a..7..",
+    ".aa7.77.",
+    "nnnnnnnn",
+    "oooooo33",
+    "o3....33",
+    "o3....33",
   ],
   { solid: true },
 );
@@ -304,13 +318,13 @@ export const BENCH = tile(
 export const URN = tile(
   [
     "........",
-    "..eeee..",
-    "..elle..",
-    "..eeee..",
-    "..eeee..",
-    "..o..o..",
-    ".oooooo.",
-    ".onnnno.",
+    ".11112..",
+    ".1e66e2.",
+    ".1eeee2.",
+    ".1e88e2.",
+    ".12222..",
+    ".nooo3..",
+    ".o3333..",
   ],
   { solid: true },
 );
@@ -320,12 +334,12 @@ export const URN = tile(
 export const CORE = tile(
   [
     "..ssss..",
-    ".seeees.",
-    "sel..les",
-    "se.ll.es",
-    "se.ll.es",
-    "sel..les",
-    ".seeees.",
+    ".s1ee2s.",
+    "s1l11l2s",
+    "s1e22e2s",
+    "s1e11e2s",
+    "s1l22l2s",
+    ".s1ee2s.",
     "..ssss..",
   ],
   { solid: true },
@@ -540,27 +554,27 @@ export const POND = tile([
 export const LAMPPOST = tile(
   [
     "..llll..",
+    ".l88iil.",
     ".liiiil.",
-    ".liiiil.",
-    "..eeee..",
-    "...ee...",
-    "...ee...",
-    "...ee...",
-    "..eeee..",
+    "..1ee2..",
+    "...e2...",
+    "...e2...",
+    "...e2...",
+    "..1ee2..",
   ],
   { solid: true },
 );
 
 export const MAST = tile(
   [
-    "...ee...",
-    "..eeee..",
-    ".e.ee.e.",
-    "e..ee..e",
-    "...ee...",
-    "...ee...",
-    "...ee...",
-    "..oooo..",
+    "...1e...",
+    "..1ee2..",
+    ".1.ee.2.",
+    "1..ee..2",
+    "...e2...",
+    "...e2...",
+    "...e2...",
+    "..noo3..",
   ],
   { solid: true },
 );
@@ -767,13 +781,13 @@ export const DOOR_WAY = tile([
 /** The leaf itself, hinged on its left edge. Swung open by the engine when somebody is close, so
  *  a door is something that HAPPENS rather than a hole that was always there. */
 export const DOOR_LEAF = tile([
-  "oooooo..",
-  "onnnno..",
-  "onnnno..",
-  "onneno..",
-  "onnnno..",
-  "onnnno..",
-  "oooooo..",
+  "nnnnnn..",
+  "onnnn3..",
+  "onnnn3..",
+  "onnen3..",
+  "onnnn3..",
+  "onnnn3..",
+  "o33333..",
   "........",
 ]);
 
@@ -796,14 +810,14 @@ export const MATT = tile([
 
 export const STACKS = tile(
   [
-    "oooooooo",
-    "obbyybbo",
-    "obbyybbo",
-    "oooooooo",
-    "oyybbyyo",
-    "oyybbyyo",
-    "oooooooo",
-    "o......o",
+    "nnnnnnnn",
+    "oybby3b3",
+    "obb3yby3",
+    "onnnnnn3",
+    "obyy3yb3",
+    "oyybbyb3",
+    "onnnnnn3",
+    "o3....33",
   ],
   { solid: true },
 );
@@ -812,12 +826,12 @@ export const SCREEN = tile(
   [
     "........",
     ".eeeeee.",
+    ".e6GGGe.",
     ".eGGGGe.",
-    ".eGGGGe.",
-    ".eeeeee.",
+    ".eeeee2.",
     "...ee...",
-    "..oooo..",
-    "........",
+    "..nooo..",
+    "..o333..",
   ],
   { solid: true },
 );
@@ -842,13 +856,13 @@ export const DISH = tile(
 export const TABLE_L = tile(
   [
     "........",
-    "...ooooo",
-    "..onnnnn",
-    "..onnnnn",
-    "..onnnnn",
-    "...ooooo",
-    "...o....",
-    "...o....",
+    "..nnnnnn",
+    ".nnnnnnn",
+    ".nnnnnnn",
+    ".ooooooo",
+    ".3333333",
+    "..o3....",
+    "..o3....",
   ],
   { solid: true },
 );
@@ -856,11 +870,11 @@ export const TABLE_L = tile(
 export const TABLE_M = tile(
   [
     "........",
-    "oooooooo",
     "nnnnnnnn",
     "nnnnnnnn",
     "nnnnnnnn",
     "oooooooo",
+    "33333333",
     "........",
     "........",
   ],
@@ -870,13 +884,13 @@ export const TABLE_M = tile(
 export const TABLE_R = tile(
   [
     "........",
-    "ooooo...",
-    "nnnnno..",
-    "nnnnno..",
-    "nnnnno..",
-    "ooooo...",
-    "....o...",
-    "....o...",
+    "nnnnnn..",
+    "nnnnnnn.",
+    "nnnnnnn.",
+    "ooooooo.",
+    "3333333.",
+    "....o3..",
+    "....o3..",
   ],
   { solid: true },
 );
@@ -884,12 +898,12 @@ export const TABLE_R = tile(
 export const CHAIR = tile(
   [
     "........",
-    "..uuuu..",
-    "..uuuu..",
-    ".uuuuuu.",
-    ".uuuuuu.",
-    "..o..o..",
-    "..o..o..",
+    "..4444..",
+    "..uuu5..",
+    "..uuu5..",
+    ".uuuuu5.",
+    "..e..e..",
+    "..2..2..",
     "........",
   ],
   { solid: true },
@@ -897,28 +911,28 @@ export const CHAIR = tile(
 
 export const COFFEE = tile(
   [
-    "..eeee..",
-    ".eeeeee.",
-    ".ellale.",
-    ".eeeeee.",
-    ".e.aa.e.",
-    ".eeeeee.",
-    ".oooooo.",
     "........",
+    "..1112..",
+    ".1eeee2.",
+    ".18lee2.",
+    ".1e77e2.",
+    ".122222.",
+    ".nooo3..",
+    ".o3333..",
   ],
   { solid: true },
 );
 
 export const COOLER = tile(
   [
-    "..aaaa..",
-    ".aaaaaa.",
-    ".aaaaaa.",
-    "..eeee..",
-    "..eeee..",
-    "..e..e..",
-    ".oooooo.",
     "........",
+    "..6aa7..",
+    ".aaaaa7.",
+    "..aaa7..",
+    "..1112..",
+    "..1ee2..",
+    "..e..2..",
+    "..2222..",
   ],
   { solid: true },
 );
@@ -926,13 +940,13 @@ export const COOLER = tile(
 export const PRINTER = tile(
   [
     "........",
-    ".eeeeee.",
-    ".eaaaae.",
-    ".eeeeee.",
-    ".e....e.",
-    ".eeeeee.",
-    ".oooooo.",
-    "........",
+    "..aaaa..",
+    ".111122.",
+    ".1eeee2.",
+    ".1e22e2.",
+    ".122222.",
+    ".nooo3..",
+    ".o3333..",
   ],
   { solid: true },
 );
@@ -940,55 +954,55 @@ export const PRINTER = tile(
 export const CRATES = tile(
   [
     "........",
-    "..oooo..",
-    "..onno..",
-    "..oooo..",
-    ".oooooo.",
-    ".onnnno.",
-    ".oooooo.",
-    "........",
+    "..nnnn..",
+    "..o33o..",
+    "..o33o..",
+    "nnnnnnnn",
+    "o33oo33o",
+    "o3oo3o3o",
+    "oooooooo",
   ],
   { solid: true },
 );
 
 export const TANK = tile(
   [
-    "eeeeeeee",
-    "eaaaaaae",
-    "easaaaae",
-    "eaaaasae",
-    "easaaaae",
-    "eaaaaaae",
-    "eeeeeeee",
-    "o......o",
+    "11111112",
+    "1a6aaaa2",
+    "1asaaaa2",
+    "1aaaa7a2",
+    "1asaa7a2",
+    "1aaaaaa2",
+    "12222222",
+    "o3....33",
   ],
   { solid: true },
 );
 
 export const VENDING = tile(
   [
-    "eeeeeeee",
-    "eaaaaeee",
-    "eabbaeee",
-    "eayybeee",
-    "eabbaeee",
-    "eaaaaeee",
-    "eeeeeeee",
-    "e......e",
+    "11111122",
+    "16aaal12",
+    "1abbae12",
+    "1ayybl12",
+    "1abbae12",
+    "1aaaae12",
+    "12222222",
+    ".e....2.",
   ],
   { solid: true },
 );
 
 export const CABINET = tile(
   [
-    "oooooooo",
-    "onnnnnno",
-    "o..ee..o",
-    "onnnnnno",
-    "o..ee..o",
-    "onnnnnno",
-    "o..ee..o",
-    "o......o",
+    "nnnnnnnn",
+    "oooooo33",
+    "o33ee3o3",
+    "oooooo33",
+    "o33ee3o3",
+    "oooooo33",
+    "oooooo33",
+    "o3....33",
   ],
   { solid: true },
 );
@@ -996,13 +1010,13 @@ export const CABINET = tile(
 export const DRAFTING = tile(
   [
     "........",
-    "...ooooo",
-    "..onnnnn",
-    ".onnnnnn",
+    "....nnnn",
+    "...nnnnn",
+    "..nnnnnn",
+    ".nnnnnnn",
     ".ooooooo",
-    "..o...o.",
-    "..o...o.",
-    "........",
+    "..e...2.",
+    "..e...2.",
   ],
   { solid: true },
 );
@@ -1027,14 +1041,14 @@ export const GLOBE = tile(
 
 export const LADDER = tile(
   [
-    "..o..o..",
-    "..oooo..",
-    "..o..o..",
-    "..oooo..",
-    "..o..o..",
-    "..oooo..",
-    "..o..o..",
-    "........",
+    "..n..o..",
+    "..nooo..",
+    "..n..o..",
+    "..nooo..",
+    "..n..o..",
+    "..nooo..",
+    "..n..o..",
+    "..nooo..",
   ],
   { solid: true },
 );
@@ -1044,11 +1058,11 @@ export const LADDER = tile(
 export const PILLAR = tile(
   [
     "..pppp..",
-    "..wwww..",
-    "..wwww..",
-    "..wwww..",
-    "..wwww..",
-    "..wwww..",
+    "..pww9..",
+    "..pww9..",
+    "..pww9..",
+    "..pww9..",
+    "..pww9..",
     ".pppppp.",
     ".kkkkkk.",
   ],

@@ -67,6 +67,47 @@ function main(): void {
     console.log(`${label} seats=${String(room.seats.length).padStart(3)}  faults=${here.length}`);
   }
 
+  /* ── AND NOBODY WALKS THROUGH A POTTED TREE ───────────────────────────────────────────────
+     Six floating-tree reports narrowed to one class the prop rules could not reach: leafy decor
+     beside a BODY. A body is two tiles tall and drawn over the map, so anybody ON the cell
+     directly south of a plant swallows its pot and trunk and the canopy floats over their
+     head — and a stop-only ban was measured insufficient: a body merely WALKING THROUGH that
+     cell fused with the sprite at 94.8% for whole frames. So the pot claims its floor space as
+     SOLID, exactly like the furniture's own footprint, and the router goes around. Checked from
+     both sides — the pot-space cell must be solid (no route can cross it, which closes
+     pass-through statically) and must carry no declared seat — because the set and the seats
+     are maintained in different passes and either drifting alone re-ships the bug. */
+  const LEAFY = new Set(["plant", "tree", "treeBig", "pine", "bush"]);
+  const shySet = new Set(world.shy);
+  const shaded: string[] = [];
+  for (const room of world.rooms) {
+    for (const seat of room.seats) {
+      if (shySet.has(seat.y * world.cols + seat.x)) {
+        shaded.push(`${room.id || "(lobby)"}: seat (${seat.x},${seat.y}) sits in a pot's floor space — a body there wears the canopy`);
+      }
+    }
+    /* The yard is NOT skipped. It is an outdoor ROOM with real workers walking it, and its two
+       trees sat outside the first solidity pass — ownSolid=0, southSolid=0, a web agent free to
+       stand inside the pine. The exemption belongs to the grounds, where nobody can walk. */
+    const seatsAt = new Set(room.seats.map((s) => s.x + ":" + s.y));
+    for (const p of room.props) {
+      if (room.outdoor && !world.solid[p.y * world.cols + p.x]) {
+        shaded.push(`${room.id}: ${p.tile} at (${p.x},${p.y}) own cell is WALKABLE — the yard carve wiped its block`);
+      }
+      if (!LEAFY.has(String(p.tile))) continue;
+      if (seatsAt.has(p.x + ":" + (p.y + 1))) {
+        shaded.push(`${room.id || "(lobby)"}: ${p.tile} at (${p.x},${p.y}) has a declared seat directly SOUTH`);
+      }
+      const pot = (p.y + 1) * world.cols + p.x;
+      if (!shySet.has(pot)) {
+        shaded.push(`${room.id || "(lobby)"}: ${p.tile} at (${p.x},${p.y}) missing its pot-space cell`);
+      }
+      if (!world.solid[pot]) {
+        shaded.push(`${room.id || "(lobby)"}: ${p.tile} at (${p.x},${p.y}) pot space is WALKABLE — a route can carry a body through the canopy`);
+      }
+    }
+  }
+
   /* ── AND NO TWO PLACES MAY CROWD EACH OTHER ────────────────────────────────────────────────
      The second half of the rule, and the half that came back after being fixed once. A nameplate
      is capped at 66 world pixels against a 24-pixel tile, so two people two tiles apart wear
@@ -128,32 +169,89 @@ function main(): void {
   {
     const room = world.rooms.find((r) => r.seats.length >= 4 && !!r.id && !r.open);
     if (room) {
-      const crowd: Cast[] = [];
-      for (let i = 0; i < room.seats.length * 3; i++) {
-        crowd.push({ ...cast[0], run_id: "flood" + i, status: "done", department: room.id, zone: "code" } as Cast);
-      }
-      const spots = [...seating(world, crowd, null).values()];
-      const seen = new Map<string, number>();
-      let stacked = 0;
+      /* TWO CONTRACTS, split where the geometry splits them. Filled exactly to its declared
+         capacity, a room hands out only declared places — distinct AND a pitch apart, because
+         the building's own seats are. Flooded past capacity (three times over — a state no
+         world sized from its own headcount can reach), the pitch is physically impossible:
+         you cannot space fifty-four people three tiles apart on a twenty-by-twelve floor. What
+         MUST survive any crowd is the hard floor of the whole mechanism — never two bodies on
+         one coordinate, never a body outside its own room, never one standing in a wall. The
+         old queue failed all three at once, BELOW the room, in the hall or the solid grounds. */
+      const flood = (n: number): { x: number; y: number }[] => {
+        const crowd: Cast[] = [];
+        for (let i = 0; i < n; i++) {
+          /* brain stripped: placeOf routes a brain-flagged body to the chamber whatever its
+             department says, and cast[0] happens to be the fixture's brain — the whole flood
+             quietly landed in the chamber while this probe reported on the room it never entered. */
+          crowd.push({ ...cast[0], run_id: "flood" + i, status: "done", department: room.id, zone: "code", brain: false } as Cast);
+        }
+        return [...seating(world, crowd, null).values()];
+      };
+      const shares = (spots: { x: number; y: number }[]): number => {
+        const seen = new Set<string>();
+        let stacked = 0;
+        for (const a of spots) {
+          const key = a.x + ":" + a.y;
+          if (seen.has(key)) stacked++;
+          seen.add(key);
+        }
+        return stacked;
+      };
+
+      const exact = flood(room.seats.length);
       let tight = 0;
-      for (const a of spots) {
-        const key = a.x + ":" + a.y;
-        seen.set(key, (seen.get(key) ?? 0) + 1);
-        if ((seen.get(key) ?? 0) > 1) stacked++;
-      }
-      for (let i = 0; i < spots.length; i++) {
-        for (let j = i + 1; j < spots.length; j++) {
-          if (Math.abs(spots[i].x - spots[j].x) < PITCH && Math.abs(spots[i].y - spots[j].y) < PITCH) tight++;
+      for (let i = 0; i < exact.length; i++) {
+        for (let j = i + 1; j < exact.length; j++) {
+          if (Math.abs(exact[i].x - exact[j].x) < PITCH && Math.abs(exact[i].y - exact[j].y) < PITCH) tight++;
         }
       }
+      const packed = flood(room.seats.length * 3);
+      const inRoom = (p: { x: number; y: number }): boolean =>
+        room.rects.some((r) => p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h);
+      const escaped = packed.filter((p) => !inRoom(p)).length;
+      const walled = packed.filter((p) => world.solid[p.y * world.cols + p.x]).length;
       console.log(
-        `\noverflow: ${spots.length} finished agents into ${room.id} (${room.seats.length} places) ` +
-          `-> ${seen.size} distinct spots, ${stacked} stacked, ${tight} pairs under the pitch.`,
+        `\noverflow: ${room.id} (${room.seats.length} places) at capacity -> ` +
+          `${shares(exact)} stacked, ${tight} under the pitch; ` +
+          `at 3x -> ${shares(packed)} stacked, ${escaped} outside the room, ${walled} in a wall.`,
       );
-      if (stacked || tight) {
-        console.log("  OVERFLOW STACKS BODIES:", JSON.stringify(spots.map((a) => [a.x, a.y])));
+      if (shares(exact) || tight || shares(packed) || escaped || walled) {
+        console.log("  OVERFLOW BREAKS ITS CONTRACT:", JSON.stringify(packed.map((a) => [a.x, a.y])));
         process.exitCode = 1;
       }
+    }
+  }
+
+  /* ── AND A DEPARTMENT THAT FINISHES TOGETHER LIES DOWN TOGETHER ───────────────────────────
+     The whole point of the two-ends room, measured at its worst case: the REAL registry has been
+     one hundred percent finished, and at that state every body wants the rest end at once. A
+     rest end sized to half the headcount pushed the losers of the seat race back onto the desks,
+     standing — indistinguishable from ready, which is the one distinction the room exists to
+     draw. So: the same cast with every status flipped to done must land EVERY body on a rest
+     place with something to lie on directly behind it. Same world — headcounts ignore status —
+     so this is the same building the mixed cast stands in. */
+  {
+    const allDone = cast.map((w) => ({ ...w, status: "done" }) as Cast);
+    const spots = seating(world, allDone, brainOf(allDone));
+    const standing: string[] = [];
+    for (const w of allDone) {
+      const s = spots.get(w.run_id);
+      if (!s) continue;
+      const room = placeOf(world, w);
+      const behind = room.props.find((p) => p.x === s.x && p.y === s.y - 1);
+      const couch = behind && (behind.tile === "sofa" || behind.tile === "bench");
+      if (s.post !== "rest" || s.perch === false || !couch) {
+        standing.push(
+          `${room.id || "(lobby)"}: ${w.run_id} finished but got ${s.post ?? "desk"} at (${s.x},${s.y}), ` +
+            `behind: ${behind?.tile ?? "nothing"} — a lounger with nothing to lie on stands, and reads as ready`,
+        );
+      }
+    }
+    console.log(`all-finished: ${allDone.length} done bodies, ${standing.length} without a couch.`);
+    if (standing.length) {
+      console.log("\nFINISHED BODIES LEFT STANDING:");
+      for (const c of standing) console.log("  " + c);
+      process.exitCode = 1;
     }
   }
 
@@ -163,7 +261,7 @@ function main(): void {
      trunk and the canopy appears to grow out of the desk, which is what "trees are floating" was
      the fourth time it was reported. The builder now drops such a plant; this makes the rule an
      invariant so it cannot quietly return with the next furnisher change. */
-  const LEAFY = new Set(["plant", "tree", "treeBig", "pine", "bush"]);
+
   const planted: string[] = [];
   const propSets: [string, { x: number; y: number; tile: string }[]][] = [
     ...world.rooms.map((r): [string, { x: number; y: number; tile: string }[]] => [
@@ -197,7 +295,11 @@ function main(): void {
     console.log("\nPLACES TOO CLOSE TOGETHER:");
     for (const c of crowded) console.log("  " + c);
   }
-  if (faults.length || crowded.length || collided.length) {
+  if (shaded.length) {
+    console.log("\nBODIES ALLOWED TO STAND UNDER A CANOPY:");
+    for (const c of shaded) console.log("  " + c);
+  }
+  if (faults.length || crowded.length || collided.length || shaded.length) {
     if (faults.length) {
       console.log("\nPLACES WITH NOTHING BEHIND THEM:");
       for (const f of faults) console.log(`  ${f.seat} -> ${f.behind}`);

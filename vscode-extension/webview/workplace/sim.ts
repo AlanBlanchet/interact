@@ -122,9 +122,34 @@ function looseCell(room, id, n) {
        so an agent working the web wandered the full height of the site and stood in a field — the
        outdoor half of "sprites are very weirdly placed". Its own rectangle, like everybody. */
     if (room.o) { y = room.y + 1 + Math.floor(rnd(id, n * 31 + tries) * Math.max(1, room.h - 2)); }
-    if (walkable(x, y)) return { x: x, y: y };
+    if (walkable(x, y) && !claimed(id, x, y)) return { x: x, y: y };
   }
   return null;
+}
+
+/* Strolls must not converge: two loose cells are picked independently, so nothing stopped two
+   strollers dwelling on the same spot, drawn through each other — the crowding rule enforced for
+   every DECLARED place, lost for the wandering ones. A cell is CLAIMED when another body stands
+   or will arrive within the same THREE-tile pitch every declared place honours: nameplates are
+   sixty-six pixels wide over twenty-four-pixel tiles, so a two-tile gap still fuses the labels
+   and two-at-two-tiles was exactly the crowding an independent verdict caught. */
+function claimed(id, x, y) {
+  for (var k in BODIES) {
+    if (k === id) continue;
+    var o = BODIES[k];
+    if (!o) continue;
+    var tx = o.path ? o.path[o.path.length - 1].x : o.x;
+    var ty = o.path ? o.path[o.path.length - 1].y : o.y;
+    if (Math.abs(tx - x) < 3 && Math.abs(ty - y) < 3) return true;
+    /* THE SEAT IS CLAIMED WHILE ITS OWNER IS AWAY. Positions and destinations only cover the
+       bodies that are THERE or on their way — a stroller could lawfully dwell on the exact cell
+       of a seat whose owner was out walking, and the owner's return is unconditional (it is
+       their seat), so the two settled at literally zero distance: one sprite hidden entirely
+       under the other, two nameplates over one body. A seat is a standing promise to return;
+       it is claimed whether or not anybody is currently on it. */
+    if (Math.abs(o.seatX - x) < 3 && Math.abs(o.seatY - y) < 3) return true;
+  }
+  return false;
 }
 
 /* A cell beside somebody — where you stand when you have come over to say something.
@@ -137,11 +162,28 @@ function besideOf(x, y) {
   var around = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, 1], [2, -1], [-2, -1],
                 [1, 2], [-1, 2], [1, -2], [-1, -2],
                 [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+  /* First choice: a spot no OTHER seat lays claim to — a courier standing on the empty chair
+     beside the recipient is in somebody's place the moment they walk back. The bare-walkable
+     ring stays as the fallback for somebody genuinely cornered against furniture. */
   for (var i = 0; i < around.length; i++) {
     var nx = x + around[i][0], ny = y + around[i][1];
-    if (walkable(nx, ny)) return { x: nx, y: ny };
+    if (walkable(nx, ny) && !seatAt(nx, ny)) return { x: nx, y: ny };
+  }
+  for (var j = 0; j < around.length; j++) {
+    var fx = x + around[j][0], fy = y + around[j][1];
+    if (walkable(fx, fy)) return { x: fx, y: fy };
   }
   return null;
+}
+
+/** Is this exact cell some body's seat? The courier ring only needs the literal cell — a ring
+ *  spot NEAR a seat is a moment of standing close, which a conversation is. */
+function seatAt(x, y) {
+  for (var k in BODIES) {
+    var o = BODIES[k];
+    if (o && o.seatX === x && o.seatY === y) return true;
+  }
+  return false;
 }
 
 /* ── bodies ──────────────────────────────────────────────────────────────────────────────────
@@ -158,7 +200,7 @@ function bodyFor(el) {
   if (!b) {
     b = BODIES[id] = {
       id: id, x: sx, y: sy, seatX: sx, seatY: sy,
-      face: 1, path: null, step: 0, walked: 0, speed: 0, sx: 0, tx: 0, tagW: 0,
+      face: 1, wx: 1, wy: 0, path: null, step: 0, walked: 0, speed: 0, sx: 0, tx: 0, tagW: 0,
       mode: "settled", nextAt: 0, home: "", talkUntil: 0, errand: null,
       saidAt: 0, phase: phaseOf(id)
     };
@@ -236,6 +278,9 @@ function stepWalk(b, dt) {
     var dx = target.x - b.x, dy = target.y - b.y;
     var dist = Math.sqrt(dx * dx + dy * dy);
     if (Math.abs(dx) > 0.02) b.face = dx > 0 ? 1 : -1;
+    /* Which way this leg actually runs, for the facing: the sprite drawn is the side gait on a
+       horizontal leg, the back on the way up, the front on the way down. */
+    if (dist > 0.02) { b.wx = dx; b.wy = dy; }
     if (dist > move) {
       b.x += (dx / dist) * move;
       b.y += (dy / dist) * move;
@@ -336,12 +381,17 @@ function place(b, t) {
   b.py = py;
   var bob = 0, lean = 0;
   if (b.path) {
-    /* Footfall: a half tile per step, so the bounce belongs to the DISTANCE covered and stays
-       right when the body accelerates or brakes. */
-    var ph = (b.walked / STRIDE) % 1;
-    bob = ph < 0.5 ? -1 : 0;
-    lean = b.face * 1.5;
-    el.classList.toggle("wp-fA", ph < 0.5);
+    /* Footfall: a half tile per frame flip, so the gait belongs to the DISTANCE covered and the
+       feet stay under the person when the speed changes. Four phases — contact, passing,
+       contact, passing — and the BOB now lives in the passing frames' own pixels, so the element
+       is not bounced on top of it. Which sprite plays is the leg's direction: the side gait for
+       a horizontal leg, the back walking away, the front coming toward you. */
+    var stepI = Math.floor(b.walked / STRIDE) % 4;
+    var dir = Math.abs(b.wx) >= Math.abs(b.wy) ? "x" : b.wy < 0 ? "n" : "s";
+    var stepS = String(stepI);
+    if (el.getAttribute("data-step") !== stepS) el.setAttribute("data-step", stepS);
+    if (el.getAttribute("data-dir") !== dir) el.setAttribute("data-dir", dir);
+    lean = dir === "x" ? b.face * 1.5 : 0;
   } else {
     var status = el.getAttribute("data-status");
     var p = b.phase;

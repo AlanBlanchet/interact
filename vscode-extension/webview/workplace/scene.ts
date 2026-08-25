@@ -27,13 +27,21 @@ import {
   FACULTY_ART,
   BANG,
   NOTE,
+  POSE_AWAY_A,
+  POSE_AWAY_B,
+  POSE_BLINK,
   POSE_MOVE,
   POSE_REST,
   POSE_REST_A,
   POSE_REST_B,
+  POSE_REST_BLINK,
   POSE_SIT_A,
   POSE_SIT_B,
+  POSE_SIT_BLINK,
   POSE_SLUMP,
+  POSE_STRIDE_A,
+  POSE_STRIDE_B,
+  POSE_STRIDE_C,
   POSE_WALK_A,
   POSE_WALK_B,
   RING,
@@ -128,8 +136,8 @@ function headcounts(workers: readonly Cast[]): Map<string, number> {
   const out = new Map<string, number>();
   const add = (k: string) => out.set(k, (out.get(k) ?? 0) + 1);
   for (const w of workers) {
-    if (w.zone === "web") continue; /* out of the building, standing in the yard */
-    if (w.brain) add("__brain");
+    if (w.zone === "web") add("__web"); /* out of the building — the YARD is sized from this too */
+    else if (w.brain) add("__brain");
     else if (w.department) add(w.department);
     else add("");
   }
@@ -142,13 +150,19 @@ let cached: { key: string; world: World } | null = null;
 export function worldFor(workers: readonly Cast[]): World {
   const depts = deptsOf(workers);
   const heads = headcounts(workers);
-  const core = { brain: heads.get("__brain") ?? 0, lobby: heads.get("") ?? 0 };
+  const core = {
+    brain: heads.get("__brain") ?? 0,
+    lobby: heads.get("") ?? 0,
+    web: heads.get("__web") ?? 0,
+  };
   const key =
     depts.map((d) => d.id + ":" + d.label + ":" + d.heads + ":" + (d.kit ?? []).join(",")).join("|") +
     "|" +
     core.brain +
     "/" +
-    core.lobby;
+    core.lobby +
+    "/" +
+    core.web;
   if (!cached || cached.key !== key) cached = { key, world: buildWorld(depts, core) };
   return cached.world;
 }
@@ -407,6 +421,11 @@ function renderMap(world: World): string {
     if (r.outdoor) {
       out += patch("path", { x: world.facadeX, y: world.gateY - 1, w: 4, h: 3 });
     } else if (r.open) {
+      /* An open room is a FLOOR, not a hole. Skipping the floor patch here left the plazas and
+         the lobby as raw building mass with furniture standing in it — a near-black quadrant on
+         a real registry, and a prop on an untextured void reads as floating whatever its shadow
+         does. The unlit veil still darkens an empty plaza; it now darkens a PAVED one. */
+      out += patches(r.floor, r.floorRuns);
       if (r.dais) out += patch("dais", r.dais);
     } else {
       out += patches(r.floor, r.floorRuns);
@@ -651,18 +670,33 @@ const EYE_MARK =
  *  anchored at the boots, so sitting down drops the head six device pixels: the posture is legible
  *  before any of its detail is, which is the only test that matters at this size.
  */
-const RESTING: Record<Posture, readonly [Grid, Grid]> = {
-  stand: [POSE_REST, POSE_MOVE],
-  sit: [POSE_SIT_A, POSE_SIT_B],
-  slump: [POSE_SLUMP, POSE_SLUMP],
-  lounge: [POSE_REST_A, POSE_REST_B],
+const RESTING: Record<Posture, readonly Grid[]> = {
+  stand: [POSE_REST, POSE_MOVE, POSE_BLINK],
+  sit: [POSE_SIT_A, POSE_SIT_B, POSE_SIT_BLINK],
+  slump: [POSE_SLUMP],
+  lounge: [POSE_REST_A, POSE_REST_B, POSE_REST_BLINK],
 };
 
+/** The third frame of every waking pair is the BLINK — the lids down for a few frames every few
+ *  seconds, staggered per person. The slump has no blink because its eyes are already shut, and
+ *  the absence is what keeps a genuinely stopped body genuinely still. */
 function spriteOf(w: Cast, posture: Posture): string {
   const pal = w.status === "foreign" ? VISITOR_PAL : SKIN_PAL;
+  /* Three walks, one per facing the tile floor allows: the side gait (mirrored for west by the
+     engine's face flip), the back going north, the front coming south. Which one shows is the
+     engine's `data-dir`; the stylesheet holds the other two. The vertical gaits repeat their two
+     frames across the four footfall phases so one `data-step` drives all three. */
   return (
     drawFrames(RESTING[posture], pal, { scale: 3, className: "wp-sprite wp-stand" }) +
-    drawFrames([POSE_WALK_A, POSE_WALK_B], pal, { scale: 3, className: "wp-sprite wp-walk" })
+    drawFrames([POSE_STRIDE_A, POSE_STRIDE_B, POSE_STRIDE_C, POSE_STRIDE_B], pal, {
+      scale: 3, className: "wp-sprite wp-walk wp-walk-x",
+    }) +
+    drawFrames([POSE_WALK_A, POSE_WALK_B, POSE_WALK_A, POSE_WALK_B], pal, {
+      scale: 3, className: "wp-sprite wp-walk wp-walk-s",
+    }) +
+    drawFrames([POSE_AWAY_A, POSE_AWAY_B, POSE_AWAY_A, POSE_AWAY_B], pal, {
+      scale: 3, className: "wp-sprite wp-walk wp-walk-n",
+    })
   );
 }
 
@@ -706,8 +740,11 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
      letting the activity line speak here filled the cold open with a row of white bubbles all
      saying the done-word — the exact word the posture system exists to replace. The lounge on
      the couch IS the sentence; the full detail stays on the title for whoever asks. Working
-     bodies keep their line: reading a file is news, being done is not. */
-  const resting = how.post === "rest";
+     bodies keep their line: reading a file is news, being done is not.
+     READY is the same non-event: the moment ready moved to the desks (post "desk") its caption
+     re-appeared, and a floor of identical waiting-word bubbles is the done-word noise again in
+     a new state. Standing at the station IS the sentence. */
+  const resting = how.post === "rest" || attentionOf(w) === "ready";
   const say = !resting && w.activity ? clip(w.activity, 64) : "";
   const label =
     `${w.name} — ${w.status}, ${LABELS.get(w.zone) ?? w.zone}` + (w.activity ? `: ${w.activity}` : "");
@@ -775,42 +812,65 @@ export function seating(world: World, cast: Cast[], brainId: string | null): Map
        treats a moved seat as "the roster moved them", so it routes the body across the room and
        walks it there. Nobody teleports into a chair. */
     const desks = room.seats.filter((s) => s.post !== "rest");
-    const rests = room.seats.filter((s) => s.post === "rest");
-    const used = new Set<Seat>();
-    /** The distinct columns the room's places stand in — already a pitch apart by the rule the
-     *  building is checked against, so an overflow queue can borrow them. */
-    const cols = [...new Set(room.seats.map((p) => p.x))].sort((a, b) => a - b);
-    let extra = 0;
-    /* OVERFLOW TAKES ANOTHER DECLARED PLACE; it never invents one.
-       This used to wrap — `seat.y - (wrap % 2)` — which manufactures a standing place ONE TILE
-       from a real one at render time, in a coordinate space the building never agreed to. The
-       whole pitch rule is enforced on the world's own seats, so an invented place is invisible to
-       it by construction: three finished agents in a two-couch room put the third one a single
-       tile above the first, sprites overlapping and nameplates illegible, while every invariant
-       reported the room correct. So: take the end of the room your state asks for, then the other
-       end (a department with nobody working has desks going spare), and only when every declared
-       place in the room is occupied fall back to a step — and a step of a full PITCH, which is
-       the distance the rest of the building is built on. */
+    /* Couches before standing room. Both are `post: "rest"`, but only a place with something to
+       lie on can say FINISHED with a body — a lounger falls back to standing on a perchless
+       spot, indistinguishable from ready, which is the one distinction the rest end exists to
+       draw. Insertion order already puts the furniture first; stated here so no emitter's
+       ordering is load-bearing. */
+    const rests = [
+      ...room.seats.filter((s) => s.post === "rest" && s.perch !== false),
+      ...room.seats.filter((s) => s.post === "rest" && s.perch === false),
+    ];
+    /* ONE BODY PER COORDINATE — keyed by the COORDINATE, never by the seat object. Two distinct
+       seat objects on one cell (two emitters drifting onto the same row) would each count as
+       "free" to an identity Set, and the render is two nameplates over one visible body. */
+    const used = new Set<string>();
+    const handed: { x: number; y: number }[] = [];
+    const at = (p: { x: number; y: number }): string => p.x + "," + p.y;
+    const give = (seat: Seat): Seat => {
+      used.add(at(seat));
+      handed.push({ x: seat.x, y: seat.y });
+      return seat;
+    };
+    /* OVERFLOW GROWS THE ROOM'S OWN SEAT SET; it never leaves the room and never doubles up.
+       The old queue stepped BELOW the room — `room.y + room.h + ring * PITCH` — which is the
+       hall for a north room, the neighbour for a stacked one, and the solid grounds for the
+       yard: a coordinate space the building never agreed to, invisible to every invariant over
+       `room.seats`, and (cross-room) not even injective. Overflow now scans the room's own
+       walkable floor: first for a cell a full PITCH clear of everything already handed out,
+       then — only if the room is genuinely that crowded — for any distinct cell at all. A room
+       sized from its own headcount never reaches either pass; this is the net, not the plan. */
+    const grow = (): Seat => {
+      for (const minGap of [PITCH, 1]) {
+        for (const r of room.rects) {
+          for (let y = r.y + 1; y < r.y + r.h - 1; y++) {
+            for (let x = r.x + 1; x < r.x + r.w - 1; x++) {
+              if (world.solid[y * world.cols + x]) continue;
+              if (used.has(x + "," + y)) continue;
+              if (handed.some((p) => Math.abs(p.x - x) < minGap && Math.abs(p.y - y) < minGap)) continue;
+              return { x, y, post: "rest", face: 1, perch: false };
+            }
+          }
+        }
+      }
+      /* More bodies than the room has floor cells: nothing non-overlapping exists. Distinct
+         coordinates stay guaranteed by walking rows below the room; unreachable for any world
+         this builder produces, kept so the guarantee has no hole. */
+      let y = room.y + room.h;
+      let x = room.x + 1;
+      while (used.has(x + "," + y)) {
+        x += PITCH;
+        if (x >= room.x + room.w) { x = room.x + 1; y += PITCH; }
+      }
+      return { x, y, post: "rest", face: 1, perch: false };
+    };
+    /* The state picks the END; past both ends the room grows a place rather than doubling one. */
     const take = (wants: "desk" | "rest"): Seat => {
       const order = wants === "rest" ? [rests, desks] : [desks, rests];
       for (const pool of order) {
-        for (const seat of pool) if (!used.has(seat)) { used.add(seat); return seat; }
+        for (const seat of pool) if (!used.has(at(seat))) return give(seat);
       }
-      /* Past every declared place — which a room sized from its own headcount cannot actually
-         reach, being built with three places per two people — the fallback still has to be
-         INJECTIVE and still has to respect the pitch, and getting there took two goes. The first
-         counted `used.size`, and adding a seat object already in that Set is a no-op, so the
-         counter FROZE and every body past the first landed on the identical cell. The second gave
-         each body its own counter but kept stepping from the BASE SEAT's own row — and two base
-         seats in the same column are three rows apart, so two different steps could land two
-         rows from each other.
-         A queue is a queue: it takes its COLUMNS from the seat columns (which the pitch rule
-         already guarantees are far enough apart) and its ROWS from the counter alone. Two bodies
-         then differ either in column or in ring, and both are a PITCH. */
-      const col = cols[extra % Math.max(1, cols.length)] ?? room.x + 2;
-      const ring = Math.floor(extra / Math.max(1, cols.length));
-      extra++;
-      return { x: col, y: room.y + room.h + ring * PITCH, post: "rest", face: 1, perch: false };
+      return give(grow());
     };
     for (const w of list) {
       const seat = take(behaviourOf(attentionOf(w)).post);

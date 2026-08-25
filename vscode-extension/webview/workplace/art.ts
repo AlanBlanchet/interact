@@ -18,60 +18,102 @@ export interface Piece {
 
 /* ── People ──────────────────────────────────────────────────────────────────────────────────
  *
- *  Two frames, same canvas. Frame 1 raises the hands and shifts the stance; played slowly it
- *  reads as working at a desk, played fast it reads as walking. One asset, two tempos.
+ *  The body is drawn to the small-sprite craft rules, because the owner's complaint — "not like
+ *  any other game" — was precisely that it broke them. The rules this set is authored against,
+ *  each checkable on the grid:
+ *
+ *   - CHIBI COMMITTED: an eight-wide rounded head on an eight-wide body, ~2.3 heads tall. A big
+ *     head on realist proportions is the amateur tell; a big head on a small body is a style.
+ *   - RAMPS, NOT FILLS: every material carries a lit and a shaded step besides its base — one
+ *     warm light out of the north-west, one cool shade toward the south-east, the same two tints
+ *     for every material so twenty palettes still read as one person under one sun.
+ *   - LIMBS ARE CHUNKY: legs two pixels wide, boots three — a one-pixel limb cannot hold a ramp
+ *     and reads as a stick. Hands are skin mittens, no fingers at this size.
+ *   - THE FACE IS TWO DOT EYES. A mouth at ten pixels wide is noise; the eyes plus the hair
+ *     framing the face are what read as a face. The lids close for a blink frame.
+ *   - NOTHING SYMMETRIC IS TRULY SYMMETRIC: the light breaks the symmetry (lit left shoulder,
+ *     shaded right), which is what stops the pose reading as a toy soldier.
  */
 
 export const POSE_REST: Grid = [
-  "..hhhhhh..",
-  "..hhhhhh..",
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkekkekh.",
   "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "...kkkk...",
-  ".ssssssss.",
-  ".sssaasss.",
-  ".ssssssss.",
-  ".kssssssk.",
+  ".wssssssS.",
+  ".wSssssSS.",
+  ".wSsaasSS.",
+  ".kSssssSK.",
   "..tttttt..",
-  "..tt..tt..",
-  "..tt..tt..",
-  "..bb..bb..",
-  "..bb..bb..",
+  "..tt..tT..",
+  "..tt..tT..",
+  "..tt..tT..",
+  ".Bbb..bbb.",
+  ".bbb..bbb.",
 ];
 
+/** The breath: everything above the hips settles one row, the hands stay at the hip — shoulders
+ *  drop, arms bend. One row of movement is the whole animation, which is the tradition. */
 export const POSE_MOVE: Grid = [
-  "..hhhhhh..",
-  "..hhhhhh..",
+  "..........",
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkekkekh.",
   "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "...kkkk...",
-  ".kssssssk.",
-  ".sssaasss.",
-  "..ssssss..",
-  "..ssssss..",
+  ".wssssssS.",
+  ".wSsaasSS.",
+  ".kSssssSK.",
   "..tttttt..",
-  "..tt.tt...",
-  "..tt.tt...",
-  "..bb.bb...",
-  "..bb.bb...",
+  "..tt..tT..",
+  "..tt..tT..",
+  "..tt..tT..",
+  ".Bbb..bbb.",
+  ".bbb..bbb.",
 ];
 
-/** A hat marks a role without a second sprite: the manager's cap, the researcher's field hat. */
-export const HAT_BAND: Grid = ["..pppppp..", ".pppppppp."];
+/** The blink: the idle accent. Same drawing as the rest pose with the lids down — shown for a
+ *  few frames every few seconds by the stylesheet, staggered per person. */
+export const POSE_BLINK: Grid = [
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkKkkKkh.",
+  "..kkkkkk..",
+  ".wssssssS.",
+  ".wSssssSS.",
+  ".wSsaasSS.",
+  ".kSssssSK.",
+  "..tttttt..",
+  "..tt..tT..",
+  "..tt..tT..",
+  "..tt..tT..",
+  ".Bbb..bbb.",
+  ".bbb..bbb.",
+];
 
-/** The palette a person is drawn with. Every entry is a custom property set per worker, so the
- *  same twenty rectangles come out as twenty different people. */
+/** The palette a person is drawn with. Every base entry is a custom property set per worker, so
+ *  the same rectangles come out as twenty different people — and every RAMP entry is derived from
+ *  its base by mixing toward the scene's one warm light (`--px-glint`) or its one cool shade
+ *  (`--px-shade`), so all twenty people are lit by the same sun. Shadows hue-shift cool and
+ *  highlights warm because plain darkening reads muddy and plain lightening reads chalky. */
 export const SKIN_PAL: Palette = {
   k: "var(--c-skin)",
+  K: "color-mix(in oklab, var(--c-skin, #e0a877) 62%, var(--px-shade, #2c2344))",
   h: "var(--c-hair)",
+  H: "color-mix(in oklab, var(--c-hair, #553311) 72%, var(--px-glint, #ffdfae))",
   s: "var(--c-shirt)",
+  w: "color-mix(in oklab, var(--c-shirt, #4daafc) 78%, var(--px-glint, #ffdfae))",
+  S: "color-mix(in oklab, var(--c-shirt, #4daafc) 64%, var(--px-shade, #2c2344))",
   a: "var(--c-badge)",
   t: "var(--c-trouser)",
+  T: "color-mix(in oklab, var(--c-trouser, #3b4256) 60%, var(--px-shade, #2c2344))",
   b: "var(--c-boot)",
+  B: "color-mix(in oklab, var(--c-boot, #2a2420) 68%, var(--px-glint, #ffdfae))",
   e: "var(--c-eye)",
   m: "var(--c-mouth)",
 };
@@ -93,11 +135,17 @@ export const SKIN_PAL: Palette = {
  */
 export const VISITOR_PAL: Palette = {
   k: "var(--c-guest-skin)",
+  K: "color-mix(in oklab, var(--c-guest-skin, #9a86b8) 62%, var(--px-shade, #2c2344))",
   h: "var(--c-guest-hair)",
+  H: "color-mix(in oklab, var(--c-guest-hair, #4a3a63) 72%, var(--px-glint, #ffdfae))",
   s: "var(--c-guest-coat)",
+  w: "color-mix(in oklab, var(--c-guest-coat, #7a6699) 78%, var(--px-glint, #ffdfae))",
+  S: "color-mix(in oklab, var(--c-guest-coat, #7a6699) 64%, var(--px-shade, #2c2344))",
   a: "var(--c-guest-coat)",
   t: "var(--c-guest-leg)",
+  T: "color-mix(in oklab, var(--c-guest-leg, #5c4d75) 60%, var(--px-shade, #2c2344))",
   b: "var(--c-guest-boot)",
+  B: "color-mix(in oklab, var(--c-guest-boot, #3a3048) 68%, var(--px-glint, #ffdfae))",
   e: "var(--c-guest-eye)",
   m: "var(--c-guest-eye)",
   "#": "var(--c-guest-ink)",
@@ -381,6 +429,9 @@ export const PROPS: Record<ZoneId, Piece> = {
   idle: BREAK,
 };
 
+/** The same catalogue under the name the sprite table reads. */
+export const PROP_PIECES = PROPS;
+
 /* ── Status marks ────────────────────────────────────────────────────────────────────────────
  *
  *  Status is read by SHAPE first. Colour is the second signal, never the only one: a red dot and
@@ -538,51 +589,157 @@ export const RING: Piece = {
 
 /* ── Travel ──────────────────────────────────────────────────────────────────────────────────
  *
- *  `POSE_MOVE` played fast reads as "busy", which is what it was authored for — the hands move,
- *  the feet barely do. That is right for someone AT a desk and wrong for someone crossing the
- *  building: at 4px a foot the eye reads the STRIDE, not the arms, so a person walking a corridor
- *  with their feet 2px apart looks like a picture being dragged.
+ *  Three facings, because a body on a tile floor walks in four directions and a game draws what
+ *  the walk shows: the SIDE for east and west (mirrored), the BACK going north, the FRONT coming
+ *  south. One frontal drawing dragged sideways is the single loudest "not a game" tell there is.
  *
- *  So travel gets its own two frames, and the only thing they exaggerate is the split between the
- *  legs and the counter-swing of the arms. Same canvas, same palette keys — a traveller is the
- *  same person, walking.
+ *  The vertical walks are two frames — one foot planted, one lifted, swapped — and the side walk
+ *  is the full four-frame gait: contact, passing, contact, passing. The contact frames sit one
+ *  row LOWER than the passing frame, which is the one-pixel bob every small walk cycle carries;
+ *  the engine flips frames on distance walked, so the feet stay under the body at any speed.
  */
+
+/** Coming toward you. Right foot mid-step: its boot hangs a row above the ground while the left
+ *  is planted, and the near hand swings up as the opposite foot rises. */
 export const POSE_WALK_A: Grid = [
-  "..hhhhhh..",
-  "..hhhhhh..",
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkekkekh.",
   "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "...kkkk...",
-  "..ssssssk.",
-  ".ksssaass.",
-  "..ssssss..",
-  "..ssssss..",
+  ".wssssssS.",
+  ".wSssssSS.",
+  ".kSsaasSS.",
+  "..SssssSK.",
   "..tttttt..",
-  ".ttt..tt..",
-  ".tt....tt.",
-  "bb......bb",
-  "bb......bb",
+  "..tt..tt..",
+  "..tt..tT..",
+  "..tt..Bbb.",
+  ".Bbb..bbb.",
+  ".bbb......",
 ];
 
 export const POSE_WALK_B: Grid = [
-  "..hhhhhh..",
-  "..hhhhhh..",
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkekkekh.",
   "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "...kkkk...",
-  ".kssssss..",
-  ".sssaasss.",
-  "..ssssss..",
-  "..ssssss..",
+  ".wssssssS.",
+  ".wSssssSS.",
+  ".wSsaasSK.",
+  ".kSsssss..",
   "..tttttt..",
-  "..tt..ttt.",
-  ".tt....tt.",
-  "bb......bb",
-  "bb......bb",
+  "..tt..tt..",
+  "..tT..tt..",
+  ".Bbb..tt..",
+  ".bbb..Bbb.",
+  "......bbb.",
+];
+
+/** Walking away. The same gait seen from behind: all hair, no face, and no badge — the missing
+ *  badge is what tells you at a glance which way somebody is going. */
+export const POSE_AWAY_A: Grid = [
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hhhhhhhh.",
+  ".hhhhhhhh.",
+  "..hhhhhh..",
+  ".wssssssS.",
+  ".wSssssSS.",
+  ".kSssssSS.",
+  "..SssssSK.",
+  "..tttttt..",
+  "..tt..tt..",
+  "..tt..tT..",
+  "..tt..Bbb.",
+  ".Bbb..bbb.",
+  ".bbb......",
+];
+
+export const POSE_AWAY_B: Grid = [
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hhhhhhhh.",
+  ".hhhhhhhh.",
+  "..hhhhhh..",
+  ".wssssssS.",
+  ".wSssssSS.",
+  ".wSssssSK.",
+  ".kSsssss..",
+  "..tttttt..",
+  "..tt..tt..",
+  "..tT..tt..",
+  ".Bbb..tt..",
+  ".bbb..Bbb.",
+  "......bbb.",
+];
+
+/** The side gait, drawn facing EAST; the engine mirrors it for west. Profile head — hair mass at
+ *  the back, one eye and the nose at the front — and the far limbs a shade darker than the near
+ *  ones, which is what carries depth at this size.
+ *
+ *  CONTACT: full stride, both feet on the ground, the body at its lowest.
+ *  PASSING: feet gathered under the body, the body one row higher — the bob. */
+export const POSE_STRIDE_A: Grid = [
+  "..........",
+  "..hhhhh...",
+  ".Hhhhhhh..",
+  ".hhhhhkk..",
+  ".hhhhkekk.",
+  ".hhhhkkk..",
+  "....kkk...",
+  "...ssss...",
+  "...sssS...",
+  "...sSss...",
+  "...Sssk...",
+  "...tttt...",
+  "..Tt..tt..",
+  ".Tt...tt..",
+  ".Tt....tt.",
+  "Bbb....bbb",
+];
+
+export const POSE_STRIDE_B: Grid = [
+  "..hhhhh...",
+  ".Hhhhhhh..",
+  ".hhhhhkk..",
+  ".hhhhkekk.",
+  ".hhhhkkk..",
+  "...kkk....",
+  "...ssss...",
+  "...sssS...",
+  "...sssS...",
+  "...kssS...",
+  "...tttt...",
+  "...tttt...",
+  "...Ttt....",
+  "...Ttt....",
+  "..Bbb.....",
+  "..bbb.....",
+];
+
+export const POSE_STRIDE_C: Grid = [
+  "..........",
+  "..hhhhh...",
+  ".Hhhhhhh..",
+  ".hhhhhkk..",
+  ".hhhhkekk.",
+  ".hhhhkkk..",
+  "....kkk...",
+  "...ssss...",
+  "...Ssss...",
+  "...ssSs...",
+  "..ksssS...",
+  "...tttt...",
+  "..tt..Tt..",
+  ".tt...Tt..",
+  ".tt....Tt.",
+  "bbb....Bbb",
 ];
 
 /* ── Sitting down ────────────────────────────────────────────────────────────────────────────
@@ -607,129 +764,129 @@ export const POSE_WALK_B: Grid = [
 /** At the desk. The arms reach OUT to where the desk is, which is the whole tell: a seated figure
  *  with its arms at its sides is a person on a chair, not a person working. */
 export const POSE_SIT_A: Grid = [
-  "..hhhhhh..",
-  "..hhhhhh..",
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkekkekh.",
   "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "...kkkk...",
-  ".ssssssss.",
-  ".sssaasss.",
-  "kssssssssk",
-  ".tttttttt.",
-  ".bb....bb.",
+  ".wssssssS.",
+  ".kSsaasSK.",
+  "..ssssss..",
+  "..tttttt..",
+  "..Tt..tT..",
+  ".bbb..bbb.",
 ];
 
-/** The same seat, leaned one pixel into the screen. Played on the beat this is somebody typing;
+/** The same seat, settled one row into the screen. Played on the beat this is somebody typing;
  *  it is the same trick the standing pair uses and it costs one row of difference. */
 export const POSE_SIT_B: Grid = [
   "..........",
-  "..hhhhhh..",
-  "..hhhhhh..",
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkekkekh.",
   "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "...kkkk...",
-  ".ssssssss.",
-  "kssssssssk",
-  ".tttttttt.",
-  ".bb....bb.",
+  ".wssssssS.",
+  ".kSsaasSK.",
+  "..tttttt..",
+  "..Tt..tT..",
+  ".bbb..bbb.",
 ];
 
-/** Stopped. Head down into the shoulders, eyes shut, arms hanging — and NOT played as a pair, so
- *  the one body on the floor that is genuinely not moving is genuinely not moving. */
+/** The blink at the desk — the sit pose with the lids down. */
+export const POSE_SIT_BLINK: Grid = [
+  "..HHhhhh..",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkkkkkkh.",
+  ".hkKkkKkh.",
+  "..kkkkkk..",
+  ".wssssssS.",
+  ".kSsaasSK.",
+  "..ssssss..",
+  "..tttttt..",
+  "..Tt..tT..",
+  ".bbb..bbb.",
+];
+
+/** Stopped. Head sunk to the shoulders — the shirt rises BESIDE the chin — eyes shut, arms
+ *  hanging, and NOT played as a pair, so the one body on the floor that is genuinely not moving
+ *  is genuinely not moving. */
 export const POSE_SLUMP: Grid = [
   "..........",
   "..........",
   "..hhhhhh..",
-  "..hhhhhh..",
-  "..kkkkkk..",
-  "..kmkkmk..",
-  "..kkkkkk..",
-  ".ssssssss.",
-  ".sssaasss.",
-  ".kssssssk.",
-  ".tttttttt.",
-  ".bb....bb.",
+  ".hHhhhhhh.",
+  ".hhhhhhhh.",
+  ".hkKkkKkh.",
+  ".SkkkkkkS.",
+  ".SssssssS.",
+  ".kSssssSk.",
+  "..tttttt..",
+  "..Tt..tT..",
+  ".bbb..bbb.",
 ];
 
-/** At ease. Shoulders up around the neck, arms spread along the back of the bench, legs pushed
- *  out — the posture nobody holds at a desk, which is why it says "finished" without a word. */
+/** GENUINELY HORIZONTAL. The old lounge was the standing sprite with its arms spread — a
+ *  measured ~7% outline difference, invisible at zoom 1, so a floor of finished agents read as
+ *  a floor of people standing about. A body LYING DOWN is a silhouette rotated ninety degrees:
+ *  low and long where everything else in the building is tall and narrow, readable from any
+ *  distance at which a person is readable at all.
+ *
+ *  On their back along the couch, head propped on the armrest at the left, knees drawn up,
+ *  boots on the cushion — the head block is the standing sprite's own, so it is visibly the
+ *  same person. The bottom rows are EMPTY on purpose: the figure is anchored at the seat cell's
+ *  boots like everybody, and the blank rows lift it onto the cushion of the couch drawn one
+ *  tile north. */
 export const POSE_REST_A: Grid = [
-  "..........",
-  "..hhhhhh..",
-  "..hhhhhh..",
-  "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "..skkkks..",
-  "kssssssssk",
-  ".sssaasss.",
-  ".tttttttt.",
-  "ttt....ttt",
-  "bb......bb",
+  "............tt..",
+  "..HHhhhh...tttt.",
+  ".hHhhhhhh..ttTt.",
+  ".hhhhhhhh..ttTt.",
+  ".hkkkkkkh..ttTt.",
+  ".hkekkekh..tt.Bb",
+  "..kkkkkkwssttTbb",
+  "........sassTbbb",
+  "................",
+  "................",
+  "................",
+  "................",
 ];
 
-/** The breath. One row of chest, which at this size is the whole difference between a person
- *  resting and a prop of a person. */
+/** The breath: the chest rises one pixel. Lying down, that is the whole animation — which is
+ *  the tradition, and a sleeping cat's. */
 export const POSE_REST_B: Grid = [
-  "..hhhhhh..",
-  "..hhhhhh..",
-  "..kkkkkk..",
-  "..kekkek..",
-  "..kkkkkk..",
-  "..kkmmkk..",
-  "..skkkks..",
-  "kssssssssk",
-  ".sssaasss.",
-  ".ssssssss.",
-  ".tttttttt.",
-  "ttt....ttt",
-  "bb......bb",
+  "............tt..",
+  "..HHhhhh...tttt.",
+  ".hHhhhhhh..ttTt.",
+  ".hhhhhhhh..ttTt.",
+  ".hkkkkkkh..ttTt.",
+  ".hkekkekhwstt.Bb",
+  "..kkkkkkwssttTbb",
+  "........sassTbbb",
+  "................",
+  "................",
+  "................",
+  "................",
 ];
 
-/** The runner who carries the post. Deliberately NOT one of the team: a message crossing the
- *  building must not be mistaken for a person changing rooms, so the courier is smaller, has no
- *  face and no badge, and is drawn in one flat tone with the note in front of them. */
-export const POSE_RUN_A: Grid = [
-  "..hhhh..",
-  "..kkkk..",
-  ".ssssss.",
-  "nssssss.",
-  "nsssss..",
-  "..tttt..",
-  ".tt..tt.",
-  "bb....bb",
+/** The drowsy blink, lying down. */
+export const POSE_REST_BLINK: Grid = [
+  "............tt..",
+  "..HHhhhh...tttt.",
+  ".hHhhhhhh..ttTt.",
+  ".hhhhhhhh..ttTt.",
+  ".hkkkkkkh..ttTt.",
+  ".hkKkkKkh..tt.Bb",
+  "..kkkkkkwssttTbb",
+  "........sassTbbb",
+  "................",
+  "................",
+  "................",
+  "................",
 ];
-
-export const POSE_RUN_B: Grid = [
-  "..hhhh..",
-  "..kkkk..",
-  ".ssssss.",
-  "nssssss.",
-  "nssssss.",
-  "..tttt..",
-  "..t..t..",
-  ".bb..bb.",
-];
-
-/** A courier is a silhouette plus the thing they are carrying. The note keeps the post's own
- *  colour so the object crossing the floor is recognisably the same object the legend names. */
-export const RUNNER_PAL: Palette = {
-  k: "var(--wp-runner)",
-  h: "var(--wp-runner)",
-  s: "var(--wp-runner)",
-  t: "var(--wp-runner)",
-  b: "var(--wp-runner)",
-  n: "var(--wp-paper)",
-  // The derived rim defaults to the building's ink, and at this size the rim is half the body —
-  // a courier drawn mostly in near-black vanished against every wall it crossed. Its own rim,
-  // one step darker than the body, keeps the silhouette without swallowing it.
-  "#": "var(--wp-runner-ink)",
-};
 
 /** The front door, open. Same canvas as `ENTRY` so the two frames sit on the same pixel grid and
  *  the door swings instead of the whole wall jumping. It opens because somebody went through it —
@@ -769,6 +926,19 @@ export const DOOR: { frames: Grid[]; pal: Palette } = {
  *  Keyed by the faculty ID, so `capabilities.ts` stays the single source of what a tool grants and
  *  this is only how it is drawn. An id with no drawing falls back to its unicode mark.
  */
+/** The whole figure catalogue in one place, so the sprite table (`dev/sprites.ts`) and any probe
+ *  can walk every frame of every pose without re-listing them — a frame pair that only ever
+ *  alternates can hide a bad frame for a whole review round. */
+export const POSES: Record<string, readonly Grid[]> = {
+  idle: [POSE_REST, POSE_MOVE, POSE_BLINK],
+  "walk south": [POSE_WALK_A, POSE_WALK_B],
+  "walk north": [POSE_AWAY_A, POSE_AWAY_B],
+  "walk east": [POSE_STRIDE_A, POSE_STRIDE_B, POSE_STRIDE_C, POSE_STRIDE_B],
+  sit: [POSE_SIT_A, POSE_SIT_B, POSE_SIT_BLINK],
+  slump: [POSE_SLUMP],
+  lounge: [POSE_REST_A, POSE_REST_B, POSE_REST_BLINK],
+};
+
 export const FACULTY_ART: Record<string, Piece> = {
   // reads the code — a page with lines written on it
   reads: {

@@ -304,6 +304,22 @@ export function project(grid: readonly string[], leafy = false): string[] {
   const reach = Math.round(base * SHEAR) + FOOT_X;
   const tall = base + FOOT_Y + Math.round(base * SQUASH) + 1;
   const out: string[][] = Array.from({ length: tall }, () => new Array(cols + reach).fill("."));
+  /* THE HARD PATCH IS THE TRUNK, NOT THE SKIRT. A leafy thing's base row can be as wide as its
+     canopy — a bush is all skirt, the big tree's lowest boughs sweep the ground — and a full-width
+     solid base row is a bar one caster wide that FUSES the moment two casters touch: a fringe of
+     tree, bush and big tree in adjacent cells measured 23 cells of unbroken ink, over the
+     two-tile limit the probe holds this file to. The thing the solid patch exists to say is
+     "standing on something", and what stands on the ground is the TRUNK — so solid contact is
+     the middle of the base row only, and the skirt dapples like everything thrown. */
+  const baseRow = grid[base];
+  let inkLo = baseRow.length;
+  let inkHi = -1;
+  for (let c = 0; c < baseRow.length; c++) {
+    if (baseRow[c] === "." || baseRow[c] === " ") continue;
+    if (c < inkLo) inkLo = c;
+    if (c > inkHi) inkHi = c;
+  }
+  const trunk = Math.floor((inkLo + inkHi) / 2);
   for (let r = 0; r <= base; r++) {
     const row = grid[r];
     const high = base - r;
@@ -315,6 +331,7 @@ export function project(grid: readonly string[], leafy = false): string[] {
     for (let c = 0; c < row.length; c++) {
       if (row[c] === "." || row[c] === " ") continue;
       const x = c + dx;
+      if (leafy && high === 0 && Math.abs(c - trunk) > 2 && (x + y) % 2 === 1) continue;
       /* SOLID IS CONTACT; THROWN IS DAPPLE.
          The old rule kept everything within two cells of the foot solid, which sounds like the
          same thing and is not: a tree's widest rows are down there, so each one laid a six-cell

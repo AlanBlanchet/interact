@@ -69,9 +69,30 @@ const discoveredFile = arg("--discovered");
 const discovered = discoveredFile ? parseDiscovered(readFileSync(discoveredFile, "utf8")) : [];
 const all = mergeDiscovered(readAgentRuns(), discovered);
 const project = arg("--project");
-const runs = scopeRuns(all, project ? { kind: "project", name: project } : { kind: "all" }, "");
+const scoped = scopeRuns(all, project ? { kind: "project", name: project } : { kind: "all" }, "");
 
 const org = readOrg();
+
+/** The whole declared company, exactly as `WorkplacePanel.withDeclared()` builds it: a synthetic
+ *  READY run for every org agent with no real errand, so the world seats the roster the user
+ *  actually declared — the panel renders ~40 bodies on an 18-run registry, and a harness that
+ *  showed only the run-backed ten would certify a different picture than the one he sees. */
+function withDeclared(runs: readonly ReturnType<typeof readAgentRuns>[number][]): typeof runs {
+  if (!org) return [...runs];
+  const company = companyOf(org) ?? undefined;
+  const present = new Set(runs.map((r) => roleOf(r as never, company).id));
+  const ready = org.agents
+    .filter((a) => !present.has(a.name))
+    .map((a) => ({
+      run_id: `decl:${a.name}`,
+      provider: a.providers?.[0] ?? "claude",
+      name: a.title ?? a.name,
+      agent: a.name,
+      status: "declared",
+    }) as unknown as (typeof runs)[number]);
+  return [...runs, ...ready];
+}
+const runs = withDeclared(scoped);
 const company = companyOf(org) ?? undefined;
 const state = buildTeam(
   runs as never,
@@ -105,6 +126,11 @@ const rail = buildRail(
   runs as never,
   project ?? "all workspaces",
   (run) => Math.max(0, now - (lastObservedAt(readAgentActivity(run.run_id, 40)) ?? now)),
+  undefined,
+  undefined,
+  // The SAME identity the panel groups by. Without it the harness rendered run-rows beside an
+  // agent-map, and the header said "16 done" over a floor showing 8 — the mirror must mirror.
+  (run) => ({ id: roleOf(run as never, company).id, label: agentLabel(run as never, company) }),
 );
 const aside = {
   style: railStyle(),

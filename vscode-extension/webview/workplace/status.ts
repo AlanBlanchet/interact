@@ -107,6 +107,10 @@ export interface Standing {
 export function attentionOf(w: Standing): Attention {
   if (w.status === "error") return "error";
   if (w.status === "foreign") return "not-ours";
+  /* Declared in the company, never asked. Reaches here only once the floor status carries it —
+     `floorStatus` used to collapse declared into done, which conflated "waiting for a first job"
+     with "did its job"; two different stories, and the posture system tells them apart. */
+  if (w.status === "ready") return "ready";
   if (w.status === "done") return "finished";
   return w.idle_seconds >= STALL_SECONDS ? "held" : "working";
 }
@@ -159,9 +163,13 @@ const BEHAVIOUR: Record<Attention, Behaviour> = {
   asked: { posture: "stand", post: "desk", stamp: true },
   finished: { posture: "lounge", post: "rest", stamp: false },
   "not-ours": { posture: "lounge", post: "rest", stamp: false },
-  /* Declared in the company, never asked: at ease in its own room, no placard, no caption —
-     presence IS the message ("some other agents exist but aren't used"). */
-  ready: { posture: "lounge", post: "rest", stamp: false },
+  /* Declared in the company, never asked: STANDING AT ITS DESK — no placard, no caption, no
+     rest fade. Posture ALONE was measured imperceptible beside the loungers, so the distinction
+     is position AND posture together, in the same wordless language every other state speaks:
+     a body that DID its work is ON the couch at the rest end; a body still waiting for its
+     first job stands at its station. Thirty declared-but-idle agents at their desks reading as
+     a staffed floor waiting for work is the honest picture of a big roster. */
+  ready: { posture: "stand", post: "desk", stamp: false },
 };
 
 export function behaviourOf(a: Attention): Behaviour {
@@ -182,7 +190,8 @@ export const HEAD: Record<Posture, number> = {
   stand: 54,
   sit: 42,
   slump: 42,
-  lounge: 45,
+  /* Twelve rows of canvas, most of it lying sideways: (12 + rim 2) * 3. */
+  lounge: 42,
 };
 
 /** The stamp the WORLD hangs, which is not the stamp the rail prints. Two states earn a placard

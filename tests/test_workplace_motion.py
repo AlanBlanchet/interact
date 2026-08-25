@@ -471,6 +471,48 @@ def test_nobody_stands_on_top_of_anybody(page):
     )
 
 
+def test_no_two_settled_bodies_ever_share_a_seat(page):
+    """The exact-zero-distance class, driven deterministically instead of waited for.
+
+    A stroller could lawfully stop ON the seat of a body that was itself out walking — the claim
+    check covered positions and destinations, never the seats — and the owner's return is
+    unconditional, so the two settled at literally 0.0 tiles: one sprite entirely hidden, two
+    nameplates over one visible body. Wall-clock sampling (the test above) catches a pair only if
+    it persists through its window; this one steps the engine's own clock through ten simulated
+    minutes and checks every two simulated seconds, so the trespass-and-return sequence has
+    hundreds of chances to occur and zero opportunity to hide between samples.
+
+    Settled means pathless: walkers crossing are fine, and a courier standing two tiles out for a
+    delivery is a conversation, not a collision — the assertion is the HARD floor only, two
+    stationary bodies inside one tile of each other.
+    """
+    shared = page.evaluate(
+        """() => {
+          const wp = window.__wp;
+          wp.tick.on = false;
+          const bad = [];
+          let t = 1000;
+          for (let checkpoint = 0; checkpoint < 300; checkpoint++) {
+            for (let i = 0; i < 120; i++) { t += 16.7; wp.step(t); }
+            const settled = Object.values(wp.bodies).filter((b) => !b.path && b.el);
+            for (let i = 0; i < settled.length; i++)
+              for (let j = i + 1; j < settled.length; j++) {
+                const a = settled[i], b = settled[j];
+                if (Math.abs(a.x - b.x) < 0.75 && Math.abs(a.y - b.y) < 0.75)
+                  bad.push(`${a.id} + ${b.id} at (${a.x.toFixed(1)},${a.y.toFixed(1)}) t=${(t / 1000).toFixed(0)}s`);
+              }
+            if (bad.length > 4) break;
+          }
+          wp.tick.on = true;
+          return bad;
+        }"""
+    )
+    assert not shared, (
+        "two stationary bodies inside one tile of each other — one of them is invisible:\n  "
+        + "\n  ".join(shared)
+    )
+
+
 def test_a_shadow_never_swallows_the_click_meant_for_a_glyph(page):
     """A cast shadow is scenery; it must not be in the way of the thing it falls on.
 

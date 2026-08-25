@@ -198,6 +198,10 @@ export interface World {
    *  Emitted as horizontal runs per kind, exactly like a room's floor, because a patch of ground
    *  is one rectangle of a pattern and never five hundred tile elements. */
   terrain: { tile: TileId; runs: Rect[] }[];
+  /** The pot's own floor space: the cell south of every indoor leafy prop, SOLID like the
+   *  furniture's footprint, so no route ever carries a body through a potted tree. Exposed for
+   *  the placement probe. */
+  shy: number[];
 }
 
 function hash32(text: string): number {
@@ -452,6 +456,7 @@ function furnish(
   bays: number,
   uniques: Uniques,
   seed: number,
+  restBanks = 1,
 ): void {
   const main = room.rects[0];
   // A recess deep enough to stand something in. The plan forms also emit a WING — two or three
@@ -497,7 +502,11 @@ function furnish(
      it was arithmetically the same row as the desk rank, so both collapsed onto one another and
      the de-duplicator scattered the overflow. */
   const restRow = iy + D - 1;
-  const restProps = restRow - 1;
+  /* The SHALLOWEST rest row: everything between the desks and the rest end measures itself
+     against this, not against the deep row — a standing place gated against the far couch bank
+     lands two tiles from the near one, which is the pitch violation wearing a different bank. */
+  const restRowNear = restRow - (restBanks - 1) * PITCH;
+  const restProps = restRowNear - 1;
   for (let bank = 0; bank < banks; bank++) {
     for (let i = 0; i < bays; i++) {
       room.seats.push({
@@ -513,21 +522,32 @@ function furnish(
   }
   /* The furniture first, then the places in front of it, so a body that sits down has something
      behind it rather than sitting on the floor. Alternating pieces: a two-cell couch reads as a
-     couch only when what is beside it is NOT another couch. */
-  const restKit: TileId[] = ["sofa", "bench", "sofa", "chair"];
-  for (let i = 0; i < bays; i++) {
-    const cx = ix + i * BAY + 1;
-    put(cx, restProps, restKit[(i + seed) % restKit.length]);
-    // A low table between two seats, and greenery at the ends: the difference between a row of
-    // chairs and a place somebody would actually sit.
-    if (i > 0) put(cx - 1, restProps, (i + seed) % 2 === 0 ? "tableM" : "plant");
-    room.seats.push({
-      x: cx,
-      y: restRow,
-      post: "rest",
-      // Turned inward, in pairs. Two people on one bench looking the same way are a queue.
-      face: i % 2 === 0 ? 1 : -1,
-    });
+     couch only when what is beside it is NOT another couch. Everything in the kit is something a
+     person can LIE on — the finished lounge horizontally, and a lounger across an armchair is a
+     body clipping through furniture.
+
+     BANKS OF COUCHES, exactly like the banks of desks, and for the same reason: one row was
+     `bays` places for up to `2*bays` people, so the moment a department finished together half
+     of it lost the seat race and stood at the desks — indistinguishable from ready, which is the
+     one distinction the two-ends room exists to draw. The deep bank fills first, against the
+     back wall. */
+  const restKit: TileId[] = ["sofa", "bench", "sofa", "sofa"];
+  for (let bank = 0; bank < restBanks; bank++) {
+    const seatY = restRow - bank * PITCH;
+    for (let i = 0; i < bays; i++) {
+      const cx = ix + i * BAY + 1;
+      put(cx, seatY - 1, restKit[(i + bank + seed) % restKit.length]);
+      // A low table between two seats, and greenery at the ends: the difference between a row of
+      // chairs and a place somebody would actually sit.
+      if (i > 0) put(cx - 1, seatY - 1, (i + bank + seed) % 2 === 0 ? "tableM" : "plant");
+      room.seats.push({
+        x: cx,
+        y: seatY,
+        post: "rest",
+        // Turned inward, in pairs. Two people on one bench looking the same way are a queue.
+        face: i % 2 === 0 ? 1 : -1,
+      });
+    }
   }
 
   // The face: a fixture over every second bay, offset by the room's hash so no two rooms carry
@@ -551,10 +571,10 @@ function furnish(
      with nothing to sit on, so anybody sent here is drawn standing. */
   {
     const y = iy + 2 + banks * PITCH;
-    // Clear of the rest row by the SAME pitch it is clear of the desks by. It was only ever
-    // checked against the furniture above it, so in a room of this depth it landed two rows from
-    // the couches and a standing agent's nameplate cut across a seated one's head.
-    if (y + PITCH <= restRow) {
+    // Clear of the NEAREST rest row by the SAME pitch it is clear of the desks by. It was only
+    // ever checked against the furniture above it, so in a room of this depth it landed two rows
+    // from the couches and a standing agent's nameplate cut across a seated one's head.
+    if (y + PITCH <= restRowNear) {
       for (let i = 0; i < bays; i++) {
         room.seats.push({ x: ix + i * BAY + 1, y, post: "rest", face: i % 2 ? -1 : 1, perch: false });
       }
@@ -565,7 +585,9 @@ function furnish(
   // every room read as a rectangle with props glued to one edge; it is where the things a room
   // accumulates go. Never on a standing place, and the list is walked from the room's own hash so
   // no two rooms accumulate the same things in the same order.
-  const clutter: TileId[] = ["chair", "crates", "plant", "bench", "cabinet", "sofa", "urn", "chair", "printer"];
+  /* No leafy decor in the mid-floor clutter — clutter lands on exactly the open cells bodies
+     roam, and a stroller pausing south of a plant wears its canopy (the floating-tree class). */
+  const clutter: TileId[] = ["chair", "crates", "bench", "cabinet", "sofa", "urn", "chair", "printer"];
   // What a chair may NEVER stand on. Every standing place AND its four neighbours, so a body
   // always has somewhere to step and somebody can always come and stand beside it; and the two
   // cells inside every door, because a crate there seals the department. Both were found by the
@@ -614,7 +636,19 @@ function furnish(
     const mate = uniques.pick(["fan", "coffee", "printer", "cabinet", "crates"]) ?? "crates";
     put(ax + 1, ay + 1, mate);
   } else {
-    put(ix + (bays - 1) * BAY + 2, iy + 2 + banks * PITCH, only);
+    /* The fixed row collided with the NEAR couch bank the moment the rest end grew a second
+       bank: a tank standing flush between a bench and a plant fused three contact shadows into
+       one 23-cell bar — the slab rule's limit is sixteen. So the one-of-a-kind thing walks NORTH
+       off its spot until it stands with no caster beside it on its own row and no seat within a
+       tile. For a one-bank room the first candidate is already clear and nothing moves. */
+    const fx = Math.min(ix + (bays - 1) * BAY + 2, main.x + main.w - 2);
+    let fy = iy + 2 + banks * PITCH;
+    for (let y = fy; y >= iy + 2; y--) {
+      const beside = room.props.some((p) => p.y === y && Math.abs(p.x - fx) <= 1);
+      const seated = room.seats.some((s) => Math.abs(s.x - fx) <= 1 && Math.abs(s.y - y) <= 1);
+      if (!beside && !seated) { fy = y; break; }
+    }
+    put(fx, fy, only);
   }
 }
 
@@ -626,8 +660,10 @@ function loosen(room: Room, uniques: Uniques, seed: number): void {
   const put = (x: number, y: number, tile: TileId): void => {
     room.props.push({ x, y, tile, live: LIVE_OF[tile] });
   };
-  const wish: TileId[] = ["coffee", "cooler", "tank", "vending", "plant"];
-  const kit: TileId[] = ["sofa", "plant", "bench", "tableM", "crates"];
+  /* No plants in a plaza's own kit — the whole plaza is open floor bodies roam, which is the
+     floating-canopy class. The greenery an open floor gets is the grounds outside its windows. */
+  const wish: TileId[] = ["coffee", "cooler", "tank", "vending"];
+  const kit: TileId[] = ["sofa", "urn", "bench", "tableM", "crates"];
   let n = 0;
   for (let y = b.y + 1; y < b.y + b.h - 1; y += 3) {
     for (let x = b.x + 2; x < b.x + b.w - 2; x += 4) {
@@ -687,6 +723,11 @@ interface Slot {
   dept: Dept;
   arch: Archetype;
   bays: number;
+  /** How many banks of couches the rest end carries. A room must hold its WHOLE headcount at
+   *  EITHER end — every desk taken is a floor at work, every couch taken is a floor that has
+   *  finished, and both are real states of a real registry. Desks already scale (two banks of
+   *  one-per-bay); the rest end scales the same way, and the room gets a pitch deeper for it. */
+  restBanks: number;
   w: number;
   h: number;
 }
@@ -694,8 +735,10 @@ interface Slot {
 function slotFor(dept: Dept, taken: Set<string>): Slot {
   const arch = archOf(dept.kit, taken);
   taken.add(arch.kind);
-  const bays = baysOf(dept.heads ?? 0);
-  return { dept, arch, bays, w: BAY * bays + 2, h: arch.depth + 3 };
+  const heads = dept.heads ?? 0;
+  const bays = baysOf(heads);
+  const restBanks = heads > bays ? 2 : 1;
+  return { dept, arch, bays, restBanks, w: BAY * bays + 2, h: arch.depth + 3 + (restBanks - 1) * PITCH };
 }
 
 function blank(id: string, label: string, rects: Rect[], over: Partial<Room> = {}): Room {
@@ -732,7 +775,7 @@ function blank(id: string, label: string, rects: Rect[], over: Partial<Room> = {
  *  re-sent when somebody walks. */
 export function buildWorld(
   depts: readonly Dept[],
-  core: { brain?: number; lobby?: number } = {},
+  core: { brain?: number; lobby?: number; web?: number } = {},
 ): World {
   const uniques = new Uniques();
 
@@ -842,7 +885,7 @@ export function buildWorld(
       room.doors.push(
         side === "n" ? { x: doorX, y: y + s.h - 1, deep: false } : { x: doorX, y, deep: true },
       );
-      furnish(room, s.arch, s.bays, uniques, seed % 4);
+      furnish(room, s.arch, s.bays, uniques, seed % 4, s.restBanks);
       rooms.push(room);
       x += s.w - 1;
     }
@@ -923,7 +966,7 @@ export function buildWorld(
 
   // The front desk, inside the gate. Open like the chamber, because a lobby with a door on it is
   // not a lobby.
-  const lobH = Math.min(floorY - wallY - 1, HALL_H + 2 * (4 + baysOf(core.lobby ?? 0)));
+  const lobH = Math.min(floorY - wallY - 1, HALL_H + 2 * (4 + Math.max(MIN_BAYS, core.lobby ?? 0)));
   const lobY = Math.max(wallY + 1, Math.round(hallY + HALL_H / 2 - lobH / 2));
   const lobby = blank("", "Front desk", [{ x: lobbyX, y: lobY, w: LOBBY_W, h: lobH }], {
     lobby: true,
@@ -941,16 +984,22 @@ export function buildWorld(
     if (only) lobby.props.push({ x: lx + 5, y: gateY - 2, tile: only, live: LIVE_OF[only] });
     lobby.props.push({ x: lx, y: lobY + 1, tile: "board", live: "screen" });
     lobby.props.push({ x: lx + 5, y: lobY + lobH - 2, tile: "plant", live: "sway" });
-    const bays = baysOf(core.lobby ?? 0);
+    /* ONE desk and ONE couch per head, not one per pair: the lobby is where the discovered
+       sessions and the department-less land, and most of them arrive FINISHED or FOREIGN — all
+       of them wanting the waiting side at once. A rest end sized to half of them pushed the
+       other half onto the counter, where a finished body is indistinguishable from a ready one. */
+    const places = Math.max(MIN_BAYS, core.lobby ?? 0);
     // A front desk is people BEHIND a counter and people waiting in front of it. The waiting
     // side is the rest end, and it is what a visitor from another project is shown to.
     // The counter, and the waiting side. Each place has the thing it belongs to directly behind
     // it, which is the whole rule: a seat is a seat because of what is at its back.
-    for (let i = 0; i < bays; i++) {
-      lobby.props.push({ x: lx + 1, y: gateY - 3 + i * 3, tile: "desk", live: i % 2 ? undefined : "screen" });
-      lobby.seats.push({ x: lx + 1, y: gateY - 2 + i * 3, up: i === 0, post: "desk", face: 1 });
+    for (let i = 0; i < places; i++) {
+      const y = gateY - 3 + i * 3;
+      if (y + 1 >= lobY + lobH - 1) break;
+      lobby.props.push({ x: lx + 1, y, tile: "desk", live: i % 2 ? undefined : "screen" });
+      lobby.seats.push({ x: lx + 1, y: y + 1, up: i === 0, post: "desk", face: 1 });
     }
-    for (let i = 0; i < bays; i++) {
+    for (let i = 0; i < places; i++) {
       const y = lobY + 2 + i * PITCH;
       if (y >= lobY + lobH - 1) break;
       lobby.props.push({ x: lx + 5, y: y - 1, tile: i % 2 ? "bench" : "sofa" });
@@ -966,19 +1015,33 @@ export function buildWorld(
      placement complaint: nothing anchored anybody, so a fetch agent stood in the middle of a
      field. Now the yard has a PATH out of the gate with working places along it, and a bench
      under the trees to the south that is the yard's rest end. */
+  /* Sized to the people who actually go out: a fixed two-and-two for five web agents pushed the
+     overflow into a queue below the world, standing in the blocked grounds. Rows of standing
+     places march NORTH up the path, rows of benches march SOUTH under the trees, until both
+     ends hold the whole outdoor headcount — the same both-ends rule as every indoor room. */
   const yardSeats: Seat[] = [];
-  for (let dx = 2; dx < OUT; dx += PITCH) {
-    // Nothing to sit on out here: an agent working the web is standing on the path looking out.
-    yardSeats.push({ x: facadeX + dx, y: gateY - 1, up: true, post: "desk", face: 1, perch: false });
-  }
   const yardProps: Prop[] = [];
-  for (let dx = 2; dx < OUT; dx += PITCH) {
-    // The bench first, the place in front of it second. Benches laid on their own rhythm put two
-    // of the three places on bare grass, which is the "sitting on a lawn" defect one room out.
-    yardProps.push({ x: facadeX + dx, y: gateY + 3, tile: "bench" });
-    yardSeats.push({ x: facadeX + dx, y: gateY + 4, post: "rest", face: dx < OUT / 2 ? 1 : -1 });
+  const perRow = Math.ceil((OUT - 2) / PITCH);
+  const yardRows = Math.max(1, Math.ceil((core.web ?? 0) / perRow));
+  for (let r = 0; r < yardRows; r++) {
+    const y = gateY - 1 - r * PITCH;
+    if (y < wallY + 6) break; /* the mast and the treeline own the top of the yard */
+    for (let dx = 2; dx < OUT; dx += PITCH) {
+      // Nothing to sit on out here: an agent working the web is standing on the path looking out.
+      yardSeats.push({ x: facadeX + dx, y, up: true, post: "desk", face: 1, perch: false });
+    }
   }
-  for (let dx = 3; dx < OUT; dx += PITCH) yardProps.push({ x: facadeX + dx, y: gateY + 3, tile: "tableM" });
+  for (let r = 0; r < yardRows; r++) {
+    const benchY = gateY + 3 + r * (PITCH + 1);
+    if (benchY + 1 > floorY - 5) break; /* the pine and the blooms own the bottom corner */
+    for (let dx = 2; dx < OUT; dx += PITCH) {
+      // The bench first, the place in front of it second. Benches laid on their own rhythm put two
+      // of the three places on bare grass, which is the "sitting on a lawn" defect one room out.
+      yardProps.push({ x: facadeX + dx, y: benchY, tile: "bench" });
+      yardSeats.push({ x: facadeX + dx, y: benchY + 1, post: "rest", face: dx < OUT / 2 ? 1 : -1 });
+    }
+    for (let dx = 3; dx < OUT; dx += PITCH) yardProps.push({ x: facadeX + dx, y: benchY, tile: "tableM" });
+  }
   const yard = blank("__web", "Out on the web", [{ x: facadeX + 1, y: wallY, w: OUT, h: floorY - wallY + 1 }], {
     outdoor: true,
     open: true,
@@ -1031,11 +1094,14 @@ export function buildWorld(
   {
     const blocked = new Set<number>();
     for (const r of rooms) for (const d of r.doors) for (let k = -1; k <= 1; k++) blocked.add(d.x + k);
-    const kit: TileId[] = ["bench", "plant", "crates", "cabinet", "cooler", "printer"];
+    /* No foliage in the corridor. Six floating-tree reports narrowed to one class — leafy decor
+       on open floor beside standing bodies — and the corridor is the busiest open floor there
+       is. An absent plant is invisible; a floating one is a bug report. */
+    const kit: TileId[] = ["bench", "crates", "cabinet", "cooler", "printer"];
     let n = 0;
     for (let x = hall.x + 3; x < hall.x + hall.w - 3; x += 5) {
       if (blocked.has(x)) continue;
-      const tile = uniques.pick([kit[n % kit.length], "bench", "plant"]) ?? "plant";
+      const tile = uniques.pick([kit[n % kit.length], "bench", "crates"]) ?? "bench";
       hallProps.push({ x, y: n % 2 === 0 ? hallY : hallY + HALL_H - 1, tile, live: LIVE_OF[tile] });
       n++;
     }
@@ -1067,6 +1133,30 @@ export function buildWorld(
   const scrubbedHall = scrub(hallProps);
   hallProps.length = 0;
   for (const p of scrubbedHall) hallProps.push(p);
+
+  /* ── AND BODIES YIELD TO DECOR ────────────────────────────────────────────────────────────
+     The scrub above stops a plant growing out of FURNITURE; the sixth report found the same
+     picture made by a PERSON. A body is two tiles tall and drawn over the map, so anybody ON
+     the cell directly south of a leafy prop swallows its pot and trunk and the canopy floats
+     over their head — measured at 94.8% sprite overlap for a body merely WALKING THROUGH, so a
+     stop-only ban was not enough: at walk speed the fusion still holds for whole frames.
+
+     So the pot claims its floor space outright: the cell south of every surviving indoor leafy
+     prop is SOLID, exactly as the furniture's own footprint is, and the router walks around a
+     potted tree the way it walks around a desk. Declared seats there are dropped first so the
+     probe reports a seat-vs-decor clash rather than a seat in masonry. Outdoors is exempt: a
+     copse is terrain, trees carry trunks, litter and shadows, and the lawn has room to pass. */
+  /* The yard is NOT exempt: it is an outdoor ROOM with real workers walking it, and its two
+     trees sat outside the first pass — a web agent stopping south of the pine wore its canopy,
+     the same fusion indoors was cured of. The exemption belongs to the GROUNDS (scenery, where
+     nobody can walk at all), not to outdoor floor. */
+  const shy = new Set<number>();
+  for (const p of [...rooms.flatMap((r) => r.props), ...hallProps]) {
+    if (LEAFY_DECOR.has(p.tile)) shy.add((p.y + 1) * cols + p.x);
+  }
+  for (const room of rooms) {
+    room.seats = room.seats.filter((s) => !shy.has(s.y * cols + s.x));
+  }
 
   // Every room's own shape, and the same pass that hands the renderer its rectangles.
   for (const room of rooms) {
@@ -1153,6 +1243,11 @@ export function buildWorld(
   }
   carve({ x: facadeX + 1, y: envelope.y, w: OUT, h: envelope.h });
   solid[gateY * cols + facadeX] = false;
+  /* That carve just wiped the yard's own furniture blocks — the room pass ran first, so every
+     bench, mast and tree out here was walkable-over and a body could stand INSIDE the pine.
+     The critic's probe read it directly: ownSolid=0 on both yard trees. Blocked again, after
+     the last carve that touches the strip. */
+  for (const p of yard.props) block(p.x, p.y);
 
   // What is left solid inside the envelope, as rectangles, so the renderer can draw the building's
   // mass rather than leaving a hole where a shallow room did not reach the outside wall.
@@ -1169,6 +1264,10 @@ export function buildWorld(
   const mass = runsOf(massCells, envelope, cols);
 
   for (const p of hallProps) block(p.x, p.y);
+
+  /* The pot's floor space, claimed LAST — after every carve, or the room-shape pass would hand
+     the cell straight back to the walkable floor it was cut from. */
+  for (const cell of shy) solid[cell] = true;
 
   /* ── the grounds ──────────────────────────────────────────────────────────────────────────
      What was here before is the whole of "floating trees, and the sprites are weirdly placed":
@@ -1476,5 +1575,6 @@ export function buildWorld(
       tile,
       runs: runsOf(cells, { x: 0, y: 0, w: cols, h: rows }, cols),
     })),
+    shy: [...shy],
   };
 }

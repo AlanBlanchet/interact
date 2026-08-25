@@ -61,6 +61,16 @@ body {
   --wp-paper: color-mix(in srgb, #f3efe4 82%, var(--wp-bg));
   --wp-chrome: color-mix(in srgb, var(--wp-bg) 92%, var(--wp-fg));
 
+  /* ── the pixel-art light ────────────────────────────────────────────────────────────────
+     ONE warm light and ONE cool shade for every ramp in the scene. Every material — a shirt, a
+     desk top, a visitor's coat — derives its lit step by mixing toward the glint and its shaded
+     step by mixing toward the shade, so twenty palettes still read as one scene under one sun
+     out of the north-west. Shadows hue-shift COOL and highlights WARM because plain darkening
+     reads muddy and plain lightening reads chalky — the oldest palette rule small pixel art
+     has. */
+  --px-glint: #ffdfae;
+  --px-shade: #2c2344;
+
   /* ── the tile palette ───────────────────────────────────────────────────────────────────
      Every colour any tile may use, in one place. The art is authored against these names, so a
      light building and a dark one are the same drawings — no second tileset exists. */
@@ -783,7 +793,9 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
   z-index: 100;
   cursor: pointer;
   --c-shirt: var(--accent, var(--wp-h1));
-  --c-badge: color-mix(in srgb, var(--accent, var(--wp-h1)) 42%, var(--wp-ink));
+  /* The one focal role mark on the chest. LIGHT, like a card on a lanyard — mixed toward the
+     ink it sat in a hole punched out of the shirt; a badge is worn ON the cloth. */
+  --c-badge: color-mix(in srgb, var(--accent, var(--wp-h1)) 45%, #f3efe4);
   --c-eye: #1b1723;
   --c-mouth: color-mix(in srgb, var(--c-skin, #e0a877) 62%, var(--wp-ink));
   /* A VISITOR, not a hole. One flat tone for every part of a human silhouette is what a renderer
@@ -870,28 +882,63 @@ body.vscode-high-contrast-light .wp .wp-shadow.is-out { opacity: .19; }
 .wp-actor[data-posture="slump"] .wp-shade { width: 26px; left: -6px; bottom: -3px; }
 .wp-actor[data-posture="lounge"] .wp-shade { width: 34px; left: -10px; bottom: -3px; }
 
-/* Two poses for standing, two for walking, in one element. Which pair shows is the engine's call:
-   the walk frames are flipped on DISTANCE covered, not on a clock. */
+/* ── the sprite frames ─────────────────────────────────────────────────────────────────────
+   The resting sets are THREE frames now — pose, counter-pose, BLINK — and every waking cycle
+   runs on one long period: four working sub-beats and then the lids, staggered per person by
+   the same head start everything else carries. Held frames, uneven timing: a cycle that spends
+   most of its time still and then does ONE thing is what reads as alive; even flipping reads as
+   a metronome. The keyframes hold each value to the next stop (steps easing), because sprite
+   frames do not tween. */
 .wp-f { opacity: 0; }
 .wp-stand .wp-f0 { opacity: 1; }
-.wp-actor[data-status="running"] .wp-stand .wp-f0 { animation: wp-fa calc(var(--beat) / 2) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) / 2) steps(1, end) var(--d, 0s) infinite; }
+/* Typing at the desk: the two work frames alternate with a long hold on the lean-in, and the
+   blink lands at the top of the cycle. */
+.wp-actor[data-status="running"] .wp-stand .wp-f0 { animation: wp-t0 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor[data-status="running"] .wp-stand .wp-f1 { animation: wp-t1 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor[data-status="running"] .wp-stand .wp-f2 { animation: wp-t2 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
+@keyframes wp-t0 { 0% { opacity: 1; } 15.5% { opacity: 0; } 25% { opacity: 1; } 40.5% { opacity: 0; } 50% { opacity: 1; } 65.5% { opacity: 0; } 75% { opacity: 1; } 90.5% { opacity: 0; } 100% { opacity: 0; } }
+@keyframes wp-t1 { 0% { opacity: 0; } 15.5% { opacity: 1; } 25% { opacity: 0; } 40.5% { opacity: 1; } 50% { opacity: 0; } 65.5% { opacity: 1; } 75% { opacity: 0; } 90.5% { opacity: 1; } 94% { opacity: 0; } 100% { opacity: 0; } }
+@keyframes wp-t2 { 0% { opacity: 0; } 94% { opacity: 1; } 100% { opacity: 1; } }
+/* The old pair, kept for the wave hand. */
 @keyframes wp-fa { 0%, 62% { opacity: 1; } 63%, 100% { opacity: 0; } }
 @keyframes wp-fb { 0%, 62% { opacity: 0; } 63%, 100% { opacity: 1; } }
-/* AT EASE BREATHES; STOPPED DOES NOT.
-   The two-frame swap above is gated on the running status, which is right for typing — it is the tempo of
-   work. A body on a couch is not working and must still be alive, so it takes the same two frames
-   at a quarter of the rate: one slow breath, on the building's own beat like everything else.
-   HELD deliberately gets nothing at all. A worker the registry says has stopped stops, and
-   absence of motion is the loudest way a picture can say it. */
-.wp-actor[data-posture="lounge"] .wp-stand .wp-f0 { animation: wp-fa calc(var(--beat) * 2.5) steps(1, end) var(--d, 0s) infinite; }
-.wp-actor[data-posture="lounge"] .wp-stand .wp-f1 { animation: wp-fb calc(var(--beat) * 2.5) steps(1, end) var(--d, 0s) infinite; }
+/* A body that is awake but not typing still BLINKS — the one accent that says a still sprite is
+   a person and not a prop of one. The slump never fires it: its set has no blink frame, and its
+   eyes are already shut. */
+.wp-actor:not([data-status="running"])[data-posture="stand"] .wp-stand .wp-f0,
+.wp-actor:not([data-status="running"])[data-posture="sit"] .wp-stand .wp-f0 { animation: wp-b0 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor:not([data-status="running"])[data-posture="stand"] .wp-stand .wp-f2,
+.wp-actor:not([data-status="running"])[data-posture="sit"] .wp-stand .wp-f2 { animation: wp-t2 calc(var(--beat) * 2) steps(1, end) var(--d, 0s) infinite; }
+@keyframes wp-b0 { 0% { opacity: 1; } 94% { opacity: 0; } 100% { opacity: 0; } }
+/* AT EASE BREATHES; STOPPED DOES NOT. A body on a couch takes two slow breaths and one drowsy
+   blink per cycle — a fifth of the working tempo, on the building's own beat like everything
+   else. HELD deliberately gets nothing at all: a worker the registry says has stopped stops,
+   and absence of motion is the loudest way a picture can say it. */
+/* The lounger lies SIDEWAYS: sixteen columns of sprite against everybody else's ten, wider than
+   the 36px body box, so it is re-centred — and only the resting sprite, because the moment they
+   get up and walk they are an ordinary upright body again. */
+.wp-actor[data-posture="lounge"] .wp-body .wp-stand { left: -6px; }
+.wp-actor[data-posture="lounge"] .wp-stand .wp-f0 { animation: wp-r0 calc(var(--beat) * 5) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor[data-posture="lounge"] .wp-stand .wp-f1 { animation: wp-r1 calc(var(--beat) * 5) steps(1, end) var(--d, 0s) infinite; }
+.wp-actor[data-posture="lounge"] .wp-stand .wp-f2 { animation: wp-r2 calc(var(--beat) * 5) steps(1, end) var(--d, 0s) infinite; }
+@keyframes wp-r0 { 0% { opacity: 1; } 25% { opacity: 0; } 50% { opacity: 1; } 75% { opacity: 0; } 100% { opacity: 0; } }
+@keyframes wp-r1 { 0% { opacity: 0; } 25% { opacity: 1; } 50% { opacity: 0; } 75% { opacity: 1; } 97% { opacity: 0; } 100% { opacity: 0; } }
+@keyframes wp-r2 { 0% { opacity: 0; } 97% { opacity: 1; } 100% { opacity: 1; } }
+/* ── the walks ─────────────────────────────────────────────────────────────────────────────
+   Three sprites, one visible, picked by the leg's direction; four footfall phases driven by the
+   engine on distance walked. The vertical gaits carry their two frames twice over, so the same
+   step attribute drives all three. */
 .wp-walk { visibility: hidden; }
 .wp-actor.is-walking .wp-stand { visibility: hidden; }
-.wp-actor.is-walking .wp-walk { visibility: visible; }
-.wp-actor.is-walking .wp-walk .wp-f1 { opacity: 1; }
-.wp-actor.is-walking.wp-fA .wp-walk .wp-f1 { opacity: 0; }
-.wp-actor.is-walking.wp-fA .wp-walk .wp-f0 { opacity: 1; }
+.wp-actor.is-walking[data-dir="s"] .wp-walk-s { visibility: visible; }
+.wp-actor.is-walking[data-dir="n"] .wp-walk-n { visibility: visible; }
+.wp-actor.is-walking[data-dir="x"] .wp-walk-x,
+.wp-actor.is-walking:not([data-dir]) .wp-walk-x { visibility: visible; }
+.wp-actor.is-walking[data-step="0"] .wp-walk .wp-f0 { opacity: 1; }
+.wp-actor.is-walking[data-step="1"] .wp-walk .wp-f1 { opacity: 1; }
+.wp-actor.is-walking[data-step="2"] .wp-walk .wp-f2 { opacity: 1; }
+.wp-actor.is-walking[data-step="3"] .wp-walk .wp-f3 { opacity: 1; }
+.wp-actor.is-walking:not([data-step]) .wp-walk .wp-f0 { opacity: 1; }
 /* A body off the ground throws a smaller, tighter shadow. */
 .wp-actor.is-walking .wp-shade { transform: scaleX(.82); }
 
@@ -1173,6 +1220,7 @@ ${STAMP_CSS}
   .wp-actor.is-brain::before,
   .wp-actor .wp-stand .wp-f0,
   .wp-actor .wp-stand .wp-f1,
+  .wp-actor .wp-stand .wp-f2,
   .wp-actor.is-talking .wp-body,
   .wp-actor.is-met .wp-body,
   .wp-actor.is-poked .wp-body,
@@ -1189,6 +1237,7 @@ ${STAMP_CSS}
   .wp-lit .wp-pool { animation: none !important; }
   .wp-stand .wp-f0 { opacity: 1; }
   .wp-stand .wp-f1 { opacity: 0; }
+  .wp-stand .wp-f2 { opacity: 0; }
   .wp-lv-steam { opacity: 0; }
 }
 `;
