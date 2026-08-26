@@ -853,6 +853,19 @@ body.vscode-high-contrast-light .wp {
   transform: translateX(-50%) rotate(var(--lean, 0deg));
   transform-origin: 50% 100%;
 }
+/* A HIT AREA BIGGER THAN THE PERSON. Pulled back, a body is ~11px of drawn sprite and desks sit
+   three tiles apart — an aimed click landed on the NEIGHBOUR (measured: 3 of 4). The pad is
+   invisible, sits behind the art, and stops short of half the desk pitch so it can never steal
+   a click meant for the person next door. */
+.wp-body::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 40px; height: 40px;
+  transform: translate(-50%, -50%);
+  border-radius: 6px;
+  z-index: -1;
+}
 /* THE DOLL. One composed drawing per person; posture and gait are the ELEMENT's. Every verb
    this sprite has composes through custom properties on ONE transform — the face flip, the walk
    waddle, the seated tuck, the lounge roll — because two rules writing the transform on the

@@ -53,3 +53,26 @@ test("the tab strip renders the way home, the live dots, and the depth", () => {
 test("no strip when there is nobody else on the errand", () => {
   assert.equal(renderTabs([]), "");
 });
+
+test("an overflowing strip never hides the LIVE agent", () => {
+  /* The critic measured it at his real sidebar width: the 4th tab — the working one — was
+     clipped to "TE" behind a hidden scrollbar with no affordance. The tab you most need is the
+     one that is working, so the strip ORDERS by that: home, then whoever is live, then the
+     rest. */
+  const html = renderTabs([
+    { runId: "main", label: "main", depth: 0, here: true, root: true, live: false },
+    { runId: "a", label: "quiet-one", depth: 1, here: false, root: false, live: false },
+    { runId: "b", label: "another-quiet", depth: 1, here: false, root: false, live: false },
+    { runId: "c", label: "tester", depth: 1, here: false, root: false, live: true },
+  ]);
+  const order = [...html.matchAll(/data-run="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(order, ["main", "c", "a", "b"], "the live agent must sit next to home");
+});
+
+test("the strip wraps instead of hiding tabs behind an invisible scrollbar", () => {
+  const style = renderTabs([
+    { runId: "m", label: "m", depth: 0, here: true, root: true, live: false },
+    { runId: "a", label: "a", depth: 1, here: false, root: false, live: false },
+  ]);
+  assert.ok(!style.includes("scrollbar-width"), "no hidden scrollbar in the strip markup");
+});

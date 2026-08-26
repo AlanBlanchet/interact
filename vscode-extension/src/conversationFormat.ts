@@ -646,6 +646,15 @@ export interface Tab {
  */
 export function renderTabs(tabs: Tab[]): string {
   if (!tabs.length) return "";
+  /* WHOEVER IS WORKING SITS NEXT TO HOME. Measured at his real sidebar width, the fourth tab —
+     the live one — was clipped to two letters at the edge. The tab you most need is the one
+     still going, so it is ordered there rather than left to the accident of spawn order. */
+  const ordered = [
+    ...tabs.filter((t) => t.root),
+    ...tabs.filter((t) => !t.root && t.live),
+    ...tabs.filter((t) => !t.root && !t.live),
+  ];
+  tabs = ordered.length === tabs.length ? ordered : tabs;
   const one = (t: Tab): string =>
     `<button class="tab" data-run="${escapeHtml(t.runId)}" data-depth="${t.depth}"` +
     `${t.here ? ' data-here="1"' : ""}${t.root ? ' data-root="1"' : ""}` +
@@ -1025,17 +1034,19 @@ const STYLE = `
   /* THE ERRAND STRIP. Everyone this session put to work, the way home first. Scrolls sideways
      rather than wrapping: a strip that grows a second row pushes the transcript down every time
      an agent is spawned, which is motion nobody asked for. */
+  /* WRAPS, never scrolls. A hidden scrollbar took the live agent off-screen at his real sidebar
+     width with no affordance at all — a strip whose whole job is "who is on this errand" cannot
+     answer it from behind an invisible edge. Two rows of small pills is cheaper than a lost tab. */
   .tabs {
-    display: flex; gap: 4px; align-items: center;
-    padding: 5px 8px; overflow-x: auto; scrollbar-width: none;
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+    padding: 5px 8px;
     border-bottom: 1px solid var(--vscode-panel-border, transparent);
     background: var(--vscode-editorWidget-background, transparent);
   }
-  .tabs::-webkit-scrollbar { display: none; }
   .tab {
     font: inherit; font-size: .86em; cursor: pointer; flex: none;
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 2px 9px; border-radius: 999px; max-width: 15ch;
+    padding: 2px 9px; border-radius: 999px; max-width: 22ch;
     color: var(--wp-dim); background: transparent;
     border: 1px solid var(--vscode-panel-border, transparent);
   }
