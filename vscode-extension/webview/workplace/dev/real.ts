@@ -131,6 +131,8 @@ const rail = buildRail(
   // The SAME identity the panel groups by. Without it the harness rendered run-rows beside an
   // agent-map, and the header said "16 done" over a floor showing 8 — the mirror must mirror.
   (run) => ({ id: roleOf(run as never, company).id, label: agentLabel(run as never, company) }),
+  // The same clock too: the ledger folding is the whole point of judging on real data.
+  now,
 );
 const aside = {
   style: railStyle(),

@@ -7,7 +7,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { buildRail } from "./rail.ts";
-import { railHtml, headerLine } from "./railHtml.ts";
+import { railHtml, railBody, railStyle, headerLine } from "./railHtml.ts";
 import { voiceOf } from "./statusLanguage.ts";
 import { conversationTitle, roleOf } from "./roster.ts";
 import { actionsFor } from "./agentActions.ts";
@@ -163,4 +163,53 @@ test("each state carries its own accent, so colour still separates them", () => 
   assert.ok(finished.includes(`var(${voiceOf("finished").accent})`));
   assert.ok(failed.includes(`var(${voiceOf("error").accent})`));
   assert.notEqual(voiceOf("finished").accent, voiceOf("error").accent);
+});
+
+/* ——— Rest density: outcomes at rest, machinery behind intent ——— */
+
+test("row actions are invisible until the row is hovered or focused", () => {
+  const css = railStyle();
+  assert.match(css, /\.acts\s*{[^}]*opacity:\s*0/, "actions hidden at rest");
+  assert.match(css, /\.row:hover \.acts[^{]*{[^}]*opacity:\s*1/, "revealed by intent");
+  assert.match(css, /\.row:focus-within \.acts/, "and reachable by keyboard");
+});
+
+test("the ledger is one line that opens, not seven rows that shout", () => {
+  const built = { header: { scope: "interact", working: 0, needsYou: 0, finished: 0 },
+    chips: [], staff: [],
+    ledger: { runs: [
+      { run: { run_id: "o1", name: "t", provider: "claude", status: "done", started_at: 100, cost_usd: 2 }, attention: "finished", brain: false, depth: 0, note: "finished" },
+      { run: { run_id: "o2", name: "t", provider: "claude", status: "stopped", started_at: 90 }, attention: "stopped", brain: false, depth: 0, note: "stopped" },
+    ], done: 1, stopped: 1, failed: 0, cost: 2 },
+    runs: [] } as never;
+  const html = railBody(built, voiceOf as never, (r: { name: string }) => r.name as never,
+    (() => ({ id: "t", label: "t" })) as never);
+  assert.match(html, /<details class="ledger">/);
+  assert.match(html, /1 done · 1 stopped · \$2\.00/);
+  assert.ok(html.indexOf("</details>") > html.indexOf('data-run="o1"'), "old rows live inside it");
+});
+
+test("staff rest below, named and quiet", () => {
+  const built = { header: { scope: "interact", working: 0, needsYou: 0, finished: 0 },
+    chips: [], ledger: null,
+    staff: [{ run: { run_id: "decl:critic", name: "Visual QA authority", provider: "claude", status: "declared" }, attention: "ready", brain: false, depth: 0, note: "ready" }],
+    runs: [{ run: { run_id: "live", name: "live", provider: "claude", status: "running", started_at: 100 }, attention: "working", brain: false, depth: 0, note: "working" }] } as never;
+  const html = railBody(built, voiceOf as never, (r: { name: string }) => r.name as never,
+    (() => ({ id: "x", label: "x" })) as never);
+  assert.match(html, /class="staffHead"/);
+  assert.ok(html.indexOf('data-run="decl:critic"') > html.indexOf('data-run="live"'),
+    "the resting staff never sit above the working team");
+});
+
+test("a one-line row: the title never wraps into a paragraph", () => {
+  assert.match(railStyle(), /\.who\s*{[^}]*text-overflow:\s*ellipsis/,
+    "a task sentence is clipped, not a wall");
+});
+
+test("searching opens the folded bands; clearing folds them back", () => {
+  /* The filter hid non-matching rows but left History and On-staff CLOSED — a match inside a
+     collapsed fold was silently invisible, which teaches you the search is broken. */
+  const script = railHtml(buildRail([], "x", () => 0), "N", voiceOf as never,
+    ((r: { name: string }) => r.name) as never, (() => ({ id: "x", label: "x" })) as never);
+  assert.match(script, /querySelectorAll\("details"\)\.forEach\(\(d\) => \{ d\.open = Boolean\(q\); \}\)/);
 });

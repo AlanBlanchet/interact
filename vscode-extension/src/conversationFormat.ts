@@ -556,6 +556,9 @@ export interface ChatDocument {
   turns: Turn[];
   name: string | undefined;
   status: string | undefined;
+  /** A conversation you can only WATCH — one of your own sessions, already steered by you in
+   *  its own window. The composer says so instead of pretending to send. */
+  readOnly?: boolean;
   /** The run behind the transcript — its definition, brief, context size and identity. Without
    *  it the panel says what an agent SAID and nothing about what it IS. */
   run?: ChatRun;
@@ -585,7 +588,8 @@ export function transcriptFragment(
 }
 
 export function chatDocument(
-  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend, parent }: ChatDocument,
+  { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend, parent,
+    readOnly }: ChatDocument,
 ): string {
   const up = parent
     ? `<button class="back" id="up" data-run="${escapeHtml(parent.runId)}"` +
@@ -630,15 +634,20 @@ export function chatDocument(
   // workspace switcher, or anything else. Thirteen labelled commands live behind this button; the
   // ones needing an agent already grey themselves out, which is a far better answer than hiding
   // the entire surface.
+  // A session interact did not start cannot be steered from here — the CLI refuses the send,
+  // and a composer that pretends otherwise is a dead control with a Send button. Watching is
+  // the honest offer, and the placeholder says where steering happens.
+  const canSend = Boolean(name) && !readOnly;
   const composer = `<form id="composer">
          <ul id="palette" role="listbox" aria-label="Commands" hidden>${menu}</ul>
-         <textarea id="message" rows="3" ${name ? "" : "disabled "}placeholder="${
-           name ? `Reply to ${escapeHtml(name)}…  (/ for commands)`
+         <textarea id="message" rows="3" ${canSend ? "" : "disabled "}placeholder="${
+           canSend ? `Reply to ${escapeHtml(name!)}…  (/ for commands)`
+                : readOnly ? "One of your own sessions — watch here, reply in its window"
                 : "Pick an agent to reply — or press / for the panel's commands"}"
                    aria-label="Message this agent"></textarea>
          <div class="controls">
            <button type="button" id="cmds" title="Commands">/</button>
-           <button type="submit"${name ? "" : " disabled"}>Send</button>
+           <button type="submit"${canSend ? "" : " disabled"}>Send</button>
          </div>
        </form>`;
   return `<!DOCTYPE html>

@@ -45,13 +45,17 @@ test("a run that asked you something outranks one merely sitting quiet", () => {
   assert.deepEqual(built.runs.map((r) => r.run.run_id), ["asked", "quiet"]);
 });
 
-test("your own editor sessions are not listed here at all", () => {
-  /* They used to sort last, because you cannot act on them from here. Alan's answer was that they
-     should not compete for the column in the first place — "i still don't have only the
-     conversations or things i interact with", and "we have agents that are greyed out". A window
-     he is already looking at is not a conversation this panel needs to hold. */
+test("your own sessions stand in their own band, never interleaved with the team", () => {
+  /* Two of his pronouncements meet here. "We have agents that are greyed out... i still don't
+     have only the conversations or things i interact with" — so they must NOT sit as grey dead
+     rows inside the team's list (they were dropped entirely for a while). But "I don't have a
+     view just like in claude code... of agent building things" — dropping them hid the actual
+     company: the rail led with dead smoke probes while six real sessions built his projects
+     unseen. The reconciliation: a separate band, titled by project, each row opening its
+     transcript — visible, actionable, and out of the team's way. */
   const built = rail([run({ run_id: "mine", status: "foreign" }), run({ run_id: "bad", status: "failed" })]);
   assert.deepEqual(built.runs.map((r) => r.run.run_id), ["bad"]);
+  assert.deepEqual(built.yours?.map((r) => r.run.run_id), ["mine"]);
 });
 
 test("within one band the most recently started leads", () => {
@@ -283,21 +287,28 @@ test("the panel can take you into an agent and back out again", () => {
   assert.deepEqual(seen, ["visual-critic", null], "an empty id means: back to the whole team");
 });
 
-test("the panel shows the conversations you have, not your own editor windows", () => {
-  /* "From the side panel, i still don't have only the conversations or things i interact with."
-
-     A `foreign` run is one of Alan's OWN VS Code sessions — interact did not spawn it, cannot send
-     to it, cannot stop it. They rendered as greyed, unactionable rows he also called out ("we have
-     agents that are greyed out"). A window he is already looking at is not a conversation the
-     panel needs to list. */
+test("the team's list holds the team; your own windows are a band of their own", () => {
+  /* "From the side panel, i still don't have only the conversations or things i interact with" —
+     so the TEAM list stays free of them. But the company you watch includes the sessions this
+     machine is actually running, newest first, each one a real place to go. */
   const runs = [
     { run_id: "1", provider: "claude", name: "tester", agent: "tester", status: "running" },
-    { run_id: "2", provider: "claude", name: "claude", status: "foreign" },
-    { run_id: "3", provider: "claude", name: "claude", status: "foreign" },
+    { run_id: "2", provider: "claude", name: "claude", status: "foreign", started_at: 10 },
+    { run_id: "3", provider: "claude", name: "claude", status: "foreign", started_at: 20 },
   ];
   const rail = buildRail(runs as never[], "s", () => 0);
   assert.deepEqual(rail.runs.map((r) => r.run.run_id), ["1"]);
-  assert.ok(!rail.runs.some((r) => r.attention === "not-ours"), "no greyed rows remain");
+  assert.ok(!rail.runs.some((r) => r.attention === "not-ours"), "no greyed rows in the team list");
+  assert.deepEqual(rail.yours?.map((r) => r.run.run_id), ["3", "2"], "newest of yours first");
+});
+
+test("inside a drill-in your own sessions do not follow", () => {
+  const built = buildRail(
+    [run({ run_id: "t1", name: "tester", status: "running" }),
+     run({ run_id: "mine", status: "foreign" })] as never[],
+    "s", (() => 0) as never, (() => false) as never,
+    { agent: "tester", roleOf: (r: { name: string }) => r.name } as never);
+  assert.equal(built.yours?.length, 0, "an agent's page is that agent's history, nothing else");
 });
 
 test("the destinations are the panel's own, not a launcher for everything", () => {
@@ -332,19 +343,18 @@ test("the roster's rows are the map's sprites — one entity model per screen", 
   assert.equal(drilled.runs.length, 2, "inside an agent, the rows are its errands again");
 });
 
-test("the roster lists the ready company after the working one", () => {
-  /* Rows = sprites still holds with the full company drawn: a declared agent is a quiet row at the
-     bottom — present, named, zero-count — never competing with an errand that needs him. */
+test("the ready company rests in the staff band, present but never competing", () => {
+  /* Rows = sprites still holds with the full company drawn: a declared agent is a quiet row in
+     the staff band — present, named, zero-count — while the working list stays the working list. */
   const runs = [
     { run_id: "f1", provider: "claude", name: "x", agent: "x", status: "failed", started_at: 9 },
     { run_id: "decl:y", provider: "claude", name: "y", agent: "y", status: "declared" },
   ];
   const identify = (r: { agent?: string | null }) => ({ id: r.agent ?? "m", label: r.agent ?? "m" });
   const rail = buildRail(runs as never[], "s", () => 0, undefined, undefined, identify as never);
-  assert.equal(rail.runs.length, 2);
-  assert.equal(rail.runs[0].run.run_id, "f1", "an error outranks a ready desk");
-  assert.equal(rail.runs[1].attention, "ready");
-  assert.equal(rail.runs[1].tasks, 0);
+  assert.deepEqual(rail.runs.map((r) => r.run.run_id), ["f1"], "an error is the working list's business");
+  assert.deepEqual(rail.staff?.map((r) => [r.run.run_id, r.attention, r.tasks]),
+    [["decl:y", "ready", 0]]);
 });
 
 test("a stopped run outranks the finished and never wears their mark", () => {
@@ -367,4 +377,84 @@ test("a grouped row speaks the worst of its members", () => {
     ((r: { agent?: string }) => ({ id: r.agent ?? "x", label: r.agent ?? "x" })) as never);
   assert.equal(rail.runs.length, 1);
   assert.equal(rail.runs[0].attention, "stopped");
+});
+
+/* ——— The reception desk: lifecycle bands (the "I still don't like this small menu" round) ——— */
+
+const DAY = 86400;
+
+test("finished work older than a day leaves the list for the ledger", () => {
+  const now = 10 * DAY;
+  const built = buildRail([
+    run({ run_id: "old1", status: "done", started_at: now - 8 * DAY, cost_usd: 1.98 }),
+    run({ run_id: "old2", status: "stopped", started_at: now - 7 * DAY, cost_usd: 0.76 }),
+    run({ run_id: "live", status: "running", started_at: now - 60 }),
+  ] as never[], "interact", (() => 0) as never, (() => false) as never, undefined, undefined, now);
+  assert.deepEqual(built.runs.map((r) => r.run.run_id), ["live"], "old work must stop competing");
+  assert.equal(built.ledger?.runs.length, 2);
+  assert.ok(Math.abs((built.ledger?.cost ?? 0) - 2.74) < 1e-9, "the ledger carries the bill");
+  assert.equal(built.header.finished, 0, "the header no longer double-counts the ledger");
+});
+
+test("a finish from this morning keeps its seat", () => {
+  const now = 10 * DAY;
+  const built = buildRail([
+    run({ run_id: "fresh", status: "done", started_at: now - 3600 }),
+  ] as never[], "interact", (() => 0) as never, (() => false) as never, undefined, undefined, now);
+  assert.equal(built.runs.length, 1);
+  assert.equal(built.runs[0].attention, "finished");
+  assert.equal(built.ledger, null);
+});
+
+test("an ancient failure is history, not a standing alarm", () => {
+  const now = 10 * DAY;
+  const built = buildRail([
+    run({ run_id: "oldbad", status: "crashed", started_at: now - 8 * DAY }),
+  ] as never[], "interact", (() => 0) as never, (() => false) as never, undefined, undefined, now);
+  assert.equal(built.header.needsYou, 0);
+  assert.equal(built.ledger?.failed, 1, "but the ledger line says it plainly");
+});
+
+test("an agent whose every errand is ancient rests as staff, never as a stale task row", () => {
+  const now = 10 * DAY;
+  const identify = (r: { name: string }) => ({ id: r.name, label: r.name });
+  const built = buildRail([
+    run({ run_id: "a1", name: "tester", status: "done", started_at: now - 8 * DAY }),
+    run({ run_id: "a2", name: "tester", status: "stopped", started_at: now - 7 * DAY }),
+  ] as never[], "interact", (() => 0) as never, (() => false) as never, undefined, identify as never, now);
+  assert.equal(built.runs.length, 0, "no 8-day-old junk task speaking for a living agent");
+  assert.deepEqual(built.staff.map((r) => r.attention), ["ready"]);
+  assert.equal(built.ledger?.runs.length, 2, "the errands themselves are still reachable");
+});
+
+test("declared colleagues rest in the staff band, out of the working list", () => {
+  const built = rail([
+    run({ run_id: "decl:critic", name: "critic", status: "declared" }),
+    run({ run_id: "live", status: "running" }),
+  ]);
+  assert.deepEqual(built.runs.map((r) => r.run.run_id), ["live"]);
+  assert.deepEqual(built.staff.map((r) => r.run.run_id), ["decl:critic"]);
+});
+
+test("drilling into an agent shows its whole history, ledger and all", () => {
+  const now = 10 * DAY;
+  const built = buildRail([
+    run({ run_id: "old", name: "tester", status: "done", started_at: now - 8 * DAY }),
+    run({ run_id: "new", name: "tester", status: "running", started_at: now - 60 }),
+  ] as never[], "interact", (() => 0) as never, (() => false) as never,
+    { agent: "tester", roleOf: (r: { name: string }) => r.name } as never, undefined, now);
+  assert.equal(built.runs.length, 2, "inside an agent you asked for the history");
+  assert.equal(built.ledger, null);
+});
+
+test("an old failure never outshouts today's work in a grouped row", () => {
+  const now = 10 * DAY;
+  const identify = (r: { name: string }) => ({ id: r.name, label: r.name });
+  const built = buildRail([
+    run({ run_id: "oldbad", name: "tester", status: "crashed", started_at: now - 8 * DAY }),
+    run({ run_id: "live", name: "tester", status: "running", started_at: now - 60 }),
+  ] as never[], "interact", (() => 0) as never, (() => false) as never, undefined, identify as never, now);
+  assert.equal(built.runs.length, 1);
+  assert.equal(built.runs[0].attention, "working", "the recent run speaks; the relic is ledger");
+  assert.equal(built.runs[0].tasks, 1, "the count describes what the row stands for now");
 });

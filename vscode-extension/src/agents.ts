@@ -11,6 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { agentsDir } from "./paths";
+import { readForeignActivity } from "./foreignSession";
 import { livenessOf } from "./runStatus";
 
 /** One supervised run. Mirrors Python's `AgentRun`; unknown fields are ignored so a newer
@@ -203,6 +204,14 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
     }
   }
   return out.slice(-Math.max(1, limit));
+}
+
+/** A run's activity, whichever kind of run it is: interact's own normalised stream, or — for a
+ *  session interact did not start — the provider's transcript, mapped. One call site, one rule. */
+export function activityOf(run: AgentRun, limit = 40): AgentActivity[] {
+  return run.status === "foreign"
+    ? readForeignActivity(run, limit)
+    : readAgentActivity(run.run_id, limit);
 }
 
 /** One agent addressing another. Written by Python to `<run_id>.messages.jsonl` on BOTH sides,

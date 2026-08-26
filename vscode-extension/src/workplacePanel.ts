@@ -68,7 +68,22 @@ export class WorkplacePanel {
       // an untrusted message still cannot name an arbitrary command.
       railRoute(msg, {
         run: (command) => void vscode.commands.executeCommand(command),
-        open: (id) => void vscode.commands.executeCommand("interact.agents.chat", id),
+        // A row is a COLLEAGUE, so clicking it goes where clicking his character goes: the
+        // agent and its errands. Dropping straight into one run was exactly the navigation
+        // the sprite handler above already rejects; a conversation is one level deeper.
+        // Drilled-in rows ARE conversations, and your own sessions have no agent to open.
+        open: (id) => {
+          const run = readAgentRuns().find((r) => r.run_id === id);
+          if (run && run.status !== "foreign" && !this.inside) {
+            const company = companyOf(readOrg()) ?? undefined;
+            const who = roleOf(run as never, company);
+            if (!who.plain) {
+              void vscode.commands.executeCommand("interact.agents.agent", who.id);
+              return;
+            }
+          }
+          void vscode.commands.executeCommand("interact.agents.chat", id);
+        },
         agent: (id) => {
           this.inside = id;
           this.pushRoster();
@@ -194,6 +209,9 @@ export class WorkplacePanel {
       this.inside ? { agent: this.inside, roleOf: (r) => roleOf(r as never, company).id } : undefined,
       // The same identity the MAP draws with — so the roster's rows are the sprites, one unit.
       (r) => ({ id: roleOf(r as never, company).id, label: agentLabel(r as never, company) }),
+      // The clock: old finishes fold to the ledger instead of resting on the surface — the
+      // panel led with 8-day-old smoke probes while the living company sat below the fold.
+      now,
     );
     return railBody(
       rail,

@@ -8,6 +8,8 @@ import * as fs from "fs";
 import * as vscode from "vscode";
 
 import { readAgentMessages, readAgentRuns } from "./agents";
+import { agentLabel } from "./roster";
+import { companyOf, readOrg } from "./org";
 import { scopeStore } from "./scopeStore";
 import { agentsDir } from "./paths";
 import { buildSequence, renderSequence } from "./sequenceFormat";
@@ -64,7 +66,13 @@ export class SequencePanel {
     // workspace left the sequence drawing another folder's conversation.
     const runs = (scopeStore()?.runs() ?? readAgentRuns())
       .filter((r) => !r.foreign); // your own editor windows are not team members
-    const seq = buildSequence(runs as never[], readAgentMessages());
+    // Lanes wear the AGENT'S name, the same one the world's plaque and the roster row carry.
+    // Raw run names put "claude" over three different colleagues on one diagram — the exact
+    // CLI-naming the roster banned, sneaking back through a surface that bypassed roster.ts.
+    const company = companyOf(readOrg()) ?? undefined;
+    const seq = buildSequence(
+      runs.map((r) => ({ ...r, name: agentLabel(r as never, company) })) as never[],
+      readAgentMessages());
     const live = runs.filter((r) => r.status === "running").length;
     this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">

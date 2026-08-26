@@ -283,3 +283,14 @@ test("the header is drawn in the theme's own colours, not an inverted plate", ()
   assert.ok(!css.includes("color: var(--wp-bg)"),
     "background-coloured letters is the defect he is describing");
 });
+
+test("one of your own sessions reads in full but cannot pretend to send", () => {
+  const doc = chatDocument({
+    nonce: "n", commands: [], turns: [], name: "interact", status: "foreign",
+    readOnly: true, awaitingReply: false, run: undefined as never, files: [], sentBy: null,
+  } as never);
+  assert.match(doc, /watch here, reply in its window/,
+    "the composer must say why it is quiet, not just grey out");
+  assert.match(doc, /<textarea[^>]*disabled/);
+  assert.match(doc, /<button type="submit" disabled/);
+});

@@ -98,6 +98,11 @@ export function zoneOfSteps(steps: Step[], status: string, agent?: string | null
 //: bubble where "reading style.ts" belonged.
 const MEANINGFUL = new Set(["tool", "spawn", "thinking", "message", "text", "done", "error"]);
 
+/** Mirrors `RECENT_SECONDS` in `rail.ts` (the rule's home) — how long finished work stays
+ *  "current". Duplicated for the same mechanical reason as `HELD_SECONDS`: the test loader
+ *  cannot resolve a shared import, so the EQUALITY is enforced by the brain parity test. */
+const RECENT_SECONDS = 86400;
+
 /** The most recent step that actually says something, oldest-first input. */
 export function latestMeaningful(steps: Step[]): Step | undefined {
   for (let i = steps.length - 1; i >= 0; i--) {
@@ -241,10 +246,16 @@ function placeByDomain(
  *  list the records. Your own editor sessions are excluded: interact does not drive them, so
  *  putting one at the head of the company would claim an authority this view does not have.
  */
-function brainOf(runs: readonly RunLike[]): string | null {
+function brainOf(runs: readonly RunLike[], nowSeconds?: number): string | null {
   // Declared-but-never-asked agents are not candidates: with no runs at all there is no brain,
   // and crowning a ready desk would invent an orchestrator nobody hired.
-  const ours = runs.filter((r) => r.status !== "foreign" && r.status !== "declared");
+  // The crown also EXPIRES (mirrored in rail.ts, pinned by the parity test): earliest-root-EVER
+  // left an 8-day-old smoke probe wearing "brain" over a live team. A root counts while it runs
+  // or is recent; with nothing current there is no brain.
+  const current = (r: RunLike) => r.status === "running"
+    || nowSeconds === undefined || nowSeconds - (r.started_at ?? nowSeconds) < RECENT_SECONDS;
+  const ours = runs.filter((r) =>
+    r.status !== "foreign" && r.status !== "declared" && current(r));
   const ids = new Set(ours.map((r) => r.run_id));
   const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
   if (!roots.length) return null;
@@ -312,7 +323,7 @@ export function buildTeam(
   identify: (run: RunLike) => { id: string; label: string } =
     (run) => ({ id: run.agent ?? run.name, label: run.name || run.run_id.slice(0, 8) }),
 ): TeamState {
-  const brainId = brainOf(runs);
+  const brainId = brainOf(runs, now);
   // One body per AGENT. The errands stay with it as a count and as the run it opens; the roster
   // and the side panel are where you read them individually.
   const byAgent = new Map<string, RunLike[]>();
@@ -326,10 +337,17 @@ export function buildTeam(
     // orchestrating one where this agent holds it (otherwise the rail and the building would crown
     // the same agent through different runs); WHAT the character shows is whichever errand most
     // needs you, because an agent with one failure and two successes is not "done".
-    const byNeed = [...held].sort((a, b) =>
+    // Only CURRENT errands speak, mirroring the rail's rule exactly: a week-old crash must not
+    // stamp ERROR over a character whose live errand is going fine, and an agent whose every
+    // errand aged out RESTS — the same "ready" his rail row shows, one truth on both surfaces.
+    const terminal = new Set(["done", "stopped", "failed", "crashed"]);
+    const currentHeld = held.filter((r) =>
+      !(terminal.has(r.status) && now - (r.started_at ?? now) >= RECENT_SECONDS));
+    const byNeed = [...(currentHeld.length ? currentHeld : held)].sort((a, b) =>
       NEEDS_YOU.indexOf(floorStatus(a.status)) - NEEDS_YOU.indexOf(floorStatus(b.status))
       || (b.started_at ?? 0) - (a.started_at ?? 0));
     const worst = byNeed[0];
+    const rested = currentHeld.length === 0;
     const run = held.find((r) => r.run_id === brainId) ?? worst;
     const steps = recentSteps(run.run_id);
     const step = latestMeaningful(steps);
@@ -347,10 +365,10 @@ export function buildTeam(
     return {
       run_id: run.run_id,
       name: identify(run).label,
-      /** How many errands this agent was given — the roster and the side panel list them. */
-      tasks: held.every((r) => r.status === "declared") ? 0 : held.length,
+      /** How many CURRENT errands this agent holds — aged history lives in the roster's ledger. */
+      tasks: held.every((r) => r.status === "declared") || rested ? 0 : currentHeld.length,
       agent: run.agent ?? null,
-      status: floorStatus(worst.status),
+      status: rested ? "ready" : floorStatus(worst.status),
       faculties: safeFaculties(run, facultiesFor),
       brain: held.some((r) => r.run_id === brainId),
       ...placeByDomain(run.agent, departmentFor),

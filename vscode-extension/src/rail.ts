@@ -46,6 +46,10 @@ export interface RailRun {
   /** How many errands this row stands for. Above 1 only at the top level, where a row is an
    *  AGENT — the same unit the map draws — and the worst of its errands speaks for it. */
   tasks?: number;
+  /** The agent's WHOLE bill in scope — every errand, current and aged. The same figure the
+   *  world badges, because the speaking run's own cost beside the world's sum was "one panel,
+   *  two truths": code-reviewer read $2.31 in the rail and $4.28 in the room. */
+  cost?: number;
   /** 0 for a lead, 1 for somebody a lead sent out. The rail cannot replace the tree until it
    *  shows the COMPANY rather than a flat list — a sub-agent floating loose beside its lead tells
    *  you nothing about who is driving what. */
@@ -72,6 +76,21 @@ export function attentionOf(run: AgentRun, idleSeconds: number, awaitingReply = 
   }
   // done / stopped: finished work is worth seeing once, then it should stop competing.
   return "finished";
+}
+
+/** How long finished work keeps its seat before it becomes history. A day: yesterday's finish is
+ *  still news, last week's smoke test is not — and the owner's own panel proved it, resting on
+ *  seven 8-day-old "Reply with exactly:" probes rendered as the team. */
+export const RECENT_SECONDS = 86400;
+
+/** Old terminal work, folded to one line. The runs are still here — the ledger OPENS — but they
+ *  no longer compete with the living team for rows. */
+export interface RailLedger {
+  runs: RailRun[];
+  done: number;
+  stopped: number;
+  failed: number;
+  cost: number;
 }
 
 export interface RailChip {
@@ -112,7 +131,20 @@ export interface RailHeader {
 export interface Rail {
   header: RailHeader;
   chips: RailChip[];
+  /** The working list — what is happening NOW. Old finishes move to the ledger, resting
+   *  colleagues to the staff band, your own sessions to theirs: four bands, so the first
+   *  thing the eye lands on is the living work, never a week-old smoke test. */
   runs: RailRun[];
+  /** Declared colleagues with nothing current — the company at rest, named and quiet. */
+  staff?: RailRun[];
+  /** Your OWN editor sessions — the real work this machine is doing right now. They were
+   *  dropped entirely once ("agents that are greyed out"), and that was half right: they do not
+   *  belong INTERLEAVED with the team as grey dead rows. But hiding them hid the company —
+   *  "I don't have a view just like in claude code... of agent building things" — so they stand
+   *  in their own band, titled by project, each opening its transcript. */
+  yours?: RailRun[];
+  /** Terminal work older than `RECENT_SECONDS`, folded to one expandable line. */
+  ledger?: RailLedger | null;
   /** The agent whose conversations you are looking at, if you have gone into one. An agent is a
    *  ROLE — you can hold many conversations with it — so "inside tester" is a real place in this
    *  panel, and the breadcrumb is how you leave it. Absent means the whole team. */
@@ -144,8 +176,14 @@ const NOTES: Record<Attention, string> = {
  *  the test runner, which demands ".ts" specifiers that tsc refuses to emit, so a shared import
  *  would make one of them untestable. Six lines copied beats a module that cannot be tested.
  */
-export function brainOf(runs: readonly AgentRun[]): string | null {
-  const ours = runs.filter((r) => r.status !== "foreign" && r.status !== "declared");
+export function brainOf(runs: readonly AgentRun[], nowSeconds?: number): string | null {
+  // The crown EXPIRES. Earliest-root-ever left an 8-day-old smoke probe wearing "the agent you
+  // asked" over a live team; the orchestrator of the CURRENT arc is a root that is running or
+  // recent. With nothing current there is no brain — an empty office has no boss on duty.
+  const current = (r: AgentRun) => r.status === "running"
+    || nowSeconds === undefined || nowSeconds - (r.started_at ?? nowSeconds) < RECENT_SECONDS;
+  const ours = runs.filter((r) =>
+    r.status !== "foreign" && r.status !== "declared" && current(r));
   const ids = new Set(ours.map((r) => r.run_id));
   const roots = ours.filter((r) => !r.parent_run_id || !ids.has(r.parent_run_id));
   if (!roots.length) return null;
@@ -169,33 +207,70 @@ export function buildRail(
    *  exactly the unit the map draws — the cold sweep's root coherence finding was one sprite per
    *  role beside sixteen run-rows, with nothing reconciling them. */
   identify?: (run: AgentRun) => { id: string; label: string },
+  /** The clock, when the host wants HISTORY folded away: terminal runs older than
+   *  `RECENT_SECONDS` leave the list for the ledger. Absent (tests, hosts that want it all),
+   *  nothing ages. The owner's own panel is why this exists: it rested on seven 8-day-old
+   *  smoke probes rendered as the team. */
+  nowSeconds?: number,
 ): Rail {
-  // Your own editor windows are not conversations this panel holds: interact did not start them,
-  // cannot send to them and cannot stop them, so they rendered as greyed unactionable rows in a
-  // column whose whole job is what you can act on. You are already looking at those windows.
+  // Your own editor sessions get their own band rather than interleaving with the team — they
+  // were greyed dead rows once and he told us so; but dropping them entirely hid the actual
+  // company. See `Rail.yours`.
+  const yoursRuns = filter ? [] : runs.filter((r) => r.status === "foreign");
   const held = runs.filter((r) => r.status !== "foreign");
   const inScope = filter ? held.filter((r) => filter.roleOf(r) === filter.agent) : held;
+  // Old TERMINAL work stops competing for rows. Never inside a drill-in: an agent's own page is
+  // where you asked for its history.
+  const terminal = new Set(["done", "stopped", "failed", "crashed"]);
+  const ancient = (r: AgentRun) =>
+    nowSeconds !== undefined && !filter && terminal.has(r.status)
+    && nowSeconds - (r.started_at ?? nowSeconds) >= RECENT_SECONDS;
+  const aged = inScope.filter(ancient);
+  const fresh = inScope.filter((r) => !ancient(r));
   let rows: RailRun[];
   if (identify && !filter) {
     // One row per AGENT. The errand that most needs him speaks for the row (same rule as the
     // map's characters), and the count carries the rest; drilling in lists them individually.
+    // Only CURRENT errands speak — a week-old crash must not outshout today's work.
     const byAgent = new Map<string, AgentRun[]>();
-    for (const run of inScope) {
+    for (const run of fresh) {
       const { id } = identify(run);
       const bucket = byAgent.get(id);
       if (bucket) bucket.push(run); else byAgent.set(id, [run]);
     }
-    rows = [...byAgent.values()].map((bucket) => {
+    // The bill covers EVERYTHING in scope, aged errands included — the exact sum the world
+    // badges on the character, so the two surfaces state one figure.
+    const billOf = new Map<string, number | undefined>();
+    for (const run of inScope) {
+      const { id } = identify(run);
+      if (run.cost_usd == null) { if (!billOf.has(id)) billOf.set(id, undefined); continue; }
+      billOf.set(id, (billOf.get(id) ?? 0) + run.cost_usd);
+    }
+    rows = [...byAgent.entries()].map(([id, bucket]) => {
       const speaks = [...bucket].sort((a, b) => {
         const rank = (r: AgentRun) => RANK.indexOf(attentionOf(r, idleOf(r), awaitingReply(r)));
         return rank(a) - rank(b) || (b.started_at ?? 0) - (a.started_at ?? 0);
       })[0];
       const attention = attentionOf(speaks, idleOf(speaks), awaitingReply(speaks));
       return { run: speaks, attention, depth: 0, brain: false, note: NOTES[attention],
-               tasks: bucket.every((r) => r.status === "declared") ? 0 : bucket.length };
+               tasks: bucket.every((r) => r.status === "declared") ? 0 : bucket.length,
+               cost: billOf.get(id) };
     });
+    // An agent whose EVERY errand aged out still exists — it rests as staff, named, rather than
+    // wearing an 8-day-old task as its face. Its newest errand supplies the identity.
+    const alive = new Set(fresh.map((r) => identify(r).id));
+    const rested = new Map<string, AgentRun>();
+    for (const run of aged) {
+      const { id } = identify(run);
+      if (alive.has(id)) continue;
+      const seen = rested.get(id);
+      if (!seen || (run.started_at ?? 0) > (seen.started_at ?? 0)) rested.set(id, run);
+    }
+    for (const run of rested.values()) {
+      rows.push({ run, attention: "ready", depth: 0, brain: false, note: NOTES.ready, tasks: 0 });
+    }
   } else {
-    rows = inScope.map((run) => {
+    rows = fresh.map((run) => {
       const attention = attentionOf(run, idleOf(run), awaitingReply(run));
       return { run, attention, depth: 0, brain: false, note: NOTES[attention] };
     });
@@ -221,7 +296,7 @@ export function buildRail(
     reportsOf.set(row.run.parent_run_id!, under);
   }
 
-  const brainId = brainOf(runs);
+  const brainId = brainOf(runs, nowSeconds);
   // Leads sort by ATTENTION, not by rank. Pinning the brain to the top was tried and reverted:
   // it contradicts what this surface is for — an agent that crashed outranks the orchestrator
   // quietly working, and burying the crash under a healthy boss is the sort this replaced. The
@@ -238,7 +313,30 @@ export function buildRail(
   rows.length = 0;
   rows.push(...ordered);
 
-  const count = (...kinds: Attention[]) => rows.filter((r) => kinds.includes(r.attention)).length;
+  // The bands. Inside a drill-in there is exactly one: the agent's full history.
+  const labelOf = (r: RailRun) => identify?.(r.run).label ?? r.run.name;
+  const staff = filter ? [] : rows.filter((r) => r.attention === "ready")
+    .sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+  const now = filter ? rows : rows.filter((r) => r.attention !== "ready");
+  const yours: RailRun[] = yoursRuns
+    .map((run) => ({ run, attention: "not-ours" as Attention, depth: 0, brain: false,
+                     note: NOTES["not-ours"] }))
+    .sort((a, b) => (b.run.started_at ?? 0) - (a.run.started_at ?? 0));
+  const agedRows: RailRun[] = aged
+    .map((run) => {
+      const attention = attentionOf(run, idleOf(run), awaitingReply(run));
+      return { run, attention, depth: 0, brain: false, note: NOTES[attention] };
+    })
+    .sort((a, b) => (b.run.started_at ?? 0) - (a.run.started_at ?? 0));
+  const ledger: RailLedger | null = agedRows.length ? {
+    runs: agedRows,
+    done: agedRows.filter((r) => r.attention === "finished").length,
+    stopped: agedRows.filter((r) => r.attention === "stopped").length,
+    failed: agedRows.filter((r) => r.attention === "error").length,
+    cost: agedRows.reduce((sum, r) => sum + (r.run.cost_usd ?? 0), 0),
+  } : null;
+
+  const count = (...kinds: Attention[]) => now.filter((r) => kinds.includes(r.attention)).length;
 
   return {
     header: {
@@ -250,7 +348,10 @@ export function buildRail(
       finished: count("finished"),
     },
     chips: CHIPS,
-    runs: rows,
+    runs: now,
+    staff,
+    yours,
+    ledger,
     filter: filter?.agent,
   };
 }

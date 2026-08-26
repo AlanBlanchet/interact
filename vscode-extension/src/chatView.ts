@@ -12,7 +12,7 @@
 import * as fs from "fs";
 import * as vscode from "vscode";
 
-import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
+import { AgentRun, activityOf, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
 import { conversationTitle, roleOf } from "./roster";
@@ -190,7 +190,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private run(): AgentRun | undefined {
-    return readAgentRuns().find((r) => r.run_id === this.runId);
+    // The registry first, then the scope store's merged view — which is where your OWN
+    // discovered sessions live. Without the fallback a "your session" row opened onto the
+    // empty hint: the id was real, the lookup just never asked the list that holds it.
+    return readAgentRuns().find((r) => r.run_id === this.runId)
+      ?? scopeStore()?.runs().find((r) => r.run_id === this.runId);
   }
 
   /** Which run the live document was built for. A different agent needs a new document; the SAME
@@ -242,7 +246,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const current = this.run();
     if (current && this.rendered === current.run_id) {
       // Same agent, more to say: patch the transcript and leave the rest of the view alone.
-      const turns = readAgentActivity(current.run_id, 300);
+      const turns = activityOf(current, 300);
       void this.view.webview.postMessage({
         type: "transcript",
         html: transcriptFragment({
@@ -255,7 +259,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.rendered = current?.run_id;
     const run = this.run();
-    const turns = run ? readAgentActivity(run.run_id, 300) : [];
+    const turns = run ? activityOf(run, 300) : [];
     // Who sent this one on its errand. Resolved here (the renderer stays import-free) and named by
     // what the caller is DOING, so "↑ parent" reads as a place rather than an id.
     const all = readAgentRuns();
@@ -273,6 +277,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       turns,
       name: run?.name,
       status: run?.status,
+      // One of your own sessions: shown in full, steered in its own window — the composer
+      // says so instead of offering a Send the CLI would refuse.
+      readOnly: run?.status === "foreign",
       awaitingReply: isAwaitingReply(turns),
       run: run
         ? ({ ...run, permission: describeMode(run.permission_mode, this.modes) } as never)
