@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from interact.config import Config
+from interact.config import UserConfig
 
 
 class PolicyError(ValueError):
@@ -38,8 +38,14 @@ TOOL_PREFIX = "mcp__interact__"
 
 
 def policy_path() -> Path:
-    """Where the policy lives: beside the rest of interact's own state."""
-    return Config().debug_dir.parent / "agents.json"
+    """Where the policy lives: beside `config.env`, the one store every front end shares.
+
+    NOT under the debug dir: a box that relocates its dumps (`INTERACT_DEBUG_DIR`) would drag the
+    policy along — the CLI once looked for `<repo>/out/agents.json` while the panel wrote
+    `~/.interact/agents.json`: one fact in two files, and a choice that never bit. The extension
+    computes the same path on its own (`agentModels.ts`); `tests/test_paths.py` holds the two together.
+    """
+    return UserConfig.PATH.parent / "agents.json"
 
 
 @dataclass
@@ -76,11 +82,7 @@ class Policy:
     def validate(self) -> None:
         """Everything that can be wrong, found now rather than at spawn."""
         for agent, rule in self.agents.items():
-            if self._looks_like_profile(rule) and rule[1:] not in self.profiles:
-                known = ", ".join(sorted(self.profiles)) or "none defined"
-                raise PolicyError(
-                    f"agent {agent!r} wears profile {rule!r}, which does not exist (have: {known})"
-                )
+            self.rule(rule, wearer=agent)  # raises on a profile that does not exist
         for name in self.toolsets:
             self.expand_toolset(name)  # raises on a cycle or an unknown reference
 
@@ -98,9 +100,23 @@ class Policy:
         """What model rule this agent runs under: its profile's criterion, its own inline
         criterion, or a plain model id — whichever the file says. None when unmentioned."""
         rule = self.agents.get(agent)
-        if rule is None:
-            return None
-        return self.profiles[rule[1:]] if self._looks_like_profile(rule) else rule
+        return None if rule is None else self.rule(rule, wearer=agent)
+
+    def rule(self, text: str, *, wearer: str | None = None) -> str:
+        """`@name` → that profile's criterion; anything else is returned as written.
+
+        A profile is a NAME for a model rule, so it is honoured wherever a model may be named —
+        the `agents` map here, `--model @eyes` on the CLI, the panel's picker. An unknown one is
+        refused naming the typo and what exists; `wearer` is the agent wearing it, when there is one.
+        """
+        if not self._looks_like_profile(text):
+            return text
+        if text[1:] in self.profiles:
+            return self.profiles[text[1:]]
+        known = ", ".join(sorted(self.profiles)) or "none defined"
+        if wearer:
+            raise PolicyError(f"agent {wearer!r} wears profile {text!r}, which does not exist (have: {known})")
+        raise PolicyError(f"profile {text!r} does not exist (have: {known})")
 
     def expand_toolset(self, name: str, _seen: tuple[str, ...] = ()) -> list[str]:
         """A toolset's tools, fully prefixed, with `@other-set` references expanded in place."""
@@ -147,8 +163,14 @@ class Policy:
         path = Path(path) if path is not None else policy_path()
         try:
             raw = json.loads(path.read_text())
-        except (FileNotFoundError, OSError, ValueError):
+        except FileNotFoundError:
             raw = {}
+        except (OSError, ValueError) as err:
+            # The file holds profiles and toolsets somebody typed. One missing comma must not let
+            # a provider switch flatten it: refuse, name the file, write nothing.
+            raise PolicyError(f"{path} is not readable policy ({err}); fix it — nothing was written") from err
+        if not isinstance(raw, dict):
+            raise PolicyError(f"{path} must hold an object — nothing was written")
         raw.setdefault("providers", {})[provider] = bool(active)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(raw, indent=2) + "\n")

@@ -112,6 +112,10 @@ def _resolve_criteria(model: str, available_only: bool) -> str:
     """
     from interact.criteria import Criteria, CriteriaError
 
+    if model.startswith("@"):
+        # A profile: a NAME for a criterion (`"profiles": {"eyes": "cap.vlm and ..."}`), honoured
+        # wherever a model may be named — resolved to its rule here, then read like any criterion.
+        model = load_policy().rule(model)
     if not any(op in model for op in ("<", ">", "=")) and " and " not in model:
         return model
     try:

@@ -202,3 +202,44 @@ def test_providers_toggle_from_the_cli(cli_policy, capsys):
 
     with pytest.raises(SystemExit):
         agents_providers("codex", "sideways")   # not on/off: refused, not guessed
+
+
+# ── one file, for the panel and the spawn alike ────────────────────────────────────────────────
+
+def test_the_policy_lives_beside_config_env_not_under_the_debug_dir(monkeypatch):
+    """On a box that relocates its dumps (INTERACT_DEBUG_DIR), the policy must not move with
+    them: the CLI found `<repo>/out/agents.json` while the panel wrote `~/.interact/agents.json`
+    — one fact, two files, and a choice that never bit."""
+    from interact.agents.policy import policy_path
+    from interact.config import UserConfig
+
+    monkeypatch.setenv("INTERACT_DEBUG_DIR", "/tmp/somewhere/else/out")
+    assert policy_path() == UserConfig.PATH.parent / "agents.json"
+
+
+def test_a_profile_may_be_named_wherever_a_model_is(policy_file, monkeypatch):
+    """`--model @eyes` on the CLI, `@eyes` chosen in the panel: a profile is a NAME for a model
+    rule, so it works everywhere a model id does — resolved to a real model before the vendor
+    CLI sees it, and an unknown one refused by name."""
+    import interact.agents.run as run_mod
+    from interact.agents.policy import Policy
+
+    monkeypatch.setattr(run_mod, "load_policy", lambda: Policy.load(policy_file))
+    _, via_profile = run_mod.resolve_model("@eyes", {}, available_only=False)
+    _, via_rule = run_mod.resolve_model("cap.vlm and price.in < 10", {}, available_only=False)
+    assert via_profile is not None and not via_profile.startswith("@")
+    assert via_profile == via_rule, "a profile resolves to exactly what its rule resolves to"
+    with pytest.raises(Exception) as e:
+        run_mod.resolve_model("@ghost", {}, available_only=False)
+    assert "ghost" in str(e.value) and "eyes" in str(e.value), "name the typo AND what exists"
+
+
+def test_a_broken_policy_is_never_overwritten_by_a_toggle(tmp_path):
+    """The file holds profiles and toolsets somebody typed. One missing comma must not let a
+    provider switch flatten it to `{"providers": {...}}` — refuse, and name the file to fix."""
+    path = tmp_path / "agents.json"
+    path.write_text("{ not json at all")
+    with pytest.raises(PolicyError) as e:
+        Policy().set_provider_active("codex", False, path)
+    assert str(path) in str(e.value)
+    assert path.read_text() == "{ not json at all", "their broken file is theirs to fix"

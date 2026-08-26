@@ -22,6 +22,7 @@ import pytest
 from interact.config import Config
 
 PATHS_TS = Path(__file__).resolve().parents[1] / "vscode-extension" / "src" / "paths.ts"
+AGENT_MODELS_TS = PATHS_TS.with_name("agentModels.ts")
 
 
 def _node_can_strip_types() -> bool:
@@ -133,3 +134,34 @@ def test_the_agents_registry_ignores_a_debug_dir_override(monkeypatch, tmp_path)
     monkeypatch.setenv("INTERACT_DEBUG_DIR", str(tmp_path / "elsewhere"))
     assert _extension_agents_dir(tmp_path) == agents_dir()
     assert "elsewhere" not in str(agents_dir())
+
+
+def _extension_policy_path(tmp_path: Path) -> Path:
+    """Where the EXTENSION thinks the agents policy is."""
+    runner = tmp_path / "policy.ts"
+    runner.write_text(
+        f'import {{ agentsPolicyPath }} from {json.dumps(str(AGENT_MODELS_TS))};\n'
+        "console.log(agentsPolicyPath());\n"
+    )
+    out = subprocess.run(
+        ["node", "--experimental-strip-types", str(runner)], capture_output=True, text=True, check=True
+    )
+    return Path(out.stdout.strip())
+
+
+@pytest.mark.parametrize("debug_dir", [None, "/tmp/interact-out", "~/proj/out"])
+def test_the_agents_policy_is_one_file_for_both_sides(monkeypatch, tmp_path, debug_dir):
+    """The panel WRITES an agent's model choice into the policy and the spawn READS it — a
+    different answer on either side is a choice that silently never bites. It lives beside
+    `config.env`, never under the debug dir: on a box that relocates its dumps
+    (`INTERACT_DEBUG_DIR`), the CLI looked for `<repo>/out/agents.json` while the panel wrote
+    `~/.interact/agents.json`."""
+    from interact.agents.policy import policy_path
+    from interact.config import UserConfig
+
+    if debug_dir is None:
+        monkeypatch.delenv("INTERACT_DEBUG_DIR", raising=False)
+    else:
+        monkeypatch.setenv("INTERACT_DEBUG_DIR", debug_dir)
+    assert _extension_policy_path(tmp_path) == policy_path()
+    assert policy_path().parent == UserConfig.PATH.parent
