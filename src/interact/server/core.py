@@ -23,7 +23,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from interact.browser import SessionRegistry
-from interact.debug_utils import Debug, _CURRENT_INV
+from interact.debug_utils import Debug, _CURRENT_INV, resolve_output_path
 from interact.desktop import CaptureError
 from interact.runtime import breaker, config  # noqa: F401 — breaker re-exported for tests/vlm
 from interact.vision import VisionError
@@ -48,17 +48,9 @@ _DBG_ACTIONS = "run_actions"
 _MAX_FALLBACKS = 3
 
 
-def _resolve_save_path(path: str) -> Path:
-    """Where a caller-supplied output ``path`` lands — ONE rule for every tool that takes one: ``~``
-    expands, an absolute path is kept, a RELATIVE path is anchored under ``config.debug_dir``
-    (interact's own output dir, ``~/.interact/out``, where every other artifact already lives) —
-    never the server process's cwd, which is whatever the editor started it with and which the
-    calling agent cannot see (#120). Always absolute, so a tool can name the file the caller will
-    actually find."""
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        p = config.debug_dir / p
-    return p.absolute()
+#: The one rule for a caller-supplied output path (#120) lives in debug_utils, beside the dir it
+#: anchors on; this is the name every saving tool imports.
+_resolve_save_path = resolve_output_path
 
 
 def _save_to_path(path: str, data: bytes) -> Path:

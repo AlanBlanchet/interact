@@ -257,7 +257,7 @@ async def _capture_or_file(target, session, scope):
 async def _resolve_capture(target, session, scope, path, reference, inv):
     """Shared capture path for review_ui / verify_ui: resolve the target (via ``_capture_or_file``),
     save to ``path`` if given, and read an optional ``reference`` image. Returns
-    ``(img_bytes, context, ref_bytes, elements, err_or_None)`` — on error the caller returns the string.
+    ``(img_bytes, context, ref_bytes, elements, saved_path_or_None, err_or_None)`` — on error the caller returns the string.
 
     ``elements`` is interact's detected element list for a BROWSER target (the reliable, no-VLM DOM-ref
     scan), used to GROUND the critique and flag a hallucinated ref. Empty for a desktop/file target,
@@ -266,23 +266,22 @@ async def _resolve_capture(target, session, scope, path, reference, inv):
 
     img, context, mgr, win, err = await _capture_or_file(target, session, scope)
     if err:
-        return None, None, None, [], err
+        return None, None, None, [], None, err
     elements: list = []
     if win is None and mgr is not None:  # browser target → DOM ref list to anchor the critique on
         try:
             elements = await _scan_elements(mgr, scope=scope)
         except Exception:
             elements = []  # never fail a capture because the grounding scan hiccuped
-    if path:
-        core._save_to_path(path, img)
+    saved = core._save_to_path(path, img) if path else None
     Debug.save("capture", img, ext="png", invocation_id=inv)
     ref_bytes = None
     if reference:
         try:
             ref_bytes = Path(reference).read_bytes()
         except OSError as e:
-            return None, None, None, [], f"ERROR: could not read reference image {reference!r} — {e}"
-    return img, context, ref_bytes, elements, None
+            return None, None, None, [], None, f"ERROR: could not read reference image {reference!r} — {e}"
+    return img, context, ref_bytes, elements, saved, None
 
 
 def _quality_plan(quality: str | None, model: str | None) -> tuple[str | None, bool, str | None]:
@@ -326,7 +325,7 @@ async def _run_ui_critique(
     Debug.dump_input(inv, {"tool": tool, "target": target, "reference": reference,
                            "model": model, "quality": quality, **dump_extra},
                      vlm._resolved_config(eff_model, "image"))
-    img, context, ref_bytes, elements, err = await _resolve_capture(
+    img, context, ref_bytes, elements, saved, err = await _resolve_capture(
         target, session, scope, path, reference, inv
     )
     if err:
@@ -349,5 +348,7 @@ async def _run_ui_critique(
     body = format_body(parsed, valid_refs) if parsed else r.text  # graceful: raw VLM text on parse miss
     model_tag = f" {r.model}" if r.model else ""
     out = f"{context}\n{body}\n(VLM:{model_tag} {r.elapsed:.1f}s)"
+    if saved:
+        out += f"\n{core._saved_note(saved, img)}"
     Debug.dump_output(inv, out)
     return out

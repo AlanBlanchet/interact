@@ -31,10 +31,13 @@ async def test_inline_screenshot_writes_file(tmp_path):
         await page.set_content("<title>T</title><body>hi</body>")
         out = tmp_path / "inline.png"
         # no query → no VLM/key needed; the path must still be written
-        await _run_actions_browser(
+        result = await _run_actions_browser(
             mgr, [ScreenshotAction(path=str(out))], None, None, None, "default"
         )
         assert out.exists(), "inline screenshot path was not written"
+        # ...and the report NAMES the absolute file with its size, like every saving tool (#120),
+        # instead of echoing the caller's own string back.
+        assert f"Saved to {out} ({out.stat().st_size} bytes)" in str(result), str(result)[-300:]
         assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
     finally:
         await mgr.close()

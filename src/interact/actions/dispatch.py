@@ -775,6 +775,7 @@ async def _run_actions_browser(
         _element_screenshot,
         _run_compare,
         _save_to_path,
+        _saved_note,
         _session_response,
         _wait as _wait_fn,
     )
@@ -902,13 +903,13 @@ async def _run_actions_browser(
                     ext="png",
                 )
                 if action.path:  # honour an inline screenshot's path, like the standalone tool (#27)
-                    _save_to_path(action.path, snapshots[step_idx])
+                    dest = _save_to_path(action.path, snapshots[step_idx])
                 if action.query:
                     report = await _analyze(state, action.query)
                 else:
                     report = f"{state.title} — {state.visible_text[:300]}"
                 if action.path:
-                    report += f"  (saved {action.path})"
+                    report += f"  ({_saved_note(dest, snapshots[step_idx])})"
                 final = state
             step_reports.append(_step(i, action.type, report))
 

@@ -170,3 +170,24 @@ async def test_session_save_and_load_share_the_same_resolved_path(sandbox, monke
     out = await srv.session("load", name="s1", path="sessions/s1.json")
     assert str(dest) in out
     mgr.load_state.assert_awaited_once_with({"cookies": ["c"]})
+
+
+def test_a_per_call_debug_dir_follows_the_same_rule(sandbox):
+    """`Debug.dump_dir("run1")` resolved against the server's cwd — the class of #120 with one
+    more door in: ~ expands, an absolute dir is kept, a RELATIVE one lands under the output dir."""
+    from interact.debug_utils import Debug
+
+    assert Debug.dump_dir("run1") == sandbox["out"] / "run1"
+    assert Debug.dump_dir("~/dumps") == sandbox["home"] / "dumps"
+    assert Debug.dump_dir(str(sandbox["tmp"] / "abs")) == sandbox["tmp"] / "abs"
+
+
+@pytest.mark.asyncio
+async def test_review_ui_names_the_absolute_file_it_wrote(sandbox, monkeypatch):
+    """review_ui / verify_ui saved through the shared capture path and said nothing about where."""
+    png = make_varied_png()
+    monkeypatch.setattr(srv.capture, "_capture_or_file", AsyncMock(return_value=(png, "Page: Home", None, None, None)))
+    monkeypatch.setattr(srv.vlm, "_vlm", _vlm_returning("[]"))
+    out = await srv.review_ui(path="review.png")
+    dest = sandbox["out"] / "review.png"
+    assert _note(dest, png) in out and dest.read_bytes() == png

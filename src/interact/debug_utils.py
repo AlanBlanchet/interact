@@ -22,6 +22,19 @@ _log = logging.getLogger("interact")
 _CURRENT_INV: ContextVar[str | None] = ContextVar("interact_current_inv", default=None)
 
 
+def resolve_output_path(path: str) -> Path:
+    """Where a caller-supplied output ``path`` lands — ONE rule for every tool that takes one: ``~``
+    expands, an absolute path is kept, a RELATIVE path is anchored under ``config.debug_dir``
+    (interact's own output dir, ``~/.interact/out``, where every other artifact already lives) —
+    never the server process's cwd, which is whatever the editor started it with and which the
+    calling agent cannot see (#120). Always absolute, so a tool can name the file the caller will
+    actually find."""
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = Path(config.debug_dir).expanduser() / p
+    return p.absolute()
+
+
 class Debug:
     """Namespace for debug-dump helpers (all staticmethod / classmethod)."""
 
@@ -34,12 +47,11 @@ class Debug:
 
     @staticmethod
     def dump_dir(debug_dir: str | None) -> Path | None:
-        # per-call arg wins, then the explicit screenshot override, then the debug_dir base.
-        # expanduser here for the same reason Config does it for the env/settings values: this is
-        # the other boundary a raw path STRING enters on, and a literal Path("~/x") would write to
-        # a "~" dir beside the server's cwd. (Config's fields are already expanded.)
+        # per-call arg wins, then the explicit screenshot override, then the debug_dir base. The
+        # per-call STRING follows the one output-path rule (#120): `~` expands and a RELATIVE dir
+        # lands under the base, never beside the server's cwd. (Config's fields are already expanded.)
         if debug_dir:
-            return Path(debug_dir).expanduser()
+            return resolve_output_path(debug_dir)
         return config.screenshot_dump_dir or config.debug_dir
 
     @classmethod
