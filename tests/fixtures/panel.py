@@ -38,7 +38,7 @@ state_file = sys.argv[1] if len(sys.argv) > 1 else None
 
 
 def main() -> None:
-    state = {"last": "", "count": 0, "typed": ""}
+    state = {"last": "", "count": 0, "typed": "", "focus": ""}
 
     def persist() -> None:
         if state_file:
@@ -85,6 +85,18 @@ def main() -> None:
     # the test sandboxes) a click doesn't assign keyboard focus, so typed keys would go
     # nowhere. Real apps can force focus; doing so makes typing land with or without a WM.
     entry.bind("<Button-1>", lambda _e: entry.focus_force())
+
+    def on_focus(name: str):
+        # Report where keyboard focus IS, so a test can WAIT for it before typing: under a bare X
+        # server a click takes measurable time to become focus, and keys sent before that land
+        # nowhere — the whole-suite flake behind #130.
+        def handler(_event: "tk.Event") -> None:
+            state["focus"] = name
+            persist()
+        return handler
+
+    entry.bind("<FocusIn>", on_focus("Enter text"))
+    entry.bind("<FocusOut>", on_focus(""))
 
     root.attributes("-topmost", True)  # stay above other windows so clicks reliably land
 

@@ -188,6 +188,10 @@ def test_panel_interactions_nested(tmp_path: Path) -> None:
 
         cx, cy = center("Enter text")
         backend.click(cx, cy)
+        # Keys go where keyboard focus IS, not where the click just went: wait for the panel to
+        # report the entry focused before typing, or under load "hello" lands nowhere (#130).
+        focused = _wait_for_state(state_path, lambda s: s.get("focus") == "Enter text")
+        assert focused.get("focus") == "Enter text", "the entry never took keyboard focus after the click"
         backend.type_text("hello")
         typed = _wait_for_state(state_path, lambda s: "hello" in s.get("typed", "")).get("typed", "")
         assert "hello" in typed, f"typing did not land (typed={typed!r})"
