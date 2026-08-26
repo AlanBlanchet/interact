@@ -1,10 +1,12 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from interact.browser import BrowserManager
 from interact.config import LOG_MAXLEN, Config
-from interact.state import InteractiveElement, ref_locator
+from interact.state import InteractiveElement, PageState, _visible_text, ref_locator
 
 _ANNOTATE_JS = (
     Path(__file__).parents[1] / "src" / "interact" / "js" / "annotate_elements.js"
@@ -151,13 +153,16 @@ _SCAN_PAGE = """
 <button aria-hidden="true">A11yHidden</button>
 <button style="visibility:hidden">Invisible</button>
 <button style="opacity:0">Transparent</button>
+<div style="opacity:0"><button>InheritedTransparent</button></div>
 <button id="covered" style="position:absolute;top:120px;left:0">Covered</button>
 <div style="position:absolute;top:120px;left:0;width:160px;height:30px;z-index:9;background:#fff"></div>
 <button style="position:absolute;top:3000px;left:0">BelowFold</button>
 """
 
 
-async def _scan(html: str, limit: int = 50):
+@asynccontextmanager
+async def _headless_page():
+    """A real headless Chromium page — pure DOM logic, no VLM/API key."""
     from playwright.async_api import async_playwright
 
     async with async_playwright() as pw:
@@ -165,11 +170,18 @@ async def _scan(html: str, limit: int = 50):
             browser = await pw.chromium.launch(headless=True)
         except Exception as exc:  # no browser provisioned (bare CI) → not this test's concern
             pytest.skip(f"no launchable chromium: {exc}")
-        page = await browser.new_page(viewport={"width": 1280, "height": 720})
+        try:
+            yield await browser.new_page(viewport={"width": 1280, "height": 720})
+        finally:
+            await browser.close()
+
+
+async def _scan(html: str, limit: int = 50):
+    async with _headless_page() as page:
         await page.set_content(html)
-        result = await page.evaluate(_ANNOTATE_JS, {"scope": None, "limit": limit, "nextRef": 0})
-        await browser.close()
-        return result["elements"]  # JS returns {elements, nextRef} for the session ref counter (#35)
+        args = {"scope": None, "limit": limit, "nextRef": 0}
+        result = await page.evaluate(_ANNOTATE_JS, args)
+        return result["elements"]  # JS returns {elements, nextRef}: the session ref counter (#35)
 
 
 @pytest.mark.asyncio
@@ -178,7 +190,8 @@ async def test_scan_filters_and_ranks():
     names = [b["name"] for b in boxes]
 
     # Non-actionable elements never surface as refs.
-    for dropped in ("Disabled", "A11yHidden", "Invisible", "Transparent"):
+    dropped_names = ("Disabled", "A11yHidden", "Invisible", "Transparent", "InheritedTransparent")
+    for dropped in dropped_names:
         assert dropped not in names, f"{dropped} should be filtered out"
 
     # Survivors ranked: clickable-now before covered before off-screen.
@@ -192,6 +205,66 @@ async def test_scan_limit_keeps_highest_ranked():
     # limit=1 must keep the clickable-now control, not whatever came first in document order.
     boxes = await _scan(_SCAN_PAGE, limit=1)
     assert [b["name"] for b in boxes] == ["Visible"]
+
+
+# --- #128: the text summary must not read opacity:0 text as "visible at rest" -----------------
+
+# Playwright's innerText drops display:none and visibility:hidden text but NOT opacity:0 — own or
+# inherited — so a critic reading the summary took a transparent element for text visible at rest.
+# visibility is per text node on its parent (a visibility:visible child inside a hidden parent DOES
+# show, as innerText has it); a closed <details> body and non-rendered tags never show.
+_TEXT_PAGE = """
+<div id="main">
+  <p>Shown paragraph</p>
+  <p style="opacity:0">Ghost</p>
+  <div style="opacity:0"><p>Inherited ghost</p></div>
+  <p style="visibility:hidden">Hidden <span style="visibility:visible">Peek</span></p>
+  <div style="display:none">Collapsed block</div>
+  <details><summary>More</summary><p>Folded</p></details>
+  <select><option>Opt A</option><option selected>Opt B</option></select>
+  <script>var leaked = "ScriptText";</script>
+</div>
+<p>Outside scope</p>
+"""
+_AT_REST = ("Shown paragraph", "Peek", "More", "Opt B")
+# a closed dropdown shows only its selected option; innerText listed every option
+_NOT_AT_REST = (
+    "Ghost", "Inherited ghost", "Hidden", "Folded", "Collapsed block", "ScriptText", "Opt A"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, "#main"])
+async def test_visible_text_omits_transparent_hidden_and_unrendered_text(scope):
+    async with _headless_page() as page:
+        await page.set_content(_TEXT_PAGE)
+        state = await PageState.capture(page, scope=scope)
+
+    for text in (state.visible_text, state.text_summary()):
+        for shown in _AT_REST:
+            assert shown in text
+        for absent in _NOT_AT_REST:
+            assert absent not in text, f"{absent!r} is not visible at rest, yet the summary has it"
+    assert ("Outside scope" in state.visible_text) is (scope is None)  # scope= bounds the read
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scoped", [False, True])
+async def test_visible_text_falls_back_to_inner_text_when_the_walker_throws(scoped):
+    """A hostile page (a patched getComputedStyle, a detached frame) must not take the tool down:
+    the summary drops back to the old inner_text read, silently."""
+    page = MagicMock()
+    page.evaluate = AsyncMock(side_effect=Exception("hostile page"))
+    page.inner_text = AsyncMock(return_value="body text " * 400)  # over the cap → still capped
+    locator = MagicMock()
+    locator.evaluate = AsyncMock(side_effect=Exception("hostile page"))
+    locator.inner_text = AsyncMock(return_value="scoped text")
+
+    text = await _visible_text(page, locator if scoped else None)
+
+    expected = "scoped text" if scoped else ("body text " * 400)[:2000]
+    assert text == expected
+    (locator if scoped else page).inner_text.assert_awaited_once()
 
 
 # --- #70: HTTP Basic-auth via Playwright httpCredentials (no native dialog to type into) --------

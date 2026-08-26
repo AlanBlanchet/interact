@@ -1,10 +1,11 @@
 import base64
 import io
 import json
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, model_validator
-from playwright.async_api import Page
+from playwright.async_api import Locator, Page
 
 from interact.settle import settle_page
 
@@ -12,6 +13,9 @@ _ANNOTATION_COLORS = ["#FF4444", "#44AA44", "#4444FF", "#FF8800", "#AA44AA", "#0
 _NAME_MAX_LEN = 30
 _BADGE_W = 22
 _BADGE_H = 16
+_TEXT_CAP = 2000
+# In-page reader behind PageState.visible_text; its header says why not innerText (#128).
+_VISIBLE_TEXT_JS = (Path(__file__).parent / "js" / "visible_text.js").read_text()
 
 
 def ref_locator(ref: str) -> str:
@@ -136,6 +140,20 @@ def bytes_to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+async def _visible_text(page: Page, scoped: Locator | None) -> str:
+    """The text a user can SEE, capped at ``_TEXT_CAP``. An in-page walker (``js/visible_text.js``)
+    rather than Playwright's ``inner_text``, which keeps ``opacity:0`` text — own or inherited — and
+    so had a rest-state check read a transparent element as visible (#128). A page that makes the
+    walker throw gets the old ``inner_text`` read: the summary must never take the tool down."""
+    # Locator.evaluate hands the JS (element, arg), Page.evaluate (arg); the walker takes both.
+    reader = page if scoped is None else scoped
+    try:
+        text = await reader.evaluate(_VISIBLE_TEXT_JS, {"cap": _TEXT_CAP})
+    except Exception:
+        text = await (page.inner_text("body") if scoped is None else scoped.inner_text())
+    return text[:_TEXT_CAP]
+
+
 class PageState(BaseModel):
     url: str
     title: str
@@ -169,10 +187,7 @@ class PageState(BaseModel):
         screenshot_base64 = bytes_to_b64(screenshot_bytes)
 
         try:
-            if scope:
-                visible_text = (await target.inner_text())[:2000]
-            else:
-                visible_text = (await page.inner_text("body"))[:2000]
+            visible_text = await _visible_text(page, target if scope else None)
         except Exception:
             visible_text = ""
 
