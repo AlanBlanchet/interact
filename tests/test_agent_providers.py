@@ -414,3 +414,18 @@ def test_an_unknown_mode_is_refused_at_the_edge():
         ClaudeCodeProvider().command(
             "t", cwd="/tmp", model=None, mcp_config=None, run_id="r",
             permission_mode="--dangerously-skip-everything")
+
+
+def test_a_tool_call_and_its_result_share_the_vendor_tool_id():
+    """The transcript view opens a call's FULL input/output from the raw stream on click.
+
+    The summarised event is clipped (300/2000 chars) by design; the raw line holds everything,
+    and the vendor's tool_use id is the ONE stable key that pairs a call with its result across
+    both files. Without it the viewer falls back to prefix-matching, which breaks the moment two
+    identical commands run."""
+    call = _parse({"type": "assistant", "session_id": "s", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_42", "name": "Bash", "input": {"command": "ls"}}]}})
+    assert call.tool_id == "toolu_42"
+    answer = _parse({"type": "user", "session_id": "s", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_42", "content": "a\nb"}]}})
+    assert answer.tool_id == "toolu_42", "the result must carry the id that names its question"

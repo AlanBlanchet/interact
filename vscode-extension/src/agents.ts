@@ -154,6 +154,9 @@ export interface AgentActivity {
   /** The tool's arguments, already summarised by Python. "used Bash" without the command is a
    *  status line; with it, it is a transcript. */
   tool_input?: string;
+  /** The vendor's tool_use id, on the call AND its result — the stable key that opens the FULL
+   *  input/output for one call out of the raw stream (the summary above is clipped by design). */
+  tool_id?: string;
   /** For a message: who sent it and who received it. "operator" is a person; anything else is
    *  another agent — which is the difference between you talking to it and a TEAM talking. */
   from_run?: string | null;
@@ -187,6 +190,7 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
           text: String(raw.text ?? ""),
           tool: raw.tool ?? null,
           tool_input: String(raw.tool_input ?? ""),
+          tool_id: typeof raw.tool_id === "string" ? raw.tool_id : "",
           // Who a message is from — without it every message reads as yours, so an agent
           // talking to another agent looked exactly like you talking to it.
           from_run: raw.from_run ?? null,
@@ -212,6 +216,12 @@ export function activityOf(run: AgentRun, limit = 40): AgentActivity[] {
   return run.status === "foreign"
     ? readForeignActivity(run, limit)
     : readAgentActivity(run.run_id, limit);
+}
+
+/** Where the child wrote its OWN stream, verbatim — full tool inputs and outputs live here.
+ *  Mirrors Python's `raw_events_path`. */
+export function rawEventsPath(runId: string): string {
+  return path.join(agentsDir(), `${runId}.raw.jsonl`);
 }
 
 /** One agent addressing another. Written by Python to `<run_id>.messages.jsonl` on BOTH sides,

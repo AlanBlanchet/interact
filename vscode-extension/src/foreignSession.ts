@@ -82,7 +82,8 @@ export function readForeignActivity(
           out.push({ kind: "thinking", text: String(block.thinking), at: stamp });
         } else if (block.type === "tool_use") {
           out.push({ kind: "tool", text: "", tool: String(block.name ?? ""),
-                     tool_input: JSON.stringify(block.input ?? {}).slice(0, 400), at: stamp });
+                     tool_input: JSON.stringify(block.input ?? {}).slice(0, 400),
+                     tool_id: String(block.id ?? ""), at: stamp });
         }
       }
     } else if (t.type === "user") {
@@ -101,11 +102,72 @@ export function readForeignActivity(
                 ? (inner as Array<Record<string, unknown>>)
                     .filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n")
                 : "";
-            out.push({ kind: "tool_result", text: said.slice(0, 4000), at: stamp });
+            out.push({ kind: "tool_result", text: said.slice(0, 4000),
+                       tool_id: String(block.tool_use_id ?? ""), at: stamp });
           }
         }
       }
     }
   }
   return out.slice(-Math.max(1, limit));
+}
+
+/** The FULL input or output of ONE tool call, out of a Claude-dialect JSONL — a supervised
+ *  run's raw stream or a foreign session's transcript, which share the shape. The summarised
+ *  events are clipped by design; the raw line holds everything, keyed by the vendor's
+ *  tool_use id (the one stable pairing — a prefix match breaks on two identical commands).
+ *
+ *  The call is usually recent, so a large TAIL is scanned first and the whole file only when
+ *  the id is not in it — these files reach hundreds of MB and this runs on a click.
+ */
+export function fullToolIO(file: string, toolId: string, side: "in" | "out"): string | null {
+  if (!toolId) return null;
+  const scan = (text: string): string | null => {
+    for (const line of text.split("\n")) {
+      if (!line.includes(toolId)) continue; // cheap gate before JSON.parse
+      let raw: unknown;
+      try {
+        raw = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const t = raw as { type?: string; message?: { content?: unknown } };
+      const blocks = Array.isArray(t.message?.content)
+        ? (t.message.content as Array<Record<string, unknown>>) : [];
+      if (side === "in" && t.type === "assistant") {
+        for (const b of blocks) {
+          if (b.type === "tool_use" && b.id === toolId) {
+            return JSON.stringify(b.input ?? {}, null, 2);
+          }
+        }
+      } else if (side === "out" && t.type === "user") {
+        for (const b of blocks) {
+          if (b.type === "tool_result" && b.tool_use_id === toolId) {
+            const inner = b.content;
+            if (typeof inner === "string") return inner;
+            if (Array.isArray(inner)) {
+              return (inner as Array<Record<string, unknown>>)
+                .filter((x) => x.type === "text").map((x) => String(x.text ?? "")).join("\n");
+            }
+            return "";
+          }
+        }
+      }
+    }
+    return null;
+  };
+  let size = 0;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    return null;
+  }
+  const TAIL = 1 << 22;
+  const fromTail = scan(tailText(file, TAIL) ?? "");
+  if (fromTail !== null || size <= TAIL) return fromTail;
+  try {
+    return scan(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
 }

@@ -196,7 +196,11 @@ body ::-webkit-scrollbar-thumb:hover {
 .scope:hover { background: color-mix(in srgb, var(--bd-wood) 88%, var(--bd-ink)); }
 .scope:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--bd-shadow); }
 .scope:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-.counts { color: ${DIM}; margin-left: 7px; }
+/* Stronger than DIM: this line sits ON the header's teal wash, which eats ~0.3 of ratio —
+   measured 4.2:1 in Light+ with the plain DIM mix, under the 4.5 floor. 85% toward the
+   foreground clears it in both themes while still reading quieter than the scope. */
+.counts { color: color-mix(in srgb, var(--vscode-foreground, #cccccc) 85%, ` +
+  `var(--vscode-descriptionForeground, #9a9a9a)); margin-left: 7px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 /* The world's own latch button (.wp-cam-wide): square, hard ink shadow, and a press that moves
    the button INTO its shadow — the one depth cue pixel art allows itself. */

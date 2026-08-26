@@ -199,6 +199,40 @@ def cell_of(img: Image.Image, gutter: int, c: int, r: int) -> Image.Image:
     return img.crop((x, y, x + CELL, y + CELL))
 
 
+# Cells whose art STANDS ON THE GROUND. The Kenney source reserves a fully-transparent bottom
+# row in most of these (verified against the pristine sheets, byte-for-byte), so composited at a
+# tile's bottom edge the silhouette stopped one source-pixel short of the floor — a flat-cut gap
+# with ground peeking underneath, which is the "trees / plants are still floating" complaint in
+# its eighth and final form: pure alpha data, invisible to every placement/collision probe the
+# seven logic rounds added. bushSq is the one species whose cell already touches (and the one
+# species never complained about) — the diff that located the mechanism.
+GROUNDED = {
+    "treeAT", "treeBT", "autumnT", "pine", "plantA", "plantB", "planterBush",
+    "shrub", "treeTiny", "bushSq", "stoneA", "stoneB", "lamppost", "lightTall",
+    "signGreen", "benchPark", "hydrant", "barrel",
+}
+
+
+def ground_fill(cell: Image.Image) -> Image.Image:
+    """Extend a grounded cell's silhouette to the cell floor.
+
+    A SMEAR (the lowest opaque row duplicated downward), never a shift: shifting a trunk down
+    would open the same 1px gap at its canopy join instead. One row of extra trunk is invisible
+    at 16px art; the ground contact is the whole point."""
+    px = cell.load()
+    lowest = -1
+    for y in range(CELL - 1, -1, -1):
+        if any(px[x, y][3] > 0 for x in range(CELL)):
+            lowest = y
+            break
+    if lowest in (-1, CELL - 1):
+        return cell  # empty, or already touching
+    for y in range(lowest + 1, CELL):
+        for x in range(CELL):
+            px[x, y] = px[x, lowest]
+    return cell
+
+
 def main() -> None:
     sheets = {
         key: (Image.open(MEDIA / name).convert("RGBA"), gutter)
@@ -211,7 +245,19 @@ def main() -> None:
     for i, name in enumerate(names):
         sheet, c, r = MANIFEST[name]
         img, gutter = sheets[sheet]
-        atlas.paste(cell_of(img, gutter, c, r), ((i % cols) * CELL, (i // cols) * CELL))
+        cell = cell_of(img, gutter, c, r)
+        if name in GROUNDED:
+            cell = ground_fill(cell)
+        atlas.paste(cell, ((i % cols) * CELL, (i // cols) * CELL))
+    # The build FAILS if a grounded cell floats — this class of defect never ships again.
+    for i, name in enumerate(names):
+        if name not in GROUNDED:
+            continue
+        tile = atlas.crop(((i % cols) * CELL, (i // cols) * CELL,
+                           (i % cols + 1) * CELL, (i // cols + 1) * CELL))
+        bottom = tile.load()
+        assert any(bottom[x, CELL - 1][3] > 0 for x in range(CELL)), \
+            f"grounded cell '{name}' has a transparent bottom row — it will render floating"
     atlas.save(MEDIA / "atlas.png", optimize=True)
 
     buf = io.BytesIO()

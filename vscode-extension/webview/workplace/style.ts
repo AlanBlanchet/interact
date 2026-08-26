@@ -516,9 +516,43 @@ body.vscode-high-contrast-light .wp {
    to prevent, arriving from the other side. So the far view sheds its words. What is left is a
    signed plan: room signs (a plan is signed), the light, and a person as their own colour. */
 
-.wp-view[data-far="1"] .wp-tag,
 .wp-view[data-far="1"] .wp-say,
 .wp-view[data-far="1"] .wp-kit { display: none; }
+/* The names STAY at the plan rung — the cold open lands here, and a floor with no names was
+   the owner's literal complaint. Same solution the plaques earned: plan type at constant
+   SCREEN size (counter-scaled by --inv, which the stage already carries), name only, capped
+   narrow so neighbours mostly clear each other, and staggered checkerboard so a shared bench
+   reads as two rows of labels rather than one collision. */
+.wp-view[data-far="1"] .wp-tag {
+  transform: translateX(-50%) scale(var(--inv, 1));
+  transform-origin: top center;
+  font-size: 8px; letter-spacing: 0; padding: 0 2px;
+  max-width: 40px; opacity: .92;
+}
+.wp-view[data-far="1"] .wp-tag > i { display: none; }
+/* Staggered by TILE phase (the engine stamps data-ph from (x+2y) mod 3), never by nth-child:
+   DOM order says nothing about spatial adjacency. THREE rows, because 2-parity leaves
+   distance-2 neighbours on one row.
+   The far offsets COUNTER-SCALE with the glyph: the plate's size rides --inv back to constant
+   screen size, so an offset left in stage space shrinks with the floor — measured at FIT
+   (stage 0.342) the 12px offset became ~4px against a 13px glyph and 8 of 45 plates still
+   collided. calc(px * --inv) keeps the row separation one glyph tall at every floor size. */
+.wp-view[data-far="1"] .wp-actor[data-ph="1"] .wp-tag { top: calc(3px + 13px * var(--inv, 1)); bottom: auto; }
+.wp-view[data-far="1"] .wp-actor[data-ph="2"] .wp-tag { top: calc(3px + 26px * var(--inv, 1)); bottom: auto; }
+/* Near and mid zoom scale plate and offset together, so plain pixels hold there. */
+.wp-actor[data-ph="1"] .wp-tag { top: 14px; bottom: auto; }
+.wp-actor[data-ph="2"] .wp-tag { top: 25px; bottom: auto; }
+/* The up-label flip is a SECOND anchoring scheme on the same element (bottom-anchored above
+   the head). The stagger must COMPOSE with it, not fight it: setting top while its bottom
+   stays set over-constrains the absolute box and CSS silently collapses it to ~1px — 20 of 45
+   plates rendered BLANK before these compound rules (the re-verdict's find). Up-labelled
+   actors stagger on BOTTOM, top released. */
+.wp-actor[data-label="up"][data-ph="1"] .wp-tag { top: auto; bottom: calc(var(--head, 32px) + 18px); }
+.wp-actor[data-label="up"][data-ph="2"] .wp-tag { top: auto; bottom: calc(var(--head, 32px) + 29px); }
+.wp-view[data-far="1"] .wp-actor[data-label="up"][data-ph="1"] .wp-tag {
+  top: auto; bottom: calc(var(--head, 32px) + 4px + 13px * var(--inv, 1)); }
+.wp-view[data-far="1"] .wp-actor[data-label="up"][data-ph="2"] .wp-tag {
+  top: auto; bottom: calc(var(--head, 32px) + 4px + 26px * var(--inv, 1)); }
 .wp-view[data-far="1"] .wp-can { opacity: 0; pointer-events: none; }
 .wp-view[data-far="1"] .wp-plaque {
   /* Pulled back, the plaques are the ONLY words left on the plan — the tags, bubbles and kits
@@ -923,26 +957,20 @@ body.vscode-high-contrast-light .wp {
 .wp-actor.is-walking .wp-shade { transform: scaleX(.82); }
 
 
-/* AT REST THE WORLD IS A PLACE, NOT A DASHBOARD. A nameplate stays up only for the states a
-   reader is actually waiting on — running work, an error, a question, a stall. A finished, a
-   ready and a visiting body carry no plate until the pointer asks; the posture and the seat
-   already say everything their plate said, and thirty resting plates were most of what made the
-   floor read as an ops board with sprites on it. */
+/* EVERYONE WEARS THEIR NAME. Resting plates used to hide until hover — the reasoned worry was
+   an ops-board of thirty plates — but the owner asked for the opposite in his own words ("Can
+   we show the names of the agents in the game ?"), and a company you watch is a company you can
+   READ: who is who, at a glance, like any staffed floor in a sim. The calm is kept by WEIGHT,
+   not absence — a resting plate is dimmed; a working, erroring or asking plate is full. */
 .wp-actor[data-attention="finished"] .wp-tag,
 .wp-actor[data-attention="ready"] .wp-tag,
-.wp-actor[data-attention="not-ours"] .wp-tag { display: none; }
+.wp-actor[data-attention="not-ours"] .wp-tag { opacity: .72; }
 .wp-actor[data-attention="finished"]:hover .wp-tag,
 .wp-actor[data-attention="ready"]:hover .wp-tag,
 .wp-actor[data-attention="not-ours"]:hover .wp-tag,
-.wp-actor[data-attention="finished"]:focus-visible .wp-tag,
-.wp-actor[data-attention="ready"]:focus-visible .wp-tag,
-.wp-actor[data-attention="not-ours"]:focus-visible .wp-tag,
-.wp-actor[data-attention="finished"].is-met .wp-tag,
-.wp-actor[data-attention="ready"].is-met .wp-tag,
-.wp-actor[data-attention="not-ours"].is-met .wp-tag,
 .wp-actor[data-attention="finished"].is-picked .wp-tag,
 .wp-actor[data-attention="ready"].is-picked .wp-tag,
-.wp-actor[data-attention="not-ours"].is-picked .wp-tag { display: block; }
+.wp-actor[data-attention="not-ours"].is-picked .wp-tag { opacity: 1; }
 
 .wp-tag {
   position: absolute;

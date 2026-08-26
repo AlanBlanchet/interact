@@ -415,6 +415,12 @@ function place(b, t) {
   }
   el.style.transform = "translate3d(" + px.toFixed(1) + "px," + (py + bob).toFixed(1) + "px,0)";
   el.style.zIndex = String(100 + Math.round(b.y * 4));
+  // Nameplate stagger phase, from the actor's TILE — three rows in SPACE. nth-child parity
+  // was tried first (DOM order says nothing about adjacency) and plain 2-parity second
+  // (distance-2 neighbours share it); (x + 2y) mod 3 separates distance-1 AND distance-2
+  // neighbours, which is what a dense floor actually holds.
+  const ph = String(((Math.round(b.x) + 2 * Math.round(b.y)) % 3 + 3) % 3);
+  if (el.dataset.ph !== ph) el.dataset.ph = ph;
   sayEdge(b, py);
   el.classList.toggle("face-left", b.face < 0);
   if (lean) el.style.setProperty("--lean", lean.toFixed(2) + "deg");

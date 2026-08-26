@@ -825,8 +825,12 @@ function money(total: number): string {
  *  carry their own words on hover, and the stamps are already words), and the whole thing is one
  *  line thin enough that the floor is the biggest thing on screen at any panel width. */
 function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): string {
+  // `wp-tally` marks the chips the ROSTER also states: beside the rail (the split), these hide —
+  // one panel was carrying its status counts twice, once as chips and once as the rail's header
+  // line (ux-critic: "two headers on one panel"). Standalone, the HUD keeps them: it is the only
+  // header there.
   const chip = (status: string, n: number, word: string, colour: string) =>
-    n ? `<span class="wp-chip" style="--mark:${colour}">${markOf(status)}<b>${n}</b> ${word}</span>` : "";
+    n ? `<span class="wp-chip wp-tally" style="--mark:${colour}">${markOf(status)}<b>${n}</b> ${word}</span>` : "";
   const projects = t.projects.length === 1 ? esc(t.projects[0]) : `${t.projects.length} projects`;
   /* No clock. It showed the SNAPSHOT's time and never ticked, so it read as a frozen wall clock —
      wrong twice a minute and alarming the rest of the time. The snapshot's age already shows as
@@ -841,9 +845,11 @@ function hud(state: TeamState, t: ReturnType<typeof tally>, mail: number): strin
     /* The other chips read "11 on", "1 error" — a number and a WORD. This one says what it
        counts too, and carries the long form on its title so the strip stays one line. */
     (mail
+      /* "message", the same word the sequence view's arrows carry — "2 notes" here beside
+         "message" there was the same entity named twice on one product (ux-critic LOW). */
       ? `<span class="wp-chip" title="Agent-to-agent messages in this snapshot">` +
         `${draw(NOTE.grid, NOTE.pal, { scale: 2 })}<b>${mail}</b> ` +
-        `${mail === 1 ? "note" : "notes"}</span>`
+        `${mail === 1 ? "message" : "messages"}</span>`
       : "") +
     `<span class="wp-chip wp-spend">${money(t.cost)}</span>` +
     `</header>`

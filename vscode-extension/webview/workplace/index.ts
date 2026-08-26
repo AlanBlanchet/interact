@@ -80,6 +80,10 @@ ${aside ? `<style>${aside.style}
   border-left: 1px solid var(--vscode-panel-border, transparent);
   background: var(--vscode-editor-background);
 }
+/* ONE owner per fact on the shared panel: the rail's header states the scope and the counts, so
+   the world's HUD sheds its duplicate tallies and project sub-line here — standalone it keeps
+   them, being the only header in the room. */
+.wp-split .wp-hud .wp-tally, .wp-split .wp-hud .wp-sign-sub { display: none; }
 /* 560, not 720. The breakpoint applies to the EDITOR GROUP, not the window: measured live, a
    1280px laptop with both side bars open leaves roughly 630px here, so a 720px threshold stacked
    the split for most real windows and only flipped side-by-side above ~1440px. At 560 the roster

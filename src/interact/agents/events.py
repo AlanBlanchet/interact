@@ -38,6 +38,10 @@ class AgentEvent(BaseModel):
     #: A compact rendering of the tool's arguments. A conversation view showing "used Bash" without
     #: the command is a status line, not a transcript — this is what makes it readable.
     tool_input: str = ""
+    #: The vendor's tool_use id, carried on BOTH the call and its result. The summarised event is
+    #: clipped by design; this is the stable key a viewer uses to pull the FULL input/output for
+    #: one call out of the raw stream — prefix-matching breaks on two identical commands.
+    tool_id: str = ""
     #: For a "message": which run sent it and which received it. Both sides record the same
     #: exchange, so a sequence view can draw the arrow from either transcript.
     from_run: str | None = None

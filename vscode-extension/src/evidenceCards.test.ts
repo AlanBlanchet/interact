@@ -91,15 +91,40 @@ test("thinking the vendor withheld still leaves a trace", () => {
   assert.ok(!html.includes("<details"), "there is nothing to expand, so nothing must pretend to");
 });
 
-test("long output folds behind its count — one truncation rule, not four", () => {
+test("a tool call rests as ONE row; the text lives behind it", () => {
+  /* "bash isn't well shown (not enough vertical spacing, too much text shown...)" — the old box
+     opened with its whole IN and half its OUT inline. The unit is a row now: what ran, on what,
+     how it went; clicking peeks the heads; ⧉ opens the whole payload in a tab. */
   const out = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
   const html = renderTranscript([
-    { kind: "tool", tool: "Bash", tool_input: "make" }, { kind: "tool_result", text: out },
+    { kind: "tool", tool: "Bash", tool_input: "command='make'", tool_id: "toolu_7" },
+    { kind: "tool_result", text: out, tool_id: "toolu_7" },
   ] as never[]);
-  assert.match(html, /<summary>28 more lines<\/summary>/);
-  assert.ok(html.includes("line 1") && html.includes("line 29"), "nothing is thrown away");
-  assert.ok(!/io-body[^>]*>[^<]*line 4/.test(html.split("<details")[0]),
-    "at rest the summary is two lines, not five — the click has the rest");
+  assert.match(html, /class="tool-row"/);
+  assert.match(html, /class="tool-gist">make</, "the command IS the row's identity");
+  assert.match(html, /✓ 30 lines/, "the verdict and the size, at a glance");
+  assert.match(html, /<div class="tool-peek" hidden>/, "nothing of the body renders at rest");
+  const visible = html.replace(/<template[\s\S]*?<\/template>/g, "");
+  assert.ok(visible.includes("line 5") && !visible.includes("line 7"),
+    "the VISIBLE peek holds a head, never the wall — the template may hold it all");
+  assert.match(html, /\+24 more lines in the tab/);
+  assert.match(html, /data-io="out" data-toolid="toolu_7"/, "the whole thing is one click away");
+});
+
+test("a failed command wears its cross on the resting row", () => {
+  const html = renderTranscript([
+    { kind: "tool", tool: "Bash", tool_input: "command='make'", tool_id: "t1" },
+    { kind: "tool_result", text: "ERROR: no rule to make target", tool_id: "t1" },
+  ] as never[]);
+  assert.match(html, /class="tool-note tool-bad">✗</, "a failure must not need the click to see");
+});
+
+test("a call still running says so instead of claiming an empty answer", () => {
+  const html = renderTranscript([
+    { kind: "tool", tool: "Bash", tool_input: "command='sleep 60'", tool_id: "t2" },
+  ] as never[]);
+  assert.match(html, /tool-live/);
+  assert.ok(!html.includes('class="io"><span class="io-tag">OUT'), "no OUT until there IS one");
 });
 
 test("a harness injection folds as machinery, never as something HE said", () => {

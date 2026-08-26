@@ -25,6 +25,7 @@ import { scopeStore } from "./scopeStore";
 import { interactCli } from "./interactCli";
 import { describeMode, knownModes, type PermissionMode } from "./permissionModes";
 import { chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
+import { IO_SCHEME, ioTarget } from "./ioDocument";
 import { agentsDir } from "./paths";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -168,6 +169,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       // Walking UP the tree: the errand that produced this answer.
       if (msg?.type === "openRun" && typeof msg.runId === "string") this.show(msg.runId);
+      // The whole input/output of one tool call, in its own read-only tab — the Claude Code
+      // gesture. A stamped call is served from the raw stream by the vendor's tool id; an
+      // unstamped one (records predating the stamping) serves the stored text the webview
+      // handed over. The id and text are opaque data — a hostile id can only fail to match.
+      if (msg?.type === "io" && typeof msg.toolId === "string"
+          && (msg.side === "in" || msg.side === "out") && this.runId) {
+        const path = ioTarget(this.runId, msg.toolId, msg.side,
+          String(msg.tool ?? "tool"), typeof msg.text === "string" ? msg.text : "");
+        if (path) {
+          const uri = vscode.Uri.from({ scheme: IO_SCHEME, path });
+          void vscode.window.showTextDocument(uri, { preview: true });
+        }
+      }
       if (msg?.type === "open" && typeof msg.path === "string") void this.open(msg.path);
       // A command from the slash menu. Checked against the declared list rather than executed as
       // given: the webview renders agent output, so anything arriving from it is untrusted, and

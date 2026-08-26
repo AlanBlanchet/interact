@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import { ACTIVITY_SCHEME, activityPath, formatActivity, runIdFromPath } from "./activityDocument";
+import { IO_INLINE, IO_SCHEME, ioFromPath } from "./ioDocument";
 import { ChatViewProvider } from "./chatView";
 import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
@@ -518,6 +519,27 @@ export async function activate(
       async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
         const { readAgentActivity } = await import("./agents");
         return formatActivity(readAgentActivity(runIdFromPath(uri.path), 200));
+      },
+    }),
+    // One tool call's WHOLE input or output. The transcript's rows are summaries by design;
+    // this serves the unclipped payload out of the raw stream (or, for one of your own
+    // sessions, the provider's transcript), keyed by the vendor's tool id.
+    vscode.workspace.registerTextDocumentContentProvider(IO_SCHEME, {
+      async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+        const parsed = ioFromPath(uri.path);
+        if (!parsed) return "(unrecognised tool-call reference)";
+        // Banked text first: an unstamped call's stored half, handed over by the webview.
+        const banked = IO_INLINE.get(parsed.toolId);
+        if (banked !== undefined) return banked;
+        const { readAgentRuns, rawEventsPath } = await import("./agents");
+        const { foreignTranscriptPath, fullToolIO } = await import("./foreignSession");
+        const run = readAgentRuns().find((r) => r.run_id === parsed.runId)
+          ?? scope.runs().find((r) => r.run_id === parsed.runId);
+        const file = run?.status === "foreign"
+          ? foreignTranscriptPath(run) : rawEventsPath(parsed.runId);
+        const full = file ? fullToolIO(file, parsed.toolId, parsed.side) : null;
+        return full
+          ?? "(the raw stream no longer holds this call — it may predate the id stamping)";
       },
     }),
     vscode.commands.registerCommand("interact.agents.refresh", () => agentsProvider.refresh()),

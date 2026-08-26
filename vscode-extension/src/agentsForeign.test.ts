@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { foreignTranscriptPath, readForeignActivity } from "./foreignSession.ts";
+import { foreignTranscriptPath, fullToolIO, readForeignActivity } from "./foreignSession.ts";
 
 test("the transcript path is the provider's munged-cwd convention", () => {
   const p = foreignTranscriptPath({ run_id: "sid-1", cwd: "/home/alan/dev/my.app" }, "/HOME");
@@ -50,4 +50,43 @@ test("a session's tail maps into the conversation grammar", () => {
 
 test("a missing transcript is an empty conversation, never a crash", () => {
   assert.deepEqual(readForeignActivity({ run_id: "ghost", cwd: "/nowhere" }, 40, "/no-such-home"), []);
+});
+
+test("a tool call carries the vendor's id on both halves", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "foreign-id-"));
+  const dir = path.join(home, ".claude", "projects", "-w");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "s.jsonl"), [
+    JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "toolu_9", name: "Bash", input: { command: "ls" } }] } }),
+    JSON.stringify({ type: "user", message: { content: [
+      { type: "tool_result", tool_use_id: "toolu_9", content: "a" }] } }),
+  ].join("\n"));
+  const turns = readForeignActivity({ run_id: "s", cwd: "/w" }, 10, home);
+  assert.equal(turns[0].tool_id, "toolu_9");
+  assert.equal(turns[1].tool_id, "toolu_9", "the result names the question it answers");
+});
+
+test("the whole input and output of one call come out of the raw stream by id", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rawio-"));
+  const file = path.join(dir, "run.raw.jsonl");
+  const big = "line\n".repeat(4000); // far past the 2000-char summary clip
+  fs.writeFileSync(file, [
+    JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "toolu_A", name: "Bash",
+        input: { command: "npm test", timeout: 90000 } }] } }),
+    JSON.stringify({ type: "user", message: { content: [
+      { type: "tool_result", tool_use_id: "toolu_A",
+        content: [{ type: "text", text: big }] }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "toolu_B", name: "Bash", input: { command: "npm test" } }] } }),
+  ].join("\n"));
+  const input = fullToolIO(file, "toolu_A", "in");
+  assert.match(input ?? "", /"command": "npm test"/);
+  assert.match(input ?? "", /"timeout": 90000/, "the WHOLE input, not the summarised lead args");
+  const output = fullToolIO(file, "toolu_A", "out");
+  assert.equal(output, big, "nothing clipped — that is the entire point of the tab");
+  assert.match(fullToolIO(file, "toolu_B", "in") ?? "", /npm test/,
+    "two identical commands stay distinguishable — the id pairs them, never the text");
+  assert.equal(fullToolIO(file, "toolu_MISSING", "out"), null);
 });

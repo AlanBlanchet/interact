@@ -281,7 +281,7 @@ class ClaudeCodeProvider(AgentProvider):
         if kind == "assistant":
             msg = raw.get("message") or {}
             usage = msg.get("usage") or {}
-            texts, thinking, tool, tool_input = [], [], None, ""
+            texts, thinking, tool, tool_input, tool_id = [], [], None, "", ""
             prompt_tokens = _prompt_tokens(usage)
             for block in msg.get("content") or []:
                 btype = block.get("type")
@@ -292,8 +292,9 @@ class ClaudeCodeProvider(AgentProvider):
                 elif btype == "tool_use":
                     tool = block.get("name")
                     tool_input = _summarise_input(block.get("input"))
+                    tool_id = str(block.get("id") or "")
             if tool:
-                return AgentEvent(kind="tool", tool=tool, tool_input=tool_input,
+                return AgentEvent(kind="tool", tool=tool, tool_input=tool_input, tool_id=tool_id,
                                   session_id=sid, raw_type=kind,
                                   input_tokens=prompt_tokens,
                                   output_tokens=usage.get("output_tokens"))
@@ -313,6 +314,7 @@ class ClaudeCodeProvider(AgentProvider):
                     if isinstance(body, list):
                         body = " ".join(b.get("text", "") for b in body if isinstance(b, dict))
                     return AgentEvent(kind="tool_result", text=_clip(str(body or "")),
+                                      tool_id=str(block.get("tool_use_id") or ""),
                                       session_id=sid, raw_type=kind)
                 # Text on a `user` line is what was ASKED of the agent — the other half of the
                 # conversation. Unnamed, an activity view shows only the agent talking.

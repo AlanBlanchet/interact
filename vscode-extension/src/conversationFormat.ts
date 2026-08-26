@@ -13,6 +13,9 @@ export interface Turn {
   text?: string;
   tool?: string | null;
   tool_input?: string;
+  /** The vendor's tool_use id — what lets the ⧉ open this call's WHOLE input/output out of the
+   *  raw stream (the summary above is clipped by design). Absent on records that predate it. */
+  tool_id?: string;
   /** A command the panel can run, passed IN rather than imported: this module is loaded directly
    *  by its test under --experimental-strip-types, which needs `.ts` specifiers that tsc refuses
    *  when emitting, so it stays import-free. The list lives in `chatCommands.ts`. */
@@ -372,40 +375,73 @@ function fileCard(call: Turn, path: string): string {
     `</button>${preview}</div>`;
 }
 
+/** The arguments' one telling fact — the command, the path, the pattern — for the resting row.
+ *  Python already leads the summary with it; this pulls the value out of the quotes. */
+function gistOf(input: string): string {
+  for (const key of ["command", "file_path", "path", "pattern", "url", "query", "prompt"]) {
+    const v = argOf(input, key);
+    if (v) return v.split("\\n")[0];
+  }
+  return input.split("\n")[0];
+}
+
+/** A tool call as ONE resting row — "⌕ Bash · npm test · ✓ 41 lines".
+ *
+ *  "bash isn't well shown (not enough vertical spacing, too much text shown...)" — the box used
+ *  to open with its whole IN and half its OUT inline, so five calls buried the conversation. Now
+ *  the row is the transcript's unit: what ran, on what, how it went. Clicking the row PEEKS
+ *  (first lines of each half, breathing room, verbatim in <pre>); the ⧉ on each half opens the
+ *  WHOLE thing in its own read-only tab — exactly the Claude Code gesture — served from the raw
+ *  stream by the vendor's tool id, so nothing is clipped there.
+ */
 function toolBox(call: Turn, answer: Turn | undefined): string {
   const name = escapeHtml(call.tool || "tool");
   const input = (call.tool_input ?? "").trim();
   const out = (answer?.text ?? "").trim();
-  const io = (tag: string, body: string) => {
-    // Beyond a handful of lines the output folds: show the head, fold the rest behind its count.
-    // Four different truncation conventions had grown across the panel; this is the one rule.
+  const outLines = out ? out.split("\n").length : 0;
+  // The verdict at a glance. A missing answer is a call still running, never a silent success.
+  const failed = /^\s*(ERROR|error:)|Exit code [1-9]/m.test(out.slice(0, 400));
+  const note = !out
+    ? '<span class="tool-note tool-live">…</span>'
+    : failed
+      ? '<span class="tool-note tool-bad">✗</span>'
+      : `<span class="tool-note tool-ok">✓${outLines > 3 ? ` ${outLines} lines` : ""}</span>`;
+  // ALWAYS rendered, labelled with a word. It was gated on tool_id and drawn as a bare glyph —
+  // on the owner's real transcripts (which predate id stamping) the headline feature was
+  // therefore INVISIBLE, and where it did draw, a bare ⧉ was indistinguishable from a toggle
+  // (both verdicts from the closing critic round). Without an id the tab serves the stored
+  // text — clipped by the writer, but everything the record holds, honestly.
+  const open = (side: "in" | "out") =>
+    `<button class="io-open" data-io="${side}" data-toolid="${escapeHtml(call.tool_id ?? "")}"` +
+    ` data-tool="${escapeHtml(call.tool || "tool")}"` +
+    ` title="Open the whole ${side === "in" ? "input" : "output"} in its own tab">⧉ open</button>`;
+  const half = (tag: string, body: string, side: "in" | "out", cap: number) => {
     const lines = body.split("\n");
-    if (lines.length > 3) {
-      // "2-line summary at rest" — the professional sweep measured fourteen raw lines of
-      // line-numbered HTML sitting open in the transcript. Two lines carry the scent; the count
-      // carries the size; the click carries the rest.
-      const head = escapeHtml(lines.slice(0, 2).join("\n"));
-      const rest = escapeHtml(lines.slice(2).join("\n"));
-      return `<div class="io"><span class="io-tag">${tag}</span>` +
-        `<pre class="io-body">${head}\n</pre></div>` +
-        `<details class="io-more"><summary>${lines.length - 2} more lines</summary>` +
-        `<pre class="io-body">${rest}</pre></details>`;
-    }
+    const head = lines.slice(0, cap).join("\n");
+    const more = lines.length > cap
+      ? `<span class="io-count">+${lines.length - cap} more lines in the tab</span>` : "";
+    // The WHOLE stored half rides in an inert template, so the open click can hand the host
+    // real content even when the raw stream has no id to look this call up by.
     return `<div class="io"><span class="io-tag">${tag}</span>` +
-      `<pre class="io-body">${escapeHtml(body)}</pre></div>`;
+      `<pre class="io-body">${escapeHtml(head)}</pre>${open(side)}${more}</div>` +
+      `<template class="io-full" data-side="${side}">${escapeHtml(body)}</template>`;
   };
   // A capture the command saved is EVIDENCE, and evidence gets a card: name it, make it openable,
   // exactly as a file change does — one language for everything an agent shows you.
   const shots = imagePathsOf(out).map((p) =>
     `<button class="file-open io-shot" data-open="${escapeHtml(p)}" title="Open ${escapeHtml(p)}">` +
     `<span class="file-verb">captured</span><span class="file-name">${escapeHtml(p.split("/").pop() ?? p)}</span></button>`).join("");
-  return `<div class="turn turn-tool"><div class="who">🔧 ${name}</div>` +
-    (input ? io("IN", input) : "") +
+  return `<div class="turn turn-tool">` +
+    `<button class="tool-row" aria-expanded="false">` +
+    `<span class="tool-glyph">⌕</span><span class="tool-name">${name}</span>` +
+    `<span class="tool-gist">${escapeHtml(gistOf(input))}</span>${note}</button>` +
+    `<div class="tool-peek" hidden>` +
+    (input ? half("IN", input, "in", 4) : "") +
     // No OUT until there IS one: a command still running has no answer, and drawing an empty one
     // would claim it finished.
-    (out ? io("OUT", out) : "") +
+    (out ? half("OUT", out, "out", 6) : "") +
     shots +
-    `</div>`;
+    `</div></div>`;
 }
 
 export function renderTurn(turn: Turn): string {
@@ -603,7 +639,10 @@ export function chatDocument(
   if (run?.cost_usd != null) facts.push(`<span class="fact" title="cost so far">$${run.cost_usd.toFixed(2)}</span>`);
   if (run?.permission) facts.push(`<span class="fact" title="autonomy">${escapeHtml(run.permission.label)}</span>`);
   const header = name
-    ? `<header><div class="head-row"><button class="back" id="back" title="Back to the team">← Team</button>${up}` +
+    // "← Close", because that is what it DOES: it leaves this conversation and gives the column
+    // back. "← Team" collided with the Team tab's name while landing somewhere else entirely —
+    // the label-lie class the professional sweep hunts (ux-critic LOW).
+    ? `<header><div class="head-row"><button class="back" id="back" title="Close this conversation">← Close</button>${up}` +
       `<span class="who">${escapeHtml(name)}</span>` +
       `<span class="status">${escapeHtml(status ?? "")}</span></div>` +
       (facts.length ? `<div class="facts">${facts.join("")}</div>` : "") +
@@ -670,6 +709,29 @@ const vscode = acquireVsCodeApi();
     if (door) door.addEventListener("click", () => vscode.postMessage({ type: "openTeam" }));
     const back = document.getElementById("back");
     if (back) back.addEventListener("click", () => vscode.postMessage({ type: "back" }));
+    // A tool row PEEKS on click; its ⧉ opens the whole payload in a tab. Delegated, same as the
+    // cards below, because the transcript is re-rendered wholesale on every refresh.
+    document.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      const opener = t.closest(".io-open");
+      if (opener) {
+        e.stopPropagation();
+        // The stored text rides along: when the raw stream holds no id for this call (records
+        // that predate stamping), the host serves THIS text instead of an empty lookup.
+        const box = opener.closest(".tool-peek");
+        const tpl = box ? box.querySelector('.io-full[data-side="' + opener.dataset.io + '"]') : null;
+        vscode.postMessage({ type: "io", toolId: opener.dataset.toolid,
+                             side: opener.dataset.io, tool: opener.dataset.tool,
+                             text: tpl && tpl.content.textContent ? tpl.content.textContent : "" });
+        return;
+      }
+      const row = t.closest(".tool-row");
+      if (row) {
+        const peek = row.parentElement.querySelector(".tool-peek");
+        if (peek) { peek.hidden = !peek.hidden; row.setAttribute("aria-expanded", String(!peek.hidden)); }
+      }
+    });
     // One rule for every card: a thing with data-open opens where it points. Delegated, because
     // the transcript is re-rendered live and per-element bindings would go stale.
     document.addEventListener("click", (e) => {
@@ -943,8 +1005,39 @@ const STYLE = `
     margin: 0 0 .8em;
   }
   .turn-tool .who { padding: .4em .7em .25em; }
-  .turn-tool .io { display: flex; align-items: flex-start; gap: .55em; padding: .3em .7em .45em; }
+  /* The resting row: what ran, on what, how it went — one line, whole width, breathing room.
+     "not enough vertical spacing, too much text shown" — the transcript's unit is this row now;
+     the text lives behind it. */
+  .tool-row {
+    font: inherit; cursor: pointer; display: flex; align-items: baseline; gap: .55em;
+    width: 100%; text-align: left; padding: .5em .7em; min-width: 0;
+    color: var(--vscode-foreground); background: transparent; border: 0;
+  }
+  .tool-row:hover { background: var(--vscode-list-hoverBackground); }
+  .tool-row:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  .tool-glyph { flex: none; color: var(--wp-dim); }
+  .tool-name { flex: none; font-weight: 600; font-size: .92em; }
+  .tool-gist {
+    flex: 1 1 auto; min-width: 0; font-family: var(--vscode-editor-font-family); font-size: .88em;
+    color: var(--wp-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tool-note { flex: none; font-size: .82em; white-space: nowrap; }
+  .tool-ok { color: var(--vscode-charts-green, #89d185); }
+  .tool-bad { color: var(--vscode-charts-red, #f48771); font-weight: 700; }
+  .tool-live { color: var(--wp-dim); animation: blink 1.2s steps(1) infinite; }
+  .tool-peek { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
+  .turn-tool .io { display: flex; align-items: flex-start; gap: .55em; padding: .55em .7em .6em; }
   .turn-tool .io + .io { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
+  .turn-tool .io-body { line-height: 1.5; }
+  /* The whole thing, one click away — the Claude Code gesture. */
+  .io-open {
+    font: inherit; flex: none; cursor: pointer; line-height: 1;
+    padding: 2px 7px; border-radius: 4px; color: var(--wp-dim);
+    background: transparent; border: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 70%, transparent);
+  }
+  .io-open:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+  .io-open:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+  .io-count { flex: none; align-self: flex-end; color: var(--wp-dim); font-size: .78em; white-space: nowrap; }
   .turn-tool .io-tag {
     flex: 0 0 auto; font-size: 9px; font-weight: 700; letter-spacing: .1em;
     padding: 2px 6px; border-radius: 999px; margin-top: .15em;
