@@ -270,7 +270,11 @@ def test_focus_uses_windowfocus_sync_not_activate(monkeypatch):
         lambda cmd, **k: cmds.append(cmd),
     )
     nb.focus("aino")
-    assert cmds == [["xdotool", "windowfocus", "--sync", "0x1"]]
+    # Only xdotool calls are this test's business: patching `subprocess.run` also catches a
+    # dependency's platform probe (`uname -p`, from `platform.uname().processor`) that happens
+    # to run first, and an exact-list assertion turned that probe into a false failure.
+    xdo = [c for c in cmds if c and c[0] == "xdotool"]
+    assert xdo == [["xdotool", "windowfocus", "--sync", "0x1"]]
     assert not any("windowactivate" in c for c in cmds)
 
 
@@ -283,8 +287,9 @@ def test_focus_wid_targets_exact_window_and_skips_empty(monkeypatch):
         "interact.desktop.nested.subprocess.run", lambda cmd, **k: cmds.append(cmd)
     )
     nb.focus_wid("0x7")
-    assert cmds == [["xdotool", "windowfocus", "--sync", "0x7"]]
+    xdo = [c for c in cmds if c and c[0] == "xdotool"]
+    assert xdo == [["xdotool", "windowfocus", "--sync", "0x7"]]
     cmds.clear()
     for empty in (None, 0, "0"):
         nb.focus_wid(empty)
-    assert cmds == []
+    assert [c for c in cmds if c and c[0] == "xdotool"] == []
