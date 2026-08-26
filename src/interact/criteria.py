@@ -247,16 +247,17 @@ class Criteria:
         fit = self.qualifying(available_only, runnable)
         if fit:
             return f"{len(fit)} model(s) clear {self}; cheapest is {fit[0].id}"
-        lines = [f"nothing clears {self}:"]
+        lines = []
         for term in self.terms:
+            about = f"{term} — " if len(self.terms) > 1 else ""
             kept = [m for m in pool if term.holds(m)]
             if kept:
-                lines.append(f"  {term} — {len(kept)} of {len(pool)} pass")
+                lines.append(f"  {about}{len(kept)} of {len(pool)} pass")
                 continue
             scored = [(m.id, term.score_of(m)) for m in pool if term.score_of(m) is not None]
             if not scored:
-                lines.append(f"  {term} — nothing in the catalog is scored on '{term.field}'")
+                lines.append(f"  {about}nothing in the catalog is scored on '{term.field}'")
             else:
                 near = max(scored, key=lambda pair: pair[1] or 0)
-                lines.append(f"  {term} — nobody passes; best is {near[0]} at {near[1]:g}")
+                lines.append(f"  {about}nobody passes; best is {near[0]} at {near[1]:g}")
         return "\n".join(lines)

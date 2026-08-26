@@ -147,7 +147,7 @@ def _resolve_criteria(
     if chosen is None:
         who = f"model the {provider.name} CLI can run" if provider is not None else "configured model"
         raise ModelUnavailable(
-            f"no {who} clears {criteria}.\n{criteria.explain(available_only, runnable)}"
+            f"no {who} clears {criteria}:\n{criteria.explain(available_only, runnable)}"
         )
     return provider.model_id_for(chosen) if provider is not None else chosen.id
 

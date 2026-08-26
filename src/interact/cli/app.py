@@ -763,7 +763,7 @@ def agents_policy() -> None:
                         _, chosen = resolve_model(resolved, dict(os.environ), provider=provider_for(pname))
                         answers.append(f"{pname} ⇒ {chosen}")
                     except ModelUnavailable as err:
-                        answers.append(f"{pname} ⇒ NOTHING ({str(err).splitlines()[0]})")
+                        answers.append(f"{pname} ⇒ NOTHING ({str(err).splitlines()[0].rstrip(':')})")
                 note = "  " + "; ".join(answers) if answers else "  ⇒ every provider is switched off"
             print(f"  {agent:<16} {shown}{note}")
     if policy.toolsets:
