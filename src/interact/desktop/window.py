@@ -20,7 +20,7 @@ from pydantic import BaseModel, PrivateAttr, computed_field
 from interact.desktop.coords import CoordTransform
 from interact.desktop.cursor import Cursor
 from interact.desktop.video import _ffmpeg_grab_args, _VideoSession
-from interact.desktop.input import to_xdotool_key
+from interact.desktop.input import MULTI_CLICK_GAP_MS, to_xdotool_key
 from interact.parsing import Parse
 from interact.state import Element, InteractiveElement
 
@@ -534,18 +534,25 @@ class DesktopWindow(BaseModel):
                 await asyncio.to_thread(focus, self.name)
         await asyncio.sleep(_FOCUS_DELAY)  # let focus settle before the XTEST keystrokes
 
-    async def click(self, x: int, y: int, button: int = 1):
-        _log.debug("desktop_click wid=%s x=%s y=%s button=%s", self.wid, x, y, button)
+    async def click(self, x: int, y: int, button: int = 1, count: int = 1):
+        """Click at capture-space (x, y): ``button`` is the X code (1/2/3), ``count`` the number of
+        clicks — 2 is a double-click, delivered as ONE coalescing sequence on every path (#116)."""
+        _log.debug(
+            "desktop_click wid=%s x=%s y=%s button=%s count=%s", self.wid, x, y, button, count
+        )
         if self._backend is not None:
             sx, sy = self.to_screen(x, y)
-            await asyncio.to_thread(self._backend.click, sx, sy, self._BUTTON_NAMES.get(button, "left"))
+            await asyncio.to_thread(
+                self._backend.click, sx, sy, self._BUTTON_NAMES.get(button, "left"), count
+            )
             return
         xdo_x, xdo_y = self._input_xy(x, y)
         await self._activate()
         await asyncio.sleep(_FOCUS_DELAY)
         await self._mousemove(xdo_x, xdo_y)
         await asyncio.sleep(_FOCUS_DELAY)
-        await self._run("xdotool", "click", str(button))
+        repeat = ("--repeat", str(count), "--delay", str(MULTI_CLICK_GAP_MS)) if count > 1 else ()
+        await self._run("xdotool", "click", *repeat, str(button))
 
     async def type_text(self, text: str):
         if self._backend is not None:

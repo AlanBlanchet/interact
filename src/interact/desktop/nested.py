@@ -20,7 +20,12 @@ from interact.desktop.backend import (
     sandbox_child_env,
     write_sandbox_url_shims,
 )
-from interact.desktop.input import _BUTTONS, check_xdotool_key_output, to_xdotool_key
+from interact.desktop.input import (
+    MULTI_CLICK_GAP_MS,
+    _BUTTONS,
+    check_xdotool_key_output,
+    to_xdotool_key,
+)
 from interact.desktop.video import _VideoSession, _ffmpeg_grab_args
 
 
@@ -681,6 +686,20 @@ class NestedBackend(DesktopBackend):
 
     def mouse_up(self, button: str = "left") -> None:
         self._xdotool("mouseup", str(_BUTTONS[button]))
+
+    def click(self, x: float, y: float, button: str = "left", count: int = 1) -> None:
+        if count == 1:
+            super().click(x, y, button)
+            return
+        # A multi-click must COALESCE, so it is ONE xdotool process with an explicit inter-click
+        # delay — the rule `scroll` follows below (#88): presses fired as separate mousedown/mouseup
+        # processes arrive as unevenly spaced as process start-up, and a toolkit reads two of them
+        # as one double-click only by luck (#116).
+        self.move(x, y)
+        self._xdotool(
+            "click", "--repeat", str(count), "--delay", str(MULTI_CLICK_GAP_MS),
+            str(_BUTTONS[button]),
+        )
 
     def type_text(self, text: str) -> None:
         self._xdotool("type", "--delay", "20", text)

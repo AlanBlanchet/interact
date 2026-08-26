@@ -341,23 +341,26 @@ async def _named_locator(page, action):
     )
 
 
-async def _click_element(page, mgr, element: int, tab: int, button: str = "left") -> bool:
+async def _click_element(
+    page, mgr, element: int, tab: int, button: str = "left", click_count: int = 1
+) -> bool:
     """Click the numbered ``element`` on ``page``. Prefers the stored element map (its ref →
     locator, or center coordinates); if the map has no entry — it was cleared, or the ref came
     from a scan in a separate call — falls back to the live ``data-interact-ref="e{N}"`` attribute,
     which persists on the DOM across tool calls until the next scan. So a ref from an earlier
     get_interactive_elements still clicks even when the server-side map is stale (#34). Returns
-    False only when the element resolves by neither route (a genuinely stale ref)."""
+    False only when the element resolves by neither route (a genuinely stale ref). ``click_count``
+    is Playwright's own — 2 is a dblclick, the shape a double_click by ref takes here (#116)."""
     el = mgr.get_element(element, tab)
     if el is not None:
         if el.ref:
-            await page.locator(el.playwright_ref).click(button=button)
+            await page.locator(el.playwright_ref).click(button=button, click_count=click_count)
         else:
-            await page.mouse.click(el.center_x, el.center_y, button=button)
+            await page.mouse.click(el.center_x, el.center_y, button=button, click_count=click_count)
         return True
     locator = page.locator(ref_locator(f"e{element}"))
     if await locator.count() == 1:  # the badge is still on the live DOM — resolve it directly
-        await locator.click(button=button)
+        await locator.click(button=button, click_count=click_count)
         return True
     return False
 
@@ -400,11 +403,13 @@ def _fmt_cursor() -> str:
 
 
 def _click_verb(action) -> str:
-    """"clicked" / "right-clicked" / "middle-clicked" — the report must NAME a non-left button so
+    """"clicked" / "right-clicked" / "double-clicked" — the report must NAME a non-left button so
     the agent can see WHICH click it made; a right-click that opened no context menu is otherwise
-    indistinguishable from a left-click in the transcript (#91)."""
+    indistinguishable from a left-click in the transcript (#91). A double-click is named the same
+    way, for the same reason (#116)."""
     button = getattr(action, "button", "left")
-    return "clicked" if button == "left" else f"{button}-clicked"
+    verb = "double-clicked" if getattr(action, "click_count", 1) == 2 else "clicked"
+    return verb if button == "left" else f"{button}-{verb}"
 
 
 def _button_prefix(action) -> str:
@@ -548,15 +553,19 @@ async def _d_resize(c: _DesktopCtx) -> None:
     c.say(report + ". Element refs are now stale — re-run get_interactive_elements")
 
 
-@_handles("click", "click_element")
+@_handles("click", "click_element", "double_click")
 async def _d_click(c: _DesktopCtx) -> None:
     x, y, el, err, note = _resolve_action_coords(c.action, c.wid, c.win)
     if err:
         c.skip(err)
         return
     async with _mutating_step(c.win, c.i, c.action, c.step_reports) as step:
-        # click_element carries no `button`, so default left for it (#91).
-        await c.win.click(x, y, getattr(c.action, "button_code", 1))
+        # click_element carries no `button` (nor count), so default left, single, for it (#91). A
+        # double_click is this same primitive with count=2 — never two separate clicks, which don't
+        # coalesce into a toolkit-level dblclick (#116).
+        await c.win.click(
+            x, y, getattr(c.action, "button_code", 1), count=getattr(c.action, "click_count", 1)
+        )
         await asyncio.sleep(0.05)
         verb = _click_verb(c.action)
         step.text = _el_report(verb, el, note) if el else _xy_report(verb, x, y, note)
@@ -850,9 +859,9 @@ async def _run_actions_browser(
             before = await _capture(mgr, tab=current_tab)
             if action.name:
                 locator = await _named_locator(page, action)
-                await locator.click(button=action.button)
+                await locator.click(button=action.button, click_count=action.click_count)
             elif not await _click_element(
-                page, mgr, action.element, current_tab, action.button
+                page, mgr, action.element, current_tab, action.button, action.click_count
             ):
                 step_reports.append(_step(i, action.type, _element_miss(action.element)))
                 continue

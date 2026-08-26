@@ -55,6 +55,18 @@ def _backend_no_server() -> NestedBackend:
     return nb
 
 
+def test_double_click_is_one_xdotool_process_with_an_inter_click_delay(monkeypatch):
+    """#116, by the #88 rule above NestedBackend.scroll: button events fired as separate processes
+    arrive unevenly spaced, so a sequence that must COALESCE (a double-click) is ONE `xdotool click
+    --repeat` with an explicit delay — never two mousedown/mouseup process pairs."""
+    nb = _backend_no_server()
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(nb, "_xdotool", lambda *args: calls.append(args))
+    nb.click(5, 6, "left", count=2)
+    assert calls[-1] == ("click", "--repeat", "2", "--delay", "60", "1")
+    assert ("mousedown", "1") not in calls
+
+
 def test_capture_window_recovers_from_stale_wid(monkeypatch):
     """`maim -i <wid>` can fail when the wid went stale between enumeration and capture — a
     multi-process app (Chrome) recreates its top-level window (the recurring real-world

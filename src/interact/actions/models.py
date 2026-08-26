@@ -155,6 +155,9 @@ class ClickAction(_CoordinateTargetMixin):
     # X button codes for the desktop path (`DesktopWindow.click(x, y, button)`); Playwright takes
     # the NAME as-is, so only the desktop side needs the mapping (#91).
     BUTTON_CODES: ClassVar[dict[str, int]] = {"left": 1, "middle": 2, "right": 3}
+    # How many clicks this action is — the desktop path's `DesktopWindow.click(..., count=)`; a
+    # double-click is the same action with 2 (#116).
+    click_count: ClassVar[int] = 1
 
     type: Literal["click"] = "click"
     element: int | None = None
@@ -317,7 +320,7 @@ async def _click_selector(
                 target = loc.nth(i)
                 break
         target = target or loc.first
-    await (target.dblclick() if double else target.click(button=button))
+    await (target.dblclick(button=button) if double else target.click(button=button))
 
 
 async def _ref_center(page: Page, ref: str) -> tuple[float, float]:
@@ -415,30 +418,33 @@ class EvaluateJsAction(Action):
         return await page.evaluate(_wrap_js(self.script))
 
 
-class DoubleClickAction(Action):
+class DoubleClickAction(ClickAction):
     """Double-click a target — selects a word in a contenteditable (Lexical/Payload richtext) so a
     selection-gated toolbar appears, fires a dblclick handler, etc. Two separate `click` actions do
-    NOT coalesce into a dblclick, so this is the way to get one (#32). Browser only."""
+    NOT coalesce into a dblclick, so this is the way to get one (#32): Playwright's native dblclick
+    on the browser, and on a desktop/nested window the click primitive with count=2, the presses
+    spaced inside the toolkit's double-click interval (#116). It IS a click — same targeting
+    (ref / selector / element / name / x+y), same `button` — only the count differs."""
 
     type: Literal["double_click"] = "double_click"
-    ref: str | None = None
-    selector: str | None = None
-    x: int | None = None
-    y: int | None = None
+    click_count: ClassVar[int] = 2
 
     @model_validator(mode="after")
     def _require_target(self):
-        if not (self.ref or self.selector or (self.x is not None and self.y is not None)):
-            raise ValueError("Provide ref, selector, or x+y for double_click")
+        super()._require_target()
+        # A target-less `click` is refused by the runner it reaches; double_click has refused it
+        # here, at validation, since #32 — and keeps doing so.
+        if not self._targeting_groups():
+            raise ValueError("Provide ref, selector, element, name, or x+y for double_click")
         return self
 
     async def execute(self, page: Page):
         if self.ref:
-            await page.locator(ref_locator(self.ref)).dblclick()
+            await self._locator(page).dblclick(button=self.button)
         elif self.selector:
-            await _click_selector(page, self.selector, double=True)
+            await _click_selector(page, self.selector, double=True, button=self.button)
         else:
-            await page.mouse.dblclick(self.x, self.y)
+            await page.mouse.dblclick(self.x, self.y, button=self.button)
 
 
 class SelectTextAction(Action):
@@ -781,7 +787,6 @@ BROWSER_ONLY_ACTIONS = frozenset(
         "switch_tab",
         "close_tab",
         "emulate_device",
-        "double_click",
         "select_text",
         "handle_dialog",
         "press",

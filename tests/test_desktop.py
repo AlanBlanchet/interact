@@ -1,4 +1,5 @@
 import io
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from interact.desktop import (
     DesktopWindow,
     Motion,
 )
+from interact.desktop.backend import PortableBackend
 
 
 @pytest.mark.asyncio
@@ -169,13 +171,30 @@ def _win():
 
 
 @pytest.mark.parametrize("button", [1, 3], ids=["left", "right"])
+@pytest.mark.parametrize(
+    "count, repeat",
+    # #116: a double-click is ONE xdotool process with an explicit inter-click delay, so the two
+    # presses land evenly spaced inside the toolkit's double-click interval.
+    [(1, ()), (2, ("--repeat", "2", "--delay", "60"))],
+    ids=["single", "double"],
+)
 @pytest.mark.asyncio
-async def test_desktop_click_commands(mock_run, _win, button):
-    await _win.click(50, 100, button=button)
+async def test_desktop_click_commands(mock_run, _win, button, count, repeat):
+    await _win.click(50, 100, button=button, count=count)
     assert mock_run.call_count == 3
     mock_run.assert_any_call("xdotool", "windowactivate", "--sync", "123")
     mock_run.assert_any_call("xdotool", "mousemove", "--window", "123", "50", "100")
-    mock_run.assert_any_call("xdotool", "click", str(button))
+    mock_run.assert_any_call("xdotool", "click", *repeat, str(button))
+
+
+def test_portable_backend_double_click_uses_pynputs_own_count():
+    """macOS recognises a double-click by the click-state pynput stamps on each event ONLY inside
+    its own multi-click call — two separate press/release pairs never read as one there (#116)."""
+    be = PortableBackend.__new__(PortableBackend)  # no mss/pynput needed to exercise the call shape
+    be._mouse, be._Button = MagicMock(), SimpleNamespace(left="L", right="R", middle="M")
+    be.click(30, 40, "right", count=2)
+    assert be._mouse.position == (30, 40)
+    be._mouse.click.assert_called_once_with("R", 2)
 
 
 @pytest.mark.asyncio

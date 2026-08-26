@@ -14,6 +14,7 @@ Mirrors the browser ``Scenario`` but for the desktop: drive a real window throug
   free and non-intrusive (nothing touches the user's real session).
 """
 
+import asyncio
 import json
 import math
 import os
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from interact.desktop import DesktopBackend, NestedBackend
+from interact.desktop import DesktopBackend, DesktopWindow, NestedBackend
 
 FIXTURE = Path(__file__).parent / "fixtures" / "drag_window.py"
 PANEL = Path(__file__).parent / "fixtures" / "panel.py"
@@ -66,6 +67,16 @@ def test_drag_circle_geometry() -> None:
     assert all(abs(r - radius) < 1e-6 for r in radii), "every orbit point sits on the circle"
     assert any(x > cx for x, _ in orbit) and any(x < cx for x, _ in orbit), "spans left+right"
     assert any(y > cy for _, y in orbit) and any(y < cy for _, y in orbit), "spans up+down"
+
+
+@pytest.mark.parametrize("count", [1, 2], ids=["click", "double_click"])
+def test_click_count_repeats_the_press_release_pair(count: int) -> None:
+    """#116: a double-click is the click primitive with count=2 — the same down/up pair, repeated
+    at the same point, with a gap inside every toolkit's double-click interval."""
+    be = RecordingBackend()
+    be.click(10.0, 20.0, "left", count=count)
+    assert be.calls[0] == ("move", 10.0, 20.0)
+    assert be.calls[1:] == [("down", "left"), ("up", "left")] * count
 
 
 def _tk_python() -> str | None:
@@ -311,6 +322,28 @@ def test_desktop_window_drives_nested_backend(tmp_path: Path) -> None:
 
         # capture() on a bound window targets the nested window
         assert len(win.capture()) > 1000
+    finally:
+        backend.close()
+
+
+@pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")
+def test_double_click_fires_the_apps_dblclick_binding_in_the_nested_sandbox(tmp_path: Path) -> None:
+    """#116: two rapid `click`s don't reliably coalesce into an OS-level dblclick, so a product
+    behaviour gated on one stayed unverifiable live. `click(count=2)` through the SAME DesktopWindow
+    `run_actions` drives must fire the toolkit's OWN <Double-Button-1> binding, which the app
+    records itself."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+    backend = NestedBackend(display=98, size="700x600")
+    try:
+        backend.spawn([_tk_python(), str(PANEL), str(state_path), "360x420+120+90"])
+        widgets = _wait_for_state(state_path, lambda s: "widgets" in s)["widgets"]
+        win = DesktopWindow.find_in(backend, "interact-panel")
+        assert win is not None
+        wx, wy, ww, wh = widgets["Click Me"]
+        asyncio.run(win.click(wx + ww // 2 - win.x, wy + wh // 2 - win.y, count=2))
+        got = _wait_for_state(state_path, lambda s: s.get("double")).get("double")
+        assert got == "Click Me", f"the app saw no double-click (state double={got!r})"
     finally:
         backend.close()
 

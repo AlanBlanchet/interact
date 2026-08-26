@@ -17,7 +17,14 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 
-from interact.desktop.input import ABS_MAX, UinputPointer, _BUTTONS, _parse_chord, screen_to_abs
+from interact.desktop.input import (
+    ABS_MAX,
+    MULTI_CLICK_GAP_MS,
+    UinputPointer,
+    _BUTTONS,
+    _parse_chord,
+    screen_to_abs,
+)
 from interact.desktop.window import unreadable_window_error
 
 
@@ -212,11 +219,17 @@ class DesktopBackend(ABC):
     @abstractmethod
     def mouse_up(self, button: str = "left") -> None: ...
 
-    def click(self, x: float, y: float, button: str = "left") -> None:
+    def click(self, x: float, y: float, button: str = "left", count: int = 1) -> None:
+        """Press+release ``button`` at (x, y) ``count`` times. A double-click is count=2: the same
+        pair repeated at the same point, the gap inside the toolkit's double-click interval — two
+        separate ``click`` calls never reliably coalesce into one (#116)."""
         self.move(x, y)
-        self.mouse_down(button)
-        time.sleep(0.02)
-        self.mouse_up(button)
+        for i in range(count):
+            if i:
+                time.sleep(MULTI_CLICK_GAP_MS / 1000)
+            self.mouse_down(button)
+            time.sleep(0.02)
+            self.mouse_up(button)
 
     def drag(self, fx: float, fy: float, tx: float, ty: float, steps: int = 20) -> None:
         self.move(fx, fy)
@@ -419,6 +432,13 @@ class PortableBackend(DesktopBackend):
 
     def mouse_up(self, button: str = "left") -> None:
         self._mouse.release(self._button(button))
+
+    def click(self, x: float, y: float, button: str = "left", count: int = 1) -> None:
+        # pynput's own multi-click, not the base down/up loop: on macOS a double-click is recognised
+        # by the click-state pynput stamps on each event ONLY inside this call — two separate
+        # press/release pairs never read as one there (#116).
+        self.move(x, y)
+        self._mouse.click(self._button(button), count)
 
     def scroll(self, clicks: int, horizontal: bool = False) -> None:
         # pynput scroll(dx, dy): positive dy scrolls up, positive dx scrolls right.

@@ -23,6 +23,11 @@ from collections.abc import Callable
 
 ABS_MAX = 32767
 _BUTTONS = {"left": 1, "middle": 2, "right": 3}
+# Gap between the clicks of a multi-click (a double-click is count=2), in ms: well inside any
+# toolkit's double-click interval, far outside the ~20 ms hold of one press, so the presses land
+# as ONE dblclick and never as a long press. The single number every input path shares — the
+# uinput loop, the base backend loop, and xdotool's `click --delay` (#116).
+MULTI_CLICK_GAP_MS = 60
 
 # How long to wait for the X server to attach a freshly-created uinput node. Generous: the cost of
 # waiting is paid once per session, the cost of NOT waiting is an event dropped in silence.
@@ -299,11 +304,14 @@ class UinputPointer:
         self._ui.write(self._ecodes.EV_KEY, self._btn_code(button), 0)
         self._ui.syn()
 
-    def click(self, x: float, y: float, button: str = "left") -> None:
+    def click(self, x: float, y: float, button: str = "left", count: int = 1) -> None:
         self.move(x, y)
-        self.press(button)
-        time.sleep(0.02)
-        self.release(button)
+        for i in range(count):
+            if i:
+                time.sleep(MULTI_CLICK_GAP_MS / 1000)
+            self.press(button)
+            time.sleep(0.02)
+            self.release(button)
 
     def scroll(self, clicks: int, horizontal: bool = False) -> None:
         axis = self._ecodes.REL_HWHEEL if horizontal else self._ecodes.REL_WHEEL

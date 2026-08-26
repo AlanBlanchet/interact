@@ -38,7 +38,7 @@ state_file = sys.argv[1] if len(sys.argv) > 1 else None
 
 
 def main() -> None:
-    state = {"last": "", "count": 0, "typed": "", "focus": ""}
+    state = {"last": "", "count": 0, "typed": "", "focus": "", "double": ""}
 
     def persist() -> None:
         if state_file:
@@ -68,12 +68,20 @@ def main() -> None:
         status.config(text=f"{label}  (count={state['count']})")
         persist()
 
+    def record_double(label: str) -> None:
+        # The toolkit's OWN double-click detection (two presses within Tk's interval, at the same
+        # spot) — so a test can tell a real dblclick from two clicks that never coalesced (#116).
+        state["double"] = label
+        status.config(text=f"double: {label}")
+        persist()
+
     widgets = {}
     for label, color in (("Click Me", "#3060c0"), ("Increment", "#2a9d4a"), ("Reset", "#b03030")):
         button = tk.Button(root, text=label, bg=color, fg="white", activebackground=color,
                            font=("TkDefaultFont", 14, "bold"), height=2,
                            command=lambda lbl=label: record(lbl))
         button.pack(fill="x", padx=16, pady=8)
+        button.bind("<Double-Button-1>", lambda _e, lbl=label: record_double(lbl))
         widgets[label] = button
 
     tk.Label(root, text="Enter text:", bg="#f4f4f8", anchor="w").pack(fill="x", padx=16)
