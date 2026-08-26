@@ -346,7 +346,10 @@ export const WALL_FIXTURES: ReadonlySet<TileId> = new Set<TileId>([
 /** The plants and screens the stylesheet is asked to animate. Kept here so a prop cannot acquire
  *  ambient motion by accident: a tile is alive because the plan said so. */
 const LIVE_OF: Partial<Record<TileId, LiveId>> = {
-  plant: "sway",
+  /* No plant here, deliberately: pot plants swayed for two weeks and the owner read it as
+     "plants moving inside" — the eighth "floating trees" report, finally decoded. A plant has
+     no STATE to express, so it earns no ambient motion; equipment is live because on/off means
+     something. Motion carries meaning or it is noise. */
   screen: "screen",
   rack: "screen",
   board: "screen",
@@ -948,8 +951,8 @@ export function buildWorld(
       chamber.props.push({ x: MX + 2, y, tile: "pillar" });
       chamber.props.push({ x: MX + chamberW - 1, y, tile: "pillar" });
     }
-    chamber.props.push({ x: cx - 3, y: cy - 5, tile: "plant", live: "sway" });
-    chamber.props.push({ x: cx + 3, y: cy - 5, tile: "plant", live: "sway" });
+    chamber.props.push({ x: cx - 3, y: cy - 5, tile: "plant" });
+    chamber.props.push({ x: cx + 3, y: cy - 5, tile: "plant" });
     // A bench for every place in front of it, and the tables BETWEEN them — a seat whose north
     // cell is a table is a person sitting on a table.
     for (let i = -1; i <= 1; i++) chamber.props.push({ x: cx + i * BAY, y: cy + 4, tile: "bench" });
@@ -998,14 +1001,14 @@ export function buildWorld(
   });
   {
     const lx = lobbyX + 1;
-    lobby.props.push({ x: lx + 1, y: gateY - 4, tile: "plant", live: "sway" });
+    lobby.props.push({ x: lx + 1, y: gateY - 4, tile: "plant" });
     lobby.props.push({ x: lx + 4, y: gateY - 4, tile: "sofa" });
     lobby.props.push({ x: lx + 1, y: gateY + 4, tile: "sofa" });
-    lobby.props.push({ x: lx + 4, y: gateY + 4, tile: "plant", live: "sway" });
+    lobby.props.push({ x: lx + 4, y: gateY + 4, tile: "plant" });
     const only = uniques.pick(["cooler", "vending", "coffee", "tank"]);
     if (only) lobby.props.push({ x: lx + 5, y: gateY - 2, tile: only, live: LIVE_OF[only] });
     lobby.props.push({ x: lx, y: lobY + 1, tile: "board", live: "screen" });
-    lobby.props.push({ x: lx + 5, y: lobY + lobH - 2, tile: "plant", live: "sway" });
+    lobby.props.push({ x: lx + 5, y: lobY + lobH - 2, tile: "plant" });
     /* ONE desk and ONE couch per head, not one per pair: the lobby is where the discovered
        sessions and the department-less land, and most of them arrive FINISHED or FOREIGN — all
        of them wanting the waiting side at once. A rest end sized to half of them pushed the
@@ -1073,8 +1076,8 @@ export function buildWorld(
     props: [
       ...yardProps,
       { x: facadeX + 4, y: wallY + 2, tile: "mast" },
-      { x: facadeX + 2, y: wallY + 4, tile: "tree", live: "sway" },
-      { x: facadeX + 6, y: floorY - 3, tile: "pine", live: "sway" },
+      { x: facadeX + 2, y: wallY + 4, tile: "tree" },
+      { x: facadeX + 6, y: floorY - 3, tile: "pine" },
       { x: facadeX + 5, y: wallY + 3, tile: "planter" },
       { x: facadeX + 1, y: floorY - 4, tile: "blooms" },
     ],
@@ -1416,8 +1419,10 @@ export function buildWorld(
     if (!clear(x, y)) return;
     if (TALL.has(tile) && wet.has(x + ":" + y)) return;
     taken.add(x + ":" + y);
-    const windy = live === "sway" && WINDY.has(tile) && hash32("w:" + x + ":" + y) % 3 === 0;
-    scenery.push({ x, y, tile, live: windy ? "sway" : undefined });
+    // No sway anywhere, indoors or out: "there are plants still moving inside" was the eighth
+    // report of this one thing, and a plant has no state to express. `live` stays in the
+    // signature because equipment (screens, fans) still earns it.
+    scenery.push({ x, y, tile, live: live === "sway" ? undefined : live });
   };
 
   /* ── the ground itself ────────────────────────────────────────────────────────────────────

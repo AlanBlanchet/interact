@@ -758,16 +758,6 @@ body.vscode-high-contrast-light .wp {
   animation-delay: var(--d, 0s);
 }
 @keyframes wp-lamp { 0%, 100% { opacity: .22; } 50% { opacity: .46; } }
-.wp-lv-sway {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: wp-sway calc(var(--beat) * 3) cubic-bezier(.37, 0, .63, 1) infinite;
-  animation-delay: var(--d, 0s);
-}
-@keyframes wp-sway {
-  0%, 100% { transform: rotate(-1.6deg); }
-  50% { transform: rotate(1.6deg); }
-}
 .wp-lv-fan {
   transform-box: fill-box;
   transform-origin: 50% 50%;
@@ -1253,7 +1243,6 @@ ${STAMP_CSS}
   .wp-lv-screen,
   .wp-lv-steam,
   .wp-lv-lamp,
-  .wp-lv-sway,
   .wp-lv-fan,
   .wp-actor.is-brain::before,
   .wp-actor.is-talking .wp-body,

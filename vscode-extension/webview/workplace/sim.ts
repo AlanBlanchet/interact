@@ -39,7 +39,12 @@ var PACE = 3.6;
 /* Half a tile per footfall: two frames per tile walked. */
 var STRIDE = 0.5;
 /* How long a body pauses once it gets where it was going. */
-var DWELL = [900, 2600];
+/* How long a settled body rests before it even CONSIDERS an ambient stroll. This was
+   [900, 2600] — every stander re-rolled a walk roughly every two seconds, forty-five actors in
+   perpetual motion, and the owner could not land a click ("the agents are moving too much").
+   A minute-plus of stillness keeps the floor alive without making it a beehive; task walks
+   (spawns, errands, couriers) are scheduled elsewhere and stay immediate. */
+var DWELL = [45000, 110000];
 
 function hash(s) {
   var h = 2166136261;
@@ -204,9 +209,11 @@ function bodyFor(el) {
       mode: "settled", nextAt: 0, home: "", talkUntil: 0, errand: null,
       saidAt: 0, phase: phaseOf(id)
     };
-    /* Staggered from the start. Fifteen bodies that all decide to move on the same frame is the
-       single loudest tell that a scene is driven by a stylesheet rather than by people. */
-    b.nextAt = 2000 + b.phase * 9000;
+    /* Staggered from the start, and seeded from the SAME dwell the settled loop uses — this
+       was a flat 2-11s, so the whole cast took its first stroll inside the first ten seconds
+       however calm the dwell was afterwards. Fifteen bodies deciding on one frame is the
+       loudest tell that a scene is driven by a stylesheet rather than by people. */
+    b.nextAt = DWELL[0] + b.phase * (DWELL[1] - DWELL[0]);
   }
   /* A REFRESH REPLACES THE ELEMENT AND KEEPS THE BODY, so every value memoised on the body about
      what is WRITTEN on the element is stale the instant the two are re-paired. The --sx custom
@@ -262,6 +269,13 @@ function sendTo(b, x, y, mode) {
    journey and settles out of it. The stride is measured in DISTANCE walked, which is what keeps
    the feet under the person when the speed changes. */
 function stepWalk(b, dt) {
+  /* A body under the pointer HOLDS STILL, mid-journey included — "the agents are moving too
+     much, I can't click on them". The walk resumes the moment the pointer leaves; only this
+     body pauses, so the floor keeps living around it. */
+  if (HAND.on && Math.abs(HAND.tx - b.x) <= GAZE && Math.abs(HAND.ty - b.y) <= GAZE) {
+    b.speed = 0;
+    return;
+  }
   var want = PACE;
   if (b.walked < 0.35) want = PACE * (0.35 + (b.walked / 0.35) * 0.65);
   if (b.path.length - b.step <= 1) want = PACE * 0.55;
@@ -360,12 +374,54 @@ function decide(b, t) {
      middle of the floor near a couch rather than on it. Seated postures still get up — a floor
      where nothing ever moves is the other failure — but rarely, and they always come back. */
   if (b.el && b.el.getAttribute("data-posture") !== "stand" && rnd(b.id, n * 7 + 3) > 0.18) {
-    b.nextAt = t + 4200;
+    b.nextAt = t + 30000;
     return;
   }
   var cell = looseCell(roomOf(b), b.id, n);
   if (cell && sendTo(b, cell.x, cell.y, "roam")) return;
-  b.nextAt = t + 1800;
+  b.nextAt = t + 20000;
+}
+
+/* ── nameplates that never sit on each other ─────────────────────────────────────────────────
+   One pass over the whole cast per frame: walk them in reading order and give each plate the
+   lowest row no already-placed NEIGHBOUR is using. Neighbourhood is horizontal, because that is
+   the only direction a plate can collide in — and it is measured in TILES converted from the
+   plate's SCREEN width, since pulled back the plates hold constant screen size while the floor
+   shrinks (that mismatch is exactly what defeated the previous per-body formula).
+
+   Formulas were tried twice and both had blind spots: DOM parity says nothing about who stands
+   where, and every modulus over tile coordinates leaves some offset sharing a row. Only a pass
+   that can SEE the neighbours gets this right, and 45 bodies is nothing to sort. */
+var TAG_ROWS = 3;
+function declutter() {
+  var list = [];
+  for (var id in BODIES) {
+    var b = BODIES[id];
+    if (b.el && b.el.isConnected) list.push(b);
+  }
+  // Reading order: whoever is higher up the floor picks first, so the choice is stable frame to
+  // frame and a plate does not flicker between rows while its owner walks.
+  list.sort(function (p, q) { return p.y - q.y || p.x - q.x || (p.id < q.id ? -1 : 1); });
+  // A plate is ~40px wide on screen pulled back, ~66 world px near. Convert to tiles at the
+  // CURRENT zoom so the neighbourhood grows as the floor shrinks.
+  var z = VIEW.zoom || 1;
+  var reach = (z < 1 ? 44 / (W.tile * z) : 70 / W.tile) * 0.5 + 0.5;
+  var placed = [];
+  for (var i = 0; i < list.length; i++) {
+    var b2 = list[i];
+    var used = 0;
+    for (var j = placed.length - 1; j >= 0; j--) {
+      var o = placed[j];
+      if (b2.y - o.y > 1.5) break;               // far enough up the floor to stop looking
+      if (Math.abs(b2.x - o.x) < reach) used |= 1 << o.row;
+    }
+    var row = 0;
+    while (row < TAG_ROWS - 1 && (used & (1 << row))) row++;
+    b2.row = row;
+    placed.push(b2);
+    var ph = String(row);
+    if (b2.el.dataset.ph !== ph) b2.el.dataset.ph = ph;
+  }
 }
 
 /* ── drawing a body ──────────────────────────────────────────────────────────────────────────
@@ -415,12 +471,9 @@ function place(b, t) {
   }
   el.style.transform = "translate3d(" + px.toFixed(1) + "px," + (py + bob).toFixed(1) + "px,0)";
   el.style.zIndex = String(100 + Math.round(b.y * 4));
-  // Nameplate stagger phase, from the actor's TILE — three rows in SPACE. nth-child parity
-  // was tried first (DOM order says nothing about adjacency) and plain 2-parity second
-  // (distance-2 neighbours share it); (x + 2y) mod 3 separates distance-1 AND distance-2
-  // neighbours, which is what a dense floor actually holds.
-  const ph = String(((Math.round(b.x) + 2 * Math.round(b.y)) % 3 + 3) % 3);
-  if (el.dataset.ph !== ph) el.dataset.ph = ph;
+  // The nameplate row is assigned by declutter() once per frame across the WHOLE cast —
+  // a per-body formula cannot see its neighbours. (Tile parity was tried: every modulus has
+  // blind spots at some offset, and a calm floor never strolls out of the collision.)
   sayEdge(b, py);
   el.classList.toggle("face-left", b.face < 0);
   if (lean) el.style.setProperty("--lean", lean.toFixed(2) + "deg");
@@ -1344,6 +1397,7 @@ function frame(ts) {
     else decide(b, ts);
     place(b, ts);
   }
+  declutter();
   LIVE = 0;
   for (var id2 in BODIES) {
     var b2 = BODIES[id2];

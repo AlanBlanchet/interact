@@ -689,3 +689,79 @@ def test_the_camera_does_not_rewrite_the_scene_sixty_times_a_second(page):
     assert writes <= 2, (
         f"the camera rewrote its own state {writes} times while nothing about it changed"
     )
+
+
+def test_plants_hold_still_and_a_calm_floor_stays_calm(page):
+    """'There are plants still moving inside' — the eighth 'floating trees' report, finally
+    decoded: the pot plants carried an ambient sway animation, and settled agents re-roamed
+    every 0.9-2.6 SECONDS. Motion must carry meaning: a plant has no state to express, and a
+    resting colleague sits still. Task walks (spawn, errand, courier) stay untouched."""
+    swaying = page.evaluate(
+        "document.querySelectorAll('.wp-lv-sway').length")
+    assert swaying == 0, "a plant is animated — plants have no state to express"
+    # Ambient calm: over 6 real seconds with no registry events, the floor's total wandering
+    # must be a whisper. Before the fix every stander re-rolled a stroll ~every 2s.
+    drift = page.evaluate(
+        """(async () => {
+             // TILE position, never the transform string: bodies breathe (a sub-pixel bob) at
+             // rest, which is life, not wandering. What the owner cannot click is a body that
+             // TRAVELS, so travel is what this measures.
+             const sim = window.__wp;
+             const pos = () => Object.fromEntries(Object.entries(sim.bodies).map(
+               ([id, b]) => [id, Math.round(b.x * 4) + ':' + Math.round(b.y * 4)]));
+             // Silence the harness's own driver first: this preview swaps the WHOLE team
+             // between two snapshots every 7s, so bodies are under standing orders to walk —
+             // that is the fixture's purpose (pinned by the tests above). Ambient calm can only
+             // be measured with nothing happening, so stop the scene changes and the couriers.
+             for (let i = 1; i < 9999; i++) window.clearInterval(i);
+             for (let i = 1; i < 9999; i++) window.clearTimeout(i);
+             if (sim.clearNotes) sim.clearNotes();
+             // Let the cast finish whatever it was doing — arriving is legitimate motion, and
+             // earlier tests on this shared page leave journeys in flight. The complaint is
+             // about a SETTLED floor that will not sit still, so wait for settled.
+             const walking = () => Object.values(sim.bodies).filter(b => b.path).length;
+             for (let i = 0; i < 40 && walking() > 0; i++) {
+               await new Promise(r => setTimeout(r, 250));
+             }
+             if (sim.clearNotes) sim.clearNotes();
+             await new Promise(r => setTimeout(r, 500));
+             const before = pos();
+             await new Promise(r => setTimeout(r, 6000));
+             const after = pos();
+             let moved = 0;
+             for (const id in before) if (after[id] !== before[id]) moved++;
+             return { moved, total: Object.keys(before).length };
+           })()""")
+    assert drift["total"] > 3, "the fixture floor lost its cast — fixture bug, not a pass"
+    assert drift["moved"] <= max(2, drift["total"] // 8), (
+        f"{drift['moved']}/{drift['total']} actors wandered in 6s — the floor is still restless")
+
+
+def test_a_body_under_the_pointer_holds_still(page):
+    """'The agents are moving too much. I can't click on them' — a walker freezes while the
+    pointer rests on it, so a click lands on a colleague, never on where one used to be."""
+    frozen = page.evaluate(
+        """(async () => {
+             const sim = window.__wp; if (!sim || !sim.send || !sim.bodies) return { skip: true };
+             // Send somebody on a long walk, then park the pointer on them mid-journey.
+             const ids = Object.keys(sim.bodies);
+             if (ids.length < 2) return { skip: true };
+             const id = ids[0], b = sim.bodies[id], far = sim.bodies[ids[ids.length - 1]];
+             // Another body's own seat is guaranteed reachable, so the walk really starts.
+             sim.send(id, Math.round(far.seatX ?? far.x), Math.round(far.seatY ?? far.y));
+             await new Promise(r => setTimeout(r, 400));
+             const a = document.querySelector(`.wp-actor[data-run-id="${id}"]`);
+             if (!a || !b.path) return { skip: true };
+             const r = a.getBoundingClientRect();
+             const ev = new MouseEvent('pointermove',
+               { clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, bubbles: true });
+             document.querySelector('.wp-view').dispatchEvent(ev);
+             await new Promise(r2 => setTimeout(r2, 200));
+             const t1 = a.style.transform;
+             await new Promise(r2 => setTimeout(r2, 900));
+             const t2 = a.style.transform;
+             return { t1, t2 };
+           })()""")
+    if frozen.get("skip"):
+        pytest.skip("harness exposes no walk hook")
+    assert frozen["t1"] == frozen["t2"], "a hovered walker kept moving — the click has no target"
