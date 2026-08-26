@@ -247,6 +247,21 @@ class DesktopBackend(ABC):
         """
         return self.capture()
 
+    def spawn(self, argv: list[str], cwd: str | None = None,
+              env: dict[str, str] | None = None) -> subprocess.Popen:
+        """Launch a process on this desktop (the caller manages its lifetime). ``env`` is merged
+        OVER the environment this backend's children normally get — see :meth:`child_env` — so a
+        ``FOO=bar app`` launch (#117) sets FOO without dropping the backend's own pins."""
+        return subprocess.Popen(
+            argv, cwd=cwd, env=self.child_env(env),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+    def child_env(self, env: dict[str, str] | None = None) -> dict[str, str]:
+        """The environment a spawned child gets: this backend's base — the host's own for a real
+        session — with the caller's ``env`` layered on top. The sandbox overrides the base."""
+        return {**os.environ, **(env or {})}
+
     def start_video(self, name: str, fps: int) -> None:
         """Begin a non-blocking recording of one window — returns at once so the agent can drive
         actions during the capture, then call :meth:`stop_video` to export (#61/#62)."""
@@ -294,10 +309,6 @@ class LocalBackend(DesktopBackend):
 
     def capture(self) -> bytes:
         return subprocess.run(["maim"], capture_output=True, check=True).stdout
-
-    def spawn(self, argv: list[str], cwd: str | None = None) -> subprocess.Popen:
-        """Launch a process on the real session (caller manages its lifetime)."""
-        return subprocess.Popen(argv, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def move(self, x: float, y: float) -> None:
         self._pointer.move(x, y)

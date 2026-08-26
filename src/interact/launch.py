@@ -60,10 +60,32 @@ def _resolve_nested_size(size: str | None, device: str | None) -> tuple[str | No
     return None, None
 
 
+# A POSIX shell variable assignment (`FOO=bar`) — the one token shape a simple command may carry
+# before its executable. `_argv_executable` skips them, `split_env_assignments` peels them (#117).
+_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
 def _argv_executable(argv: list[str]) -> str | None:
     """The executable token in a command, skipping an ``env`` prefix and its ``VAR=value`` pairs —
     so ``env LANG=C google-chrome`` resolves to ``google-chrome``. Shared by the launch rewriters."""
-    return next((t for t in argv if t != "env" and not re.match(r"^\w+=", t)), None)
+    return next((t for t in argv if t != "env" and not _ENV_ASSIGNMENT_RE.match(t)), None)
+
+
+def split_env_assignments(argv: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Peel the leading ``VAR=value`` tokens off a command into the environment they mean.
+
+    ``FOO=bar app --x`` is shell phrasing for "run ``app --x`` with FOO set", but it carries no
+    shell marker, so it reached exec verbatim and ``Popen(["FOO=bar", "app"])`` died with
+    ``FileNotFoundError: 'FOO=bar'`` (#117). Splitting it here keeps the command on the exec path,
+    so the launch rewrites still apply (a ``bash -c`` launch would bypass them). An explicit ``env``
+    prefix is left whole — the ``env`` binary applies its own assignments. Returns ``(env, argv)``;
+    an assignments-only command leaves argv empty for the caller to refuse."""
+    env: dict[str, str] = {}
+    rest = list(argv)
+    while rest and _ENV_ASSIGNMENT_RE.match(rest[0]):
+        name, value = rest.pop(0).split("=", 1)
+        env[name] = value
+    return env, rest
 
 
 def _flutter_software_render(argv: list[str]) -> tuple[list[str], str]:

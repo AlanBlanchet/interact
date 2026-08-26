@@ -104,3 +104,11 @@ def test_running_command_ignores_an_exited_launch(backend):
     backend.spawn([sys.executable, "-c", "pass"])
     time.sleep(0.5)
     assert backend.running_command([sys.executable, "-c", "pass"]) is None
+
+
+def test_spawn_layers_a_launch_env_over_the_sandbox_pins(backend):
+    """`FOO=bar app` (#117): the caller's variables reach the child with the sandbox's own DISPLAY
+    pin still underneath them — the launch env is merged OVER the sandbox's, never swapped for it."""
+    proc = backend.spawn(["sh", "-c", "echo $FOO $DISPLAY"], env={"FOO": "bar"})
+    assert proc.wait(timeout=10) == 0
+    assert backend.proc_output(proc).split() == ["bar", ":99"]

@@ -273,7 +273,8 @@ class NestedBackend(DesktopBackend):
         sink = self._ensure_audio_sink()
         return f"{sink}.monitor" if sink else None
 
-    def spawn(self, argv: list[str], cwd: str | None = None) -> subprocess.Popen:
+    def spawn(self, argv: list[str], cwd: str | None = None,
+              env: dict[str, str] | None = None) -> subprocess.Popen:
         """Launch a process inside the nested display (tracked for teardown), capturing its
         stdout/stderr so a crash can be explained. Reaps previously-exited apps first.
 
@@ -287,13 +288,19 @@ class NestedBackend(DesktopBackend):
         path = self._open_log("app")
         with open(path, "wb") as f:
             proc = subprocess.Popen(
-                argv, env=self.env, cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
+                argv, env=self.child_env(env), cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
         self._procs.append(proc)
         self._logs[proc.pid] = path
         self._commands[proc.pid] = list(argv)
         return proc
+
+    def child_env(self, env: dict[str, str] | None = None) -> dict[str, str]:
+        """The sandbox's containment env (DISPLAY, the X11 pins, the URL shim on PATH) with the
+        caller's ``env`` layered on top — a launch may add or override a variable on purpose, never
+        lose the pins by accident (#117)."""
+        return {**self.env, **(env or {})}
 
     @property
     def _commands(self) -> dict[int, list[str]]:

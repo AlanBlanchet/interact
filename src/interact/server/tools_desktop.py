@@ -3,11 +3,15 @@ record tool and its per-surface halves (desktop vs browser) live here beside the
 surfaces that own the sandbox."""
 
 import asyncio
+import shlex
+from pathlib import Path
 
 from interact import desktop
 from interact.browser import BrowserManager
 from interact.desktop import DesktopWindow
-from interact.launch import _resolve_nested_size, apply_launch_rewrites, needs_shell
+from interact.launch import (
+    _resolve_nested_size, apply_launch_rewrites, needs_shell, split_env_assignments,
+)
 from interact.server import core, sandbox, targets, vlm
 from interact.server.core import _DEFAULT_SESSION, _NO_WINDOWS_MSG, _session_response, config, mcp
 
@@ -132,7 +136,8 @@ async def launch_app(
     command: the command to run (e.g. "xterm", "flutter run -d linux", a built binary's path).
         Shell syntax works too — "cd /my/proj && uv run app" runs via bash — but prefer `cwd=`
         for a project directory (a plain command keeps the launch rewrites, e.g. Flutter's
-        software-GL flag, which shell commands bypass).
+        software-GL flag, which shell commands bypass). A `VAR=value` prefix ("FLUTTER_DEBUG=1
+        ./bundle/app") sets that variable for the launch and keeps the rewrites too.
     wait: seconds to wait for a window to appear before returning.
     size: nested display resolution as "WxH" (overrides device + the default).
     device: a display shape — "phone" (412x915), "tablet" (820x1180), or "desktop" (1280x800).
@@ -143,9 +148,6 @@ async def launch_app(
         from an older instance over the current window. Pass replace=False to run two apps side
         by side on one display.
     """
-    import shlex
-    from pathlib import Path
-
     if unsupported := targets._desktop_unsupported():
         return unsupported
     config.refresh()
@@ -161,6 +163,7 @@ async def launch_app(
         backend = sandbox._get_sandbox(resolved_size)
     except RuntimeError as e:  # Xephyr/Xvfb not installed
         return f"ERROR: sandbox unavailable — {e}"
+    env: dict[str, str] | None = None
     if needs_shell(command):
         argv, flutter_note = ["bash", "-c", command], ""
     else:
@@ -168,8 +171,17 @@ async def launch_app(
             argv = shlex.split(command)
         except ValueError as e:
             return f"ERROR: could not parse command ({e})"
+        # `FOO=bar app` is shell phrasing with no shell marker: exec'd verbatim it died on a program
+        # named 'FOO=bar' (#117). The assignments become the launch env and the command stays on the
+        # exec path, so the rewrites below still apply.
+        assignments, argv = split_env_assignments(argv)
         if not argv:
-            return "ERROR: empty command"
+            if not assignments:
+                return "ERROR: empty command"
+            return (f"ERROR: no command after the assignments — `{command}` sets "
+                    f"{', '.join(assignments)} but names no program to run; put it after them, "
+                    f"e.g. `{command} app`")
+        env = assignments or None
         argv, flutter_note = apply_launch_rewrites(argv, getattr(backend, "display", ":?"))
     # An identical command already running is almost never a second app the caller wants: it is a
     # retried tool call. Spawning anyway produced two same-titled windows, and target="nested:<title>"
@@ -190,7 +202,20 @@ async def launch_app(
         kill_apps = getattr(backend, "kill_apps", None)
         if kill_apps is not None:
             replaced = await asyncio.to_thread(kill_apps)
-    proc = await asyncio.to_thread(backend.spawn, argv, cwd)
+    # An exec that cannot start raised straight out of the tool, reaching the agent as FastMCP's
+    # generic exception text instead of a guided ERROR: the prefix is consumed now, so the name
+    # shown is the real command (#117).
+    env_note = f" with {shlex.join(f'{k}={v}' for k, v in env.items())} set" if env else ""
+    tried = f"`{shlex.join(argv)}`{env_note}"
+    try:
+        proc = await asyncio.to_thread(backend.spawn, argv, cwd, env)
+    except FileNotFoundError:
+        return (f"ERROR: {argv[0]!r} is not an executable on the sandbox PATH (nor an existing "
+                f"path) — nothing was launched. Tried {tried}. Pass the binary's absolute path, or "
+                f"cwd= with a path relative to it (e.g. ./build/app).")
+    except PermissionError:
+        return (f"ERROR: {argv[0]!r} exists but is not executable — `chmod +x` it first. Nothing "
+                f"was launched; tried {tried}.")
     deadline = asyncio.get_event_loop().time() + wait
     windows: list[tuple[int, str]] = []
     while asyncio.get_event_loop().time() < deadline:
