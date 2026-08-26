@@ -22,7 +22,10 @@ from interact.agents.providers import AgentProvider
 
 
 def resolve_model(
-    model: str | None, env: dict[str, str], available_only: bool = True
+    model: str | None,
+    env: dict[str, str],
+    available_only: bool = True,
+    provider: AgentProvider | None = None,
 ) -> tuple[dict[str, str], str | None]:
     """Split a model id into (env overlay, what the vendor CLI should be asked for).
 
@@ -38,7 +41,7 @@ def resolve_model(
     """
     if not model:
         return {}, None
-    model = _resolve_criteria(model, available_only)
+    model = _resolve_criteria(model, available_only, env, provider)
     overlay = overlay_for(model, env)
     if not overlay:
         return {}, model
@@ -99,7 +102,10 @@ class ModelUnavailable(RuntimeError):
     quietly resolves to some other model is worse than none, because it looks like it worked."""
 
 
-def _resolve_criteria(model: str, available_only: bool) -> str:
+def _resolve_criteria(
+    model: str, available_only: bool, env: dict[str, str] | None = None,
+    provider: AgentProvider | None = None,
+) -> str:
     """A CRITERION where a model id goes.
 
     "we could say agent: 'MMLU > 0.8' to use a model that has MMLU above a criteria for a
@@ -107,27 +113,39 @@ def _resolve_criteria(model: str, available_only: bool) -> str:
     is re-resolved every spawn, so a better or cheaper model that ships tomorrow is used tomorrow.
 
     Told apart by SHAPE, not by a flag: a model id has no comparison operator and no spaces, so
-    `claude-sonnet-5` is an id and `screenspot > 0.85 and price < 10` is a requirement. The
+    `claude-sonnet-5` is an id and `gui.screenspot > 0.85 and price.in < 10` is a requirement. The
     vendor CLI never learns criteria exist — by the time it is invoked this is a model name.
+
+    With a `provider`, the pool is what THAT vendor CLI can be pointed at (`AgentProvider.can_run`)
+    — its own vendor's models through its login, a routed one when its key is here — never the
+    cheapest model in the whole catalog handed to a binary that cannot run it.
     """
-    from interact.criteria import Criteria, CriteriaError
+    from interact.criteria import Criteria, CriteriaError, Variables
 
     if model.startswith("@"):
         # A profile: a NAME for a criterion (`"profiles": {"eyes": "cap.vlm and ..."}`), honoured
         # wherever a model may be named — resolved to its rule here, then read like any criterion.
         model = load_policy().rule(model)
-    if not any(op in model for op in ("<", ">", "=")) and " and " not in model:
+    # A lone variable (`cap.vlm`) is a criterion too — and no model id is spelled like a variable.
+    is_criterion = (
+        any(op in model for op in ("<", ">", "="))
+        or " and " in model
+        or model.strip() in {v.name for v in Variables.all()}
+    )
+    if not is_criterion:
         return model
     try:
         criteria = Criteria.parse(model)
     except CriteriaError as err:
         raise ModelUnavailable(f"{model!r} is not a usable model criterion: {err}") from err
-    chosen = criteria.choose(available_only=available_only)
+    runnable = (lambda m: provider.can_run(m, env or {})) if provider is not None else None
+    chosen = criteria.choose(available_only=available_only, runnable=runnable)
     if chosen is None:
+        who = f"model the {provider.name} CLI can run" if provider is not None else "configured model"
         raise ModelUnavailable(
-            f"no configured model clears {criteria}.\n{criteria.explain(available_only)}"
+            f"no {who} clears {criteria}.\n{criteria.explain(available_only, runnable)}"
         )
-    return chosen.id
+    return provider.model_id_for(chosen) if provider is not None else chosen.id
 
 
 def _interact_command() -> tuple[str, list[str]]:
@@ -306,14 +324,6 @@ async def run_agent(
     # A run named after its agent DEFINITION ("visual-critic") is self-describing in the panel;
     # falling back to the provider ("claude") tells you nothing about what it is for.
     label = name or agent or provider.name
-    argv = provider.command(
-        task, cwd=cwd, model=model,
-        # Once, never twice: skip the mesh when the provider's own config already registers
-        # interact — the child would otherwise carry two registrations of the same server.
-        mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name) else None,
-        run_id=run_id, agent=agent, permission_mode=permission_mode,
-        allowed_tools=tools_for_agent(agent),
-    )
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
     # otherwise a grandchild would inherit its grandparent's id and the tree would be wrong.
     env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
@@ -334,8 +344,19 @@ async def run_agent(
     else:
         # No named profile, but the model id may still carry its own routing — a company file or the
         # panel can declare `ollama/deepseek-v4-pro:cloud` directly.
-        routed, model = resolve_model(model, dict(os.environ))
+        routed, model = resolve_model(model, dict(os.environ), provider=provider)
         env.update(routed)
+    # The argv is built AFTER the model is decided: it used to be built first, with the raw text,
+    # so a criterion, a `@profile` or a routed `ollama/x` id reached the binary unresolved while
+    # the resolved name went only into the env and the run record.
+    argv = provider.command(
+        task, cwd=cwd, model=model,
+        # Once, never twice: skip the mesh when the provider's own config already registers
+        # interact — the child would otherwise carry two registrations of the same server.
+        mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name) else None,
+        run_id=run_id, agent=agent, permission_mode=permission_mode,
+        allowed_tools=tools_for_agent(agent),
+    )
     # The child writes its OWN stream straight to disk. Piping it through a coroutine tied the
     # events to the caller's event loop: a caller that spawned and returned lost every event, and
     # the run then looked HEALTHY — status done, exit 0, no cost, no activity — which is worse

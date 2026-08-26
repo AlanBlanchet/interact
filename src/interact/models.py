@@ -611,6 +611,23 @@ class Model(RegistryMixin, BaseModel):
             # the provider. Knowing nothing usable is not the same as knowing there is nothing.
             cls._served = {**cls._served, "ollama": served}
 
+    #: Set once anything has taken charge of the registry — a load, or a test's own _register() —
+    #: so `catalog()` fills it exactly once and never over a fixture.
+    _catalog_loaded: ClassVar[bool] = False
+
+    @classmethod
+    def catalog(cls) -> list["Model"]:
+        """The registry, loaded from the bundled data the FIRST time anything asks it a question.
+
+        Only `interact.runtime` used to load it, so a process that never imported that module —
+        the CLI's `agents spawn` — answered every criterion from an EMPTY list, read as "no model
+        is configured at all", while the tests passed because conftest imports runtime for them.
+        A registry somebody already filled (`load_registry`, or a test's `_register`) is left alone.
+        """
+        if not cls._registry and not cls._catalog_loaded:
+            cls.load_registry()
+        return cls._registry
+
     @classmethod
     def load_registry(cls, models_json: str | None = None) -> None:
         """Populate the registry from models.json, falling back to litellm.
@@ -628,6 +645,7 @@ class Model(RegistryMixin, BaseModel):
         cls._component_recommendations = []
         cls._coord_formats = {}
         cls._served = {}
+        cls._catalog_loaded = True
         raw = models_json or PackageData.models_raw()
         if raw:
             cls._load_from_json(raw)

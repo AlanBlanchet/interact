@@ -933,9 +933,11 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
 
     try:
         print(asyncio.run(_go()))
-    except ValueError as e:
-        # The argv builder validates the permission mode, four frames down. Without this the CLI
-        # printed its traceback where every other interact failure prints one actionable line.
+    except (ValueError, RuntimeError) as e:
+        # The argv builder validates the permission mode, four frames down; a criterion nothing
+        # clears, a profile that does not exist and a provider switched off refuse the same way.
+        # Without this the CLI printed its traceback where every other interact failure prints
+        # one actionable line.
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(2) from None
 
@@ -976,7 +978,7 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
 
     try:
         raise SystemExit(asyncio.run(_go()))
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         # The argv builder validates the mode; without this the CLI printed its traceback while
         # every other interact failure prints one line an agent (or a person) can act on.
         print(f"ERROR: {e}", file=sys.stderr)

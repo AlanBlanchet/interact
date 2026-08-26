@@ -10,10 +10,27 @@ itself, re-resolved every spawn — and each variable is NAMESPACED BY ITS SOURC
 `intelligence` hides who measured it and two leaderboards rarely agree.
 """
 
+from contextlib import contextmanager
+
 import pytest
 
 from interact.models import Benchmark, Model, ModelCapability
 from interact.criteria import Criteria, CriteriaError, Variables
+
+
+@contextmanager
+def catalog_of(*models: Model):
+    """Swap the catalog for exactly these models, then put back what was there. Later tests — and
+    the self-loading `Model.catalog()` — read the same registry, and an emptied one is not
+    "unloaded": it is a catalog that says there are no models."""
+    saved = list(Model.registry())
+    Model._reset()
+    for model in models:
+        Model._register(model)
+    try:
+        yield
+    finally:
+        Model._registry[:] = saved
 
 
 @pytest.fixture
@@ -23,18 +40,15 @@ def registry():
     They carry no provider key, so every selection passes `available_only=False` — availability
     is its own concern, and mixing it in would make these pass or fail on the machine's env.
     """
-    Model._reset()
-    for spec in [
-        dict(id="cheap-eyes", capabilities={ModelCapability.VLM},
-             input_cost_per_million=0.5, output_cost_per_million=1.0, intelligence_score=10.0),
-        dict(id="sharp-eyes", capabilities={ModelCapability.VLM},
-             input_cost_per_million=8.0, output_cost_per_million=24.0, intelligence_score=40.0),
-        dict(id="blind-but-cheap", capabilities=set(),
-             input_cost_per_million=0.1, output_cost_per_million=0.2, intelligence_score=20.0),
-    ]:
-        Model._register(Model(provider="p", **spec))
-    yield
-    Model._reset()
+    with catalog_of(
+        Model(provider="p", id="cheap-eyes", capabilities={ModelCapability.VLM},
+              input_cost_per_million=0.5, output_cost_per_million=1.0, intelligence_score=10.0),
+        Model(provider="p", id="sharp-eyes", capabilities={ModelCapability.VLM},
+              input_cost_per_million=8.0, output_cost_per_million=24.0, intelligence_score=40.0),
+        Model(provider="p", id="blind-but-cheap", capabilities=set(),
+              input_cost_per_million=0.1, output_cost_per_million=0.2, intelligence_score=20.0),
+    ):
+        yield
 
 
 def test_every_variable_says_who_measured_it(registry):
@@ -110,6 +124,7 @@ def test_a_criterion_where_a_model_id_goes_resolves_before_the_cli_sees_it(regis
 
     _, name = resolve_model("claude-sonnet-5", {})
     assert name == "claude-sonnet-5", "an id passes through untouched"
+    assert resolve_model("gpt-4.1", {})[1] == "gpt-4.1", "a dotted id is still an id, not a variable"
     _, name = resolve_model("aa.intelligence >= 30", {}, available_only=False)
     assert name == "sharp-eyes", "a criterion must arrive at the CLI as a real model"
 
@@ -120,3 +135,50 @@ def test_a_criterion_that_matches_nothing_refuses_loudly(registry):
     with pytest.raises(ModelUnavailable) as e:
         resolve_model("aa.intelligence > 999", {}, available_only=False)
     assert "999" in str(e.value)
+
+
+def test_the_catalog_loads_itself_in_a_process_that_never_asked_for_it():
+    """The CLI spawn path never imported `interact.runtime`, so the catalog was EMPTY there and
+    every criterion died with "no model is configured at all" — while these tests passed, because
+    conftest loads the catalog for them. A fresh interpreter is the only faithful stand-in for
+    the CLI process: nothing here may pre-load anything."""
+    import subprocess
+    import sys
+
+    code = (
+        "from interact.agents.run import resolve_model; "
+        "print(resolve_model('aa.intelligence >= 30', {}, available_only=False)[1])"
+    )
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr[-600:]
+    assert run.stdout.strip(), "a criterion must resolve in a process that never loaded the catalog"
+
+
+def test_a_criterion_only_picks_what_the_vendor_cli_can_run(monkeypatch):
+    """`@eyes` resolved to a Gemini id and was handed to the claude binary — structurally
+    unrunnable. The pool a vendor CLI chooses from is what THAT CLI can be pointed at: its own
+    vendor's models through its own login, or a model interact can route it to (ollama, when its
+    key or daemon is there) — never a cheaper model from a provider it cannot reach."""
+    from interact.agents.providers import provider_for
+    from interact.agents.run import ModelUnavailable, resolve_model
+
+    def eyes(**spec):
+        return Model(capabilities={ModelCapability.VLM}, intelligence_score=30.0, **spec)
+
+    claude, codex = provider_for("claude"), provider_for("codex")
+    with catalog_of(
+        eyes(provider="gemini", id="cheap-eyes", input_cost_per_million=0.1, output_cost_per_million=0.2),
+        eyes(provider="ollama", id="local-eyes", input_cost_per_million=0.2, output_cost_per_million=0.4),
+        eyes(provider="anthropic", id="claude-eyes", input_cost_per_million=3.0, output_cost_per_million=15.0),
+    ):
+        monkeypatch.setattr(Model, "is_available", lambda self: False)  # no key, no daemon anywhere
+        routed, chosen = resolve_model("cap.vlm", {}, provider=claude)
+        assert (routed, chosen) == ({}, "claude-eyes"), "Claude runs through the CLI's own login — no key"
+
+        monkeypatch.setattr(Model, "is_available", lambda self: self.provider == "ollama")
+        routed, chosen = resolve_model("cap.vlm", {}, provider=claude)
+        assert chosen == "local-eyes" and routed.get("ANTHROPIC_BASE_URL"), "a routed model arrives WITH its endpoint"
+
+        with pytest.raises(ModelUnavailable) as e:
+            resolve_model("cap.vlm", {}, provider=codex)
+        assert "codex" in str(e.value), "say WHICH CLI has nothing to run"

@@ -203,30 +203,48 @@ class Criteria:
             raise CriteriaError("an empty criterion selects nothing — say what you want")
         return cls(tuple(terms), text.strip())
 
-    def qualifying(self, available_only: bool = True) -> list[Model]:
+    @staticmethod
+    def _pool(available_only: bool, runnable: Callable[[Model], bool] | None) -> list[Model]:
+        """Who is in the running. `runnable`, when given, IS the pool: the caller — a vendor CLI —
+        knows what it can actually be pointed at, its own login included. Otherwise every model
+        whose key is here (or every model at all, for a dry look at the catalog)."""
+        models = Model.catalog()
+        if runnable is not None:
+            return [m for m in models if runnable(m)]
+        return [m for m in models if not available_only or m.is_available()]
+
+    def qualifying(
+        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
+    ) -> list[Model]:
         """Every model clearing EVERY term, cheapest first.
 
         Cheapest-first is the point: the criterion is a FLOOR on quality, and under that floor
         thrift decides — the opposite of a pin, where the price is whatever the pin happened to
         cost on the day it was typed.
         """
-        pool = [m for m in Model.registry() if not available_only or m.is_available()]
-        fit = [m for m in pool if all(t.holds(m) for t in self.terms)]
+        fit = [m for m in self._pool(available_only, runnable) if all(t.holds(m) for t in self.terms)]
         fit.sort(key=lambda m: m.cost_score)
         return fit
 
-    def choose(self, available_only: bool = True) -> Model | None:
+    def choose(
+        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
+    ) -> Model | None:
         """The one to use, or None. NEVER a fallback: a criterion that quietly resolves to some
         other model is worse than no criterion, because it looks like it worked."""
-        fit = self.qualifying(available_only)
+        fit = self.qualifying(available_only, runnable)
         return fit[0] if fit else None
 
-    def explain(self, available_only: bool = True) -> str:
+    def explain(
+        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
+    ) -> str:
         """Why nothing qualified — which term excluded everyone, and how close anyone got."""
-        pool = [m for m in Model.registry() if not available_only or m.is_available()]
+        pool = self._pool(available_only, runnable)
         if not pool:
-            return "no model is configured at all — add a provider key first"
-        fit = self.qualifying(available_only)
+            if runnable is None:
+                return "no model is configured at all — add a provider key first"
+            return ("nothing in the catalog is runnable through this CLI — it runs its own vendor's "
+                    "models through its login; anything else needs a route and that provider's key")
+        fit = self.qualifying(available_only, runnable)
         if fit:
             return f"{len(fit)} model(s) clear {self}; cheapest is {fit[0].id}"
         lines = [f"nothing clears {self}:"]

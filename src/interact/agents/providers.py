@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from interact.agents.events import AgentEvent
+from interact.models import Model
+from interact.agents.profiles import overlay_for
 
 
 #: A transcript is read by a human, and a 50k-char tool result is not read — it is scrolled past,
@@ -82,6 +84,20 @@ class AgentProvider(ABC):
     def available(self) -> bool:
         """Is the CLI installed? (Being logged in is the CLI's business, never ours.)"""
         return shutil.which(self.binary) is not None
+
+    #: Catalog providers whose models this CLI runs through its OWN login — no API key in our env.
+    native_providers: frozenset[str] = frozenset()
+
+    def can_run(self, model: Model, env: dict[str, str]) -> bool:
+        """Whether this CLI can be pointed at `model` at all — the pool a criterion chooses from.
+        A criterion once picked the cheapest VLM in the whole catalog, a Gemini id, and handed it
+        to the claude binary. Native = yes; anything else = no, unless a subclass knows a route."""
+        return model.provider in self.native_providers
+
+    def model_id_for(self, model: Model) -> str:
+        """What a resolved criterion hands on: a bare id for a native model, `provider/id` for one
+        that must be routed, so `resolve_model`'s overlay fires."""
+        return model.id if model.provider in self.native_providers else f"{model.provider}/{model.id}"
 
     @abstractmethod
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
@@ -188,6 +204,14 @@ class ClaudeCodeProvider(AgentProvider):
     """
 
     name = "claude"
+    native_providers = frozenset({"anthropic"})
+
+    def can_run(self, model: Model, env: dict[str, str]) -> bool:
+        if super().can_run(model, env):
+            return True
+        # Claude Code honours ANTHROPIC_BASE_URL, so a provider interact knows the endpoint of
+        # (ollama) is reachable too — when that provider is actually available here.
+        return bool(overlay_for(f"{model.provider}/{model.id}", env)) and model.is_available()
     binary = "claude"
     can_resume = True
 
@@ -378,6 +402,7 @@ class CodexProvider(AgentProvider):
     """
 
     name = "codex"
+    native_providers = frozenset({"openai", "chatgpt"})
     binary = "codex"
     verified = False
     caveat = ("unverified: built from docs, never run against a real binary; and OpenAI has not "

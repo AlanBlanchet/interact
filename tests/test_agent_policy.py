@@ -243,3 +243,34 @@ def test_a_broken_policy_is_never_overwritten_by_a_toggle(tmp_path):
         Policy().set_provider_active("codex", False, path)
     assert str(path) in str(e.value)
     assert path.read_text() == "{ not json at all", "their broken file is theirs to fix"
+
+
+def test_the_cli_says_one_line_when_nothing_clears_a_criterion(monkeypatch, capsys):
+    """`interact agents spawn --model "aa.intelligence > 999"` printed a Python traceback where
+    every other interact failure prints one actionable ERROR line — and the model was resolved
+    AFTER the vendor argv had been built, so the binary would have been handed the raw text."""
+    import interact.agents.providers as providers
+    from interact.cli.app import agents_spawn
+
+    class _Vendor:
+        name = "claude"
+        native_providers = frozenset({"anthropic"})
+
+        def available(self):
+            return True
+
+        def can_run(self, model, env):
+            return model.provider in self.native_providers
+
+        def model_id_for(self, model):
+            return model.id
+
+        def command(self, *a, **k):
+            raise AssertionError("nothing clears the bar — the vendor CLI must never be reached")
+
+    monkeypatch.setattr(providers, "provider_for", lambda name: _Vendor())
+    with pytest.raises(SystemExit) as stop:
+        agents_spawn("say hi", model="aa.intelligence > 999")
+    assert stop.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR:") and "999" in err and "Traceback" not in err
