@@ -4,7 +4,6 @@ helpers."""
 
 import base64
 import json
-from pathlib import Path
 from typing import Literal
 
 from interact.actions import AnyAction
@@ -120,7 +119,8 @@ async def run_actions(
         works on both desktop and browser targets.
       - resize (DESKTOP/nested only): set the window to an exact width+height after launch — check
         a layout at a narrower size without relaunching. Browser targets use emulate_device instead.
-      - double_click: select a word / fire a dblclick (browser; two clicks don't coalesce).
+      - double_click: a real dblclick on browser AND desktop/nested targets — select a word, fire
+        a dblclick handler (two clicks don't coalesce); takes `button` like click.
       - select_text (browser): make a real DOM text selection in an element — for a selection-gated
         control like a Lexical inline toolbar (drag dispatches drag-and-drop, not a selection).
     Observations: screenshot, wait_for, http_request, hover, annotate
@@ -143,7 +143,7 @@ async def run_actions(
       preceding action, or add a `wait_for` step — both block exactly until the condition holds.
     Comparison: compare — VLM comparison of snapshots from earlier steps (by 1-based index).
 
-    Browser-only actions (navigate, evaluate_js, wait_for, upload_file, new_tab, switch_tab, close_tab, emulate_device, double_click, select_text) error when used with a desktop target.
+    Browser-only actions (navigate, evaluate_js, wait_for, upload_file, new_tab, switch_tab, close_tab, emulate_device, select_text) error when used with a desktop target.
 
     Any action can include 'wait' to wait after execution (networkidle, load, domcontentloaded, or a CSS selector — browser only).
     wait_for blocks until a `selector` reaches a state OR a `text` substring appears — prefer it over `sleep` for content/navigation.
@@ -244,7 +244,10 @@ async def session(
       - "load"  — restore `name` from a previously saved `path` (path required).
       - "close" — close `name` and free its browser/resources.
 
-    name: the session to act on (default "default"). path: the session-state file for save/load.
+    name: the session to act on (default "default").
+    path: the session-state file for save/load. A relative path lands under ~/.interact/out
+        (interact's output dir), never the server's cwd; "~" expands. The reply names the
+        absolute file.
     """
     if action == "list":
         sessions = core._sessions.active()
@@ -265,23 +268,28 @@ async def session(
         return f"ERROR: action={action!r} requires `path` (the session-state file)"
     mgr = core._sessions.get(name)
     if action == "save":
-        state = await mgr.save_state()
-        Path(path).write_text(json.dumps(state))
-        return _session_response(name, f"Session '{name}' saved to {path}.")
-    state = json.loads(Path(path).read_text())
-    await mgr.load_state(state)
-    return _session_response(name, f"Session '{name}' restored from {path}.")
+        dest = core._save_to_path(path, json.dumps(await mgr.save_state()).encode())
+        return _session_response(name, f"Session '{name}' saved to {dest}.")
+    dest = core._resolve_save_path(path)
+    await mgr.load_state(json.loads(dest.read_text()))
+    return _session_response(name, f"Session '{name}' restored from {dest}.")
 
 
 @mcp.tool()
 async def download_asset(url: str, path: str, session: str = _DEFAULT_SESSION) -> str:
-    """Download a URL to a local file path. Uses the browser session's cookies for authenticated downloads."""
+    """Download a URL to a local file. Uses the browser session's cookies for authenticated
+    downloads.
+
+    path: where to save it. A relative path lands under ~/.interact/out (interact's output dir),
+        never the server's cwd; "~" expands. The reply names the absolute file written.
+    """
     mgr = core._sessions.get(session)
     page = await mgr.get_page()
     response = await page.context.request.get(url)
     data = await response.body()
-    core._save_to_path(path, data)
-    return _recovered(mgr, _session_response(session, f"Downloaded {len(data)} bytes to {path}"))
+    dest = core._save_to_path(path, data)
+    body = f"Downloaded {url}\n{core._saved_note(dest, data)}"
+    return _recovered(mgr, _session_response(session, body))
 
 
 @mcp.tool()

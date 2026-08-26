@@ -67,8 +67,10 @@ async def screenshot(
     selector: CSS selector targeting one element (browser only).
     query: question for VLM visual analysis of the captured content.
     scope: CSS selector to restrict text extraction to a sub-tree (browser only).
-    path: OUTPUT sink — saves the captured PNG here (overwrites any existing file, and says so). To
-        ANALYZE an existing image, use target="file:<path>", not path.
+    path: OUTPUT sink — saves the captured PNG here (overwrites any existing file, and says so). A
+        relative path lands under ~/.interact/out (interact's output dir), never the server's cwd;
+        "~" expands. The reply names the absolute file written. To ANALYZE an existing image, use
+        target="file:<path>", not path.
     return_image: when True, return the raw screenshot bytes as an MCP ImageContent alongside the text,
         so the calling agent can SEE the pixels directly (not just a VLM summary).
     model: override the configured VLM model for this call. Uses the VS Code configured model when not set.
@@ -101,7 +103,7 @@ async def screenshot(
     # If `path` already exists we're about to OVERWRITE it with this capture — surface that so the
     # result can't be mistaken for an analysis of the prior file (#44). To analyze a file, use
     # target="file:<path>" above; `path` is an OUTPUT sink.
-    overwrote_path = bool(path) and __import__("pathlib").Path(path).exists()
+    overwrote_path = bool(path) and core._resolve_save_path(path).exists()
     img_bytes: bytes | None = None
     if win:
         if element is not None:
@@ -141,8 +143,7 @@ async def screenshot(
             # detection already exists for this window, surface those refs so the capture is
             # actionable; otherwise return metadata and point the agent at the detect tool.
             img_bytes = win.capture()
-            if path:
-                core._save_to_path(path, img_bytes)
+            dest = core._save_to_path(path, img_bytes) if path else None
             # Surface cached refs ONLY if they belong to the frame just captured — after a navigation
             # the live frame's signature differs, so we don't list a prior screen's refs on a screen
             # that's no longer shown (the screenshot↔elements desync, #19).
@@ -154,6 +155,8 @@ async def screenshot(
                     f"{core._desktop_label(win)}\n{_desktop_context(win)}\n"
                     "(call get_interactive_elements to detect clickable elements and act by [ref])"
                 )
+            if dest is not None:
+                text += f"\n{core._saved_note(dest, img_bytes)}"
     elif element is not None or selector is not None:
         text = _session_response(
             session, await capture._element_screenshot(mgr, mgr.active_tab, selector, element, query, path)
@@ -161,8 +164,7 @@ async def screenshot(
     else:
         state = await capture._capture(mgr, scope)
         img_bytes = base64.b64decode(state.screenshot_base64)
-        if path:
-            core._save_to_path(path, img_bytes)
+        dest = core._save_to_path(path, img_bytes) if path else None
         if query:
             text = _session_response(session, await vlm._analyze(state, query, model_override=model))
         else:
@@ -176,8 +178,10 @@ async def screenshot(
                 else ""
             )
             text = _session_response(session, state.text_summary() + refs)
+        if dest is not None:
+            text += f"\n{core._saved_note(dest, img_bytes)}"
     if overwrote_path:
-        text += f"\n(note: overwrote existing file {path} with this capture)"
+        text += "\n(note: overwrote existing file with this capture)"
     # An empty frame is indistinguishable from "still loading", so a caller retries and waits
     # instead of looking. That is exactly what happened to a CRASHED window whose per-window
     # capture came back black while target="screen" showed the crash modal (#113). One line.
@@ -287,7 +291,9 @@ async def review_ui(
     reference: path to a reference/target image (a design or a prior good build). When set, the review
         judges how the capture DIVERGES from this reference (wrong accent, missing nav, layout drift),
         instead of against a generic ideal — the reliable way to catch a build that's subtly off.
-    path: save the reviewed PNG here. Requires a configured vision model (same as screenshot's query).
+    path: save the reviewed PNG here. A relative path lands under ~/.interact/out (interact's output
+        dir), never the server's cwd; "~" expands. Requires a configured vision model (same as
+        screenshot's query).
     quality: pick the model by STAKES, not by name — "low"/"medium" use a cheap sovereign self-host
         model, "high"/"critical" the best frontier model; "critical" also drops findings whose element
         interact can't confirm (highest precision, for a pre-ship sign-off). Unset = the configured/
@@ -331,6 +337,8 @@ async def verify_ui(
     requirements: the literal requirements to check, each judged PASS / FAIL / UNCLEAR with evidence.
     focus: optional extra emphasis layered onto the rubric.
     reference: a target/design image to judge the build against.
+    path: save the judged PNG here. A relative path lands under ~/.interact/out (interact's output
+        dir), never the server's cwd; "~" expands.
     quality: pick the model by STAKES — "low"/"medium" use a cheap sovereign model, "high"/"critical"
         the best frontier; "critical" downgrades any PASS resting on an element interact can't confirm.
         Unset = configured/auto. An explicit model= overrides this.
@@ -374,6 +382,8 @@ async def measure_ui(
     Pairs with review_ui: the VLM flags a suspect ("this text looks low-contrast") → measure_ui
     confirms the actual ratio. Coordinates are image pixels (as screenshot / get_interactive_elements
     report them).
+    path: save the measured PNG here. A relative path lands under ~/.interact/out (interact's output
+        dir), never the server's cwd; "~" expands. The reply names the absolute file written.
     """
     inv = Debug.inv()
     Debug.dump_input(inv, {"tool": "measure_ui", "target": target, "region": region,
@@ -387,13 +397,14 @@ async def measure_ui(
     img, label, _mgr, _win, err = await capture._capture_or_file(target, session, scope)
     if err:
         return err
-    if path:
-        core._save_to_path(path, img)
+    dest = core._save_to_path(path, img) if path else None
     try:
         result = measure(img, region=reg, point=pt)
     except Exception as e:
         return f"ERROR: measure_ui failed — {e}"
     out = f"{label}\n{format_measure(result)}"
+    if dest is not None:
+        out += f"\n{core._saved_note(dest, img)}"
     return out
 
 

@@ -304,7 +304,8 @@ async def record(
     query: question for VLM visual analysis of the recording.
     duration: fixed clip length in seconds (desktop one-shot mode); omit for a start/stop session.
     fps: frames per second (desktop target, default from config).
-    path: save the video file to this path.
+    path: save the video here. A relative path lands under ~/.interact/out (interact's output dir),
+        never the server's cwd; "~" expands. The reply names the absolute file written.
 
     SAMPLING LIMIT — read before asking about a FAST animation. Unless the model watches video
     natively, the clip is sampled into still frames at `video.fps` (default 5/s) and capped at
@@ -361,14 +362,14 @@ async def _record_desktop(
         # x11grab read a uniform-black surface — same wall as a still capture, and the same two
         # possible causes: an unreadable GPU surface, or a window whose process has died.
         raise desktop.blank_capture_error(win.name, win.wid)
-    if path:
-        core._save_to_path(path, video_bytes)
+    dest = core._save_to_path(path, video_bytes) if path else None
+    saved = f"\n{core._saved_note(dest, video_bytes)}" if dest is not None else ""
 
     is_static = not desktop.Motion.detect(video_bytes)
     if is_static and not query:
         return (
             f"Recording captured but no motion detected — frames are identical. "
-            f"The window content did not change during the {dur_label} recording."
+            f"The window content did not change during the {dur_label} recording.{saved}"
         )
 
     context = f"Desktop window recording: {win.name} ({win.w}x{win.h}, {dur_label})"
@@ -378,7 +379,7 @@ async def _record_desktop(
             "between frames. Describe only what you actually observe.\n" + context
         )
     r = await vlm._vlm(video_bytes, context, query, "video", "video/mp4")
-    return vlm._fmt_timing(r) + _sampling_caveat(_video_model())
+    return vlm._fmt_timing(r) + _sampling_caveat(_video_model()) + saved
 
 
 async def _record_browser(
@@ -396,10 +397,8 @@ async def _record_browser(
     if not video_bytes:
         return _session_response(session, "Recording stopped but no video data captured.")
     result = await vlm._media_response(video_bytes, "Browser recording", query, path, "video", "video/webm")
-    if result:
-        return _session_response(session, result + _sampling_caveat(_video_model()))
+    if result:  # analysis, or — path but no query — only the saved-file note (then no caveat)
+        caveat = _sampling_caveat(_video_model()) if query else ""
+        return _session_response(session, result + caveat)
     size = len(video_bytes)
-    msg = f"Recording stopped. Video captured ({size} bytes)."
-    if path:
-        msg += f" Saved to {path}."
-    return _session_response(session, msg)
+    return _session_response(session, f"Recording stopped. Video captured ({size} bytes).")

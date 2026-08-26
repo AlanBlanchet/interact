@@ -48,10 +48,30 @@ _DBG_ACTIONS = "run_actions"
 _MAX_FALLBACKS = 3
 
 
-def _save_to_path(path: str, data: bytes):
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(data)
+def _resolve_save_path(path: str) -> Path:
+    """Where a caller-supplied output ``path`` lands — ONE rule for every tool that takes one: ``~``
+    expands, an absolute path is kept, a RELATIVE path is anchored under ``config.debug_dir``
+    (interact's own output dir, ``~/.interact/out``, where every other artifact already lives) —
+    never the server process's cwd, which is whatever the editor started it with and which the
+    calling agent cannot see (#120). Always absolute, so a tool can name the file the caller will
+    actually find."""
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = config.debug_dir / p
+    return p.absolute()
+
+
+def _save_to_path(path: str, data: bytes) -> Path:
+    """Write ``data`` where :func:`_resolve_save_path` puts ``path``; returns that absolute path."""
+    dest = _resolve_save_path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return dest
+
+
+def _saved_note(dest: Path, data: bytes) -> str:
+    """The one sentence a saving tool ends its reply with — the absolute file + its size."""
+    return f"Saved to {dest} ({len(data)} bytes)"
 
 
 _AUDIO_MIME = {
