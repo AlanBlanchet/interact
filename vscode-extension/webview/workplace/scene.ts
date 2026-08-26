@@ -236,9 +236,10 @@ function propBodies(props: readonly Prop[]): string {
 }
 
 function propBody(p: Prop): string {
-  const cls =
-    (p.tile === "core" ? "wp-core " : "") + (p.live === "sway" ? "wp-lv-sway " : "") + (p.live === "fan" ? "wp-lv-fan " : "");
-  const own = p.live === "sway" || p.live === "fan" ? drift(p.x, p.y) : "";
+  // No "sway" branch: plants do not move (see world.ts LIVE_OF). Leaving a dead branch here
+  // would tell the next reader the capability still exists.
+  const cls = (p.tile === "core" ? "wp-core " : "") + (p.live === "fan" ? "wp-lv-fan " : "");
+  const own = p.live === "fan" ? drift(p.x, p.y) : "";
   return at(p.tile, p.x, p.y, cls.trim(), own) + liveOf(p);
 }
 

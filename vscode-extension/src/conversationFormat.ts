@@ -595,6 +595,9 @@ export interface ChatDocument {
   /** A conversation you can only WATCH — one of your own sessions, already steered by you in
    *  its own window. The composer says so instead of pretending to send. */
   readOnly?: boolean;
+  /** Everyone on this errand, for the strip above the transcript. From `sessionTabs.ts`;
+   *  passed in, never imported, so this module keeps no runtime import. */
+  tabs?: Tab[];
   /** The run behind the transcript — its definition, brief, context size and identity. Without
    *  it the panel says what an agent SAID and nothing about what it IS. */
   run?: ChatRun;
@@ -623,9 +626,40 @@ export function transcriptFragment(
   return renderTranscript(turns) + pending;
 }
 
+/** One tab per colleague on this errand. Shape mirrors `sessionTabs.ts`'s `SessionTab`, spelled
+ *  structurally rather than imported so this module stays runtime-import-free. */
+export interface Tab {
+  runId: string;
+  label: string;
+  depth: number;
+  here: boolean;
+  root: boolean;
+  live: boolean;
+  more?: number;
+}
+
+/** The strip above the transcript: the way home first, then everyone the session put to work.
+ *
+ *  "make small tabs in the conversation so we can view how the agent is doing, if it's calling
+ *  other agents etc.. And we should be able to come back to the main agent." A live dot is the
+ *  whole reason to glance at it — a tab that cannot say "still working" is just navigation.
+ */
+export function renderTabs(tabs: Tab[]): string {
+  if (!tabs.length) return "";
+  const one = (t: Tab): string =>
+    `<button class="tab" data-run="${escapeHtml(t.runId)}" data-depth="${t.depth}"` +
+    `${t.here ? ' data-here="1"' : ""}${t.root ? ' data-root="1"' : ""}` +
+    `${t.more ? ' disabled title="' + t.more + ' more on this errand"' : ""}>` +
+    (t.root ? '<span class="tab-home">⌂</span>' : "") +
+    `<span class="tab-name">${escapeHtml(t.label)}</span>` +
+    (t.live ? '<span class="tab-live" title="working"></span>' : "") +
+    `</button>`;
+  return `<nav class="tabs" aria-label="Agents on this errand">${tabs.map(one).join("")}</nav>`;
+}
+
 export function chatDocument(
   { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend, parent,
-    readOnly }: ChatDocument,
+    readOnly, tabs }: ChatDocument,
 ): string {
   const up = parent
     ? `<button class="back" id="up" data-run="${escapeHtml(parent.runId)}"` +
@@ -699,6 +733,7 @@ export function chatDocument(
 </head>
 <body>
 ${header}
+${renderTabs(tabs ?? [])}
 <main id="transcript">${body}</main>
 ${composer}
 <script nonce="${nonce}">
@@ -709,6 +744,13 @@ const vscode = acquireVsCodeApi();
     if (door) door.addEventListener("click", () => vscode.postMessage({ type: "openTeam" }));
     const back = document.getElementById("back");
     if (back) back.addEventListener("click", () => vscode.postMessage({ type: "back" }));
+    // A tab switches the panel to that colleague's own conversation — and back to the entry
+    // agent, which is what the first tab is for.
+    document.addEventListener("click", (e) => {
+      const tab = e.target && e.target.closest ? e.target.closest(".tab") : null;
+      if (!tab || tab.disabled || tab.dataset.here === "1") return;
+      vscode.postMessage({ type: "openRun", runId: tab.dataset.run });
+    });
     // A tool row PEEKS on click; its ⧉ opens the whole payload in a tab. Delegated, same as the
     // cards below, because the transcript is re-rendered wholesale on every refresh.
     document.addEventListener("click", (e) => {
@@ -980,6 +1022,42 @@ const STYLE = `
   textarea:focus-visible, button:focus-visible {
     outline: 2px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 1px; }
 
+  /* THE ERRAND STRIP. Everyone this session put to work, the way home first. Scrolls sideways
+     rather than wrapping: a strip that grows a second row pushes the transcript down every time
+     an agent is spawned, which is motion nobody asked for. */
+  .tabs {
+    display: flex; gap: 4px; align-items: center;
+    padding: 5px 8px; overflow-x: auto; scrollbar-width: none;
+    border-bottom: 1px solid var(--vscode-panel-border, transparent);
+    background: var(--vscode-editorWidget-background, transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    font: inherit; font-size: .86em; cursor: pointer; flex: none;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 9px; border-radius: 999px; max-width: 15ch;
+    color: var(--wp-dim); background: transparent;
+    border: 1px solid var(--vscode-panel-border, transparent);
+  }
+  .tab:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-foreground); }
+  .tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+  .tab[data-here="1"] {
+    color: var(--vscode-foreground); font-weight: 600;
+    background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+    border-color: var(--vscode-focusBorder, var(--vscode-panel-border));
+  }
+  /* Depth is the answer to "is it calling other agents": a helper's helper sits further in. */
+  .tab[data-depth="1"] { margin-left: 2px; }
+  .tab[data-depth="2"] { margin-left: 10px; }
+  .tab[data-depth="3"] { margin-left: 18px; }
+  .tab[disabled] { cursor: default; opacity: .7; }
+  .tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-home { opacity: .8; }
+  .tab-live {
+    width: 6px; height: 6px; border-radius: 50%; flex: none;
+    background: var(--vscode-charts-green, #89d185);
+    animation: blink 1.6s steps(1) infinite;
+  }
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
   .hint { color: var(--wp-dim); padding: 1.2em .9em; }
   .hint-sub { font-size: .88em; }

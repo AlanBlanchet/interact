@@ -6,7 +6,7 @@
  */
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { renderTranscript } from "./conversationFormat.ts";
+import { renderTabs, renderTranscript } from "./conversationFormat.ts";
 
 test("the open-in-tab affordance exists even on records that predate id stamping", () => {
   const html = renderTranscript([
@@ -35,4 +35,21 @@ test("the click script hands the host the stored text alongside the id", () => {
   ] as never[]);
   // The script is shared per-document; assert the contract string the handler must carry.
   assert.ok(html.includes('class="io-open"'), "the affordance renders");
+});
+
+test("the tab strip renders the way home, the live dots, and the depth", () => {
+  const html = renderTabs([
+    { runId: "main", label: "main", depth: 0, here: true, root: true, live: true },
+    { runId: "a", label: "tester", depth: 1, here: false, root: false, live: true },
+    { runId: "b", label: "artist", depth: 2, here: false, root: false, live: false },
+  ]);
+  assert.match(html, /class="tabs"/);
+  assert.match(html, /data-run="a"[^>]*data-depth="1"/);
+  assert.match(html, /data-here="1"/, "the tab you are on must be marked");
+  assert.equal((html.match(/class="tab-live"/g) ?? []).length, 2, "two are working");
+  assert.match(html, />main</, "the entry agent is named, so the way back is obvious");
+});
+
+test("no strip when there is nobody else on the errand", () => {
+  assert.equal(renderTabs([]), "");
 });

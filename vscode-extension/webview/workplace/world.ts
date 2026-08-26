@@ -130,7 +130,7 @@ export interface Door {
 /** Something drawn standing on a cell. `live` asks the renderer for an ambient overlay — a screen
  *  that flickers, a kettle that steams, a fan that turns — which is a separate node so the tile
  *  underneath is never redrawn to make it move. */
-export type LiveId = "screen" | "steam" | "fan" | "lamp" | "sway";
+export type LiveId = "screen" | "steam" | "fan" | "lamp";
 export interface Prop {
   x: number;
   y: number;
@@ -1422,7 +1422,7 @@ export function buildWorld(
     // No sway anywhere, indoors or out: "there are plants still moving inside" was the eighth
     // report of this one thing, and a plant has no state to express. `live` stays in the
     // signature because equipment (screens, fans) still earns it.
-    scenery.push({ x, y, tile, live: live === "sway" ? undefined : live });
+    scenery.push({ x, y, tile, live });
   };
 
   /* ── the ground itself ────────────────────────────────────────────────────────────────────
@@ -1591,7 +1591,7 @@ export function buildWorld(
         const core = Math.abs(ox) + Math.abs(oy) <= 1;
         const kit = core ? WOOD : SKIRT;
         const tile = kit[(s >>> 9) % kit.length];
-        plant(cx + ox, cy + oy, tile, tile === "rock" ? undefined : "sway");
+        plant(cx + ox, cy + oy, tile);
       }
     }
   }
@@ -1604,7 +1604,7 @@ export function buildWorld(
       const seed = hash32("edge:" + x + ":" + y);
       if (seed % 3) continue;
       const tile = (["treeBig", "tree", "pine", "tree"] as TileId[])[(seed >>> 6) % 4];
-      plant(x, y, tile, "sway");
+      plant(x, y, tile);
     }
   }
   for (let y = 1; y < rows - 1; y++) {
@@ -1612,7 +1612,7 @@ export function buildWorld(
       const seed = hash32("edge:" + x + ":" + y);
       if (seed % 3) continue;
       const tile = (["pine", "tree", "treeBig", "bush"] as TileId[])[(seed >>> 6) % 4];
-      plant(x, y, tile, "sway");
+      plant(x, y, tile);
     }
   }
 

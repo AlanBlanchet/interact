@@ -236,9 +236,14 @@
         "icon": "$(organization)"
       },
       {
+        "command": "interact.agents.newSession",
+        "title": "Interact: New Session",
+        "icon": "$(add)"
+      },
+      {
         "command": "interact.agents.spawn",
         "title": "Interact: Start an Agent",
-        "icon": "$(add)"
+        "icon": "$(person-add)"
       },
       {
         "command": "interact.agents.workspace",

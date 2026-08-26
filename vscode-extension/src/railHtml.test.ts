@@ -28,7 +28,7 @@ test("every destination is in the document at rest, with its word", () => {
   // Two destinations now, not four: the dashboard and the sequence view are their own surfaces and
   // live in the palette. What a panel this narrow must still offer at rest is the world and a way
   // to start someone — see CHIPS.
-  for (const label of ["Team", "+ New"]) {
+  for (const label of ["Team", "+ Session", "Staff"]) {
     assert.ok(doc.includes(`>${label}<`), `"${label}" is not present without hovering`);
   }
 });

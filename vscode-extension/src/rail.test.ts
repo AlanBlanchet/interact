@@ -315,7 +315,7 @@ test("the destinations are the panel's own, not a launcher for everything", () =
   /* "The sidepanel is there to view info about who we click on, and view the conversation... That's
      all." Surfaces that live elsewhere (the dashboard, the sequence view) stay reachable from the
      palette; they do not take space in a 299px column whose job is the roster and the reply. */
-  assert.ok(CHIPS.length <= 2, `${CHIPS.length} destinations is a launcher, not a panel`);
+  assert.ok(CHIPS.length <= 3, `${CHIPS.length} destinations is a launcher, not a panel`);
   for (const c of CHIPS) {
     assert.ok(c.label && c.command, "a destination needs a word and something to do");
   }
@@ -457,4 +457,15 @@ test("an old failure never outshouts today's work in a grouped row", () => {
   assert.equal(built.runs.length, 1);
   assert.equal(built.runs[0].attention, "working", "the recent run speaks; the relic is ledger");
   assert.equal(built.runs[0].tasks, 1, "the count describes what the row stands for now");
+});
+
+test("the rail's first action starts a SESSION, not a staffing decision", () => {
+  /* "I should always be able to create a new session." Picking one of forty specialists is a
+     staffing decision; a session begins with the entry agent, which is the one that puts the
+     others to work. The roster picker stays, one step over. */
+  const ids = CHIPS.map((c) => c.id);
+  assert.ok(ids.includes("session"), "no way to start a session at all");
+  assert.equal(CHIPS.find((c) => c.id === "session")!.command, "interact.agents.newSession");
+  assert.ok(CHIPS.some((c) => c.command === "interact.agents.spawn"),
+    "the deliberate one-specialist path must stay reachable");
 });

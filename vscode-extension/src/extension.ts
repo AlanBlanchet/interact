@@ -7,7 +7,7 @@ import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
-import { definitionFile, readOrg, spawnArgs, spawnChoices } from "./org";
+import { companyOf, definitionFile, readOrg, spawnArgs, spawnChoices } from "./org";
 import { chooseModel, clearChoice, modelChosenFor } from "./agentModels";
 import { knownModes, modeChoices } from "./permissionModes";
 import {
@@ -588,6 +588,47 @@ export async function activate(
     scope.onDidChange(() => agentsProvider.refresh()),
     // Starting an agent from the panel. Without this the panel could only WATCH — you had to
     // leave it for a terminal to put anyone to work, which is not a team you manage.
+    /* A NEW SESSION, with no questions but the one that matters.
+     *
+     *  "I should always be able to create a new session, and when i click on a session, then
+     *  inside i see everything (just like in claude code)." Starting work meant picking a
+     *  definition out of forty first — a staffing decision, at the moment you have a task. The
+     *  entry agent (the company's coordinator: what the org file calls `main`) takes it, and it
+     *  is the one that puts the specialists to work — so the session begins where Claude Code's
+     *  begins, and the roster stays for when you deliberately want one person.
+     */
+    vscode.commands.registerCommand("interact.agents.newSession", async () => {
+      const { execFile } = await import("child_process");
+      const company = companyOf(readOrg());
+      const entry = company?.coordinator.id ?? "main";
+      const task = await vscode.window.showInputBox({
+        title: "New session",
+        prompt: "What do you want done? The session's agent can put others to work.",
+        placeHolder: "e.g. find why the panel renders twice on a cold open",
+        ignoreFocusOut: true,
+      });
+      if (!task) return;
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const args = spawnArgs({
+        task, agent: entry, cwd, org: readOrg(),
+        // The workspace's own autonomy setting applies, exactly as it does for a picked agent —
+        // a new session must not be a back door around `/permissions`.
+        permissionMode: context.workspaceState.get<string | null>(DEFAULT_MODE_KEY, null),
+        model: modelChosenFor(entry),
+      });
+      execFile("interact", args, (err, stdout, stderr) => {
+        const said = (stdout || stderr || "").trim();
+        if (err) {
+          void vscode.window.showErrorMessage(`Interact: could not start a session — ${said || err}`);
+          return;
+        }
+        agentsProvider.refresh();
+        refreshWorkplace();
+        // Straight INTO it: a new session you have to go and find is not a new session.
+        const id = said.split(/\s+/).find((w) => w.length >= 8) ?? said.slice(0, 36);
+        if (id) chatProvider.show(id);
+      });
+    }),
     vscode.commands.registerCommand("interact.agents.spawn", async () => {
       const { execFile } = await import("child_process");
       // A machine-readable list, not the human providers table: scraping that would empty the

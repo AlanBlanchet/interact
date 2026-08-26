@@ -114,9 +114,12 @@ export interface RailChip {
  */
 export const CHIPS: RailChip[] = [
   { id: "team", label: "Team", command: "interact.agents.team" },
-  // "+ New", because that is what it DOES — the sweep reproduced "Company" opening the spawn
-  // picker twice and called the label a lie. The company itself is the world.
-  { id: "company", label: "+ New", command: "interact.agents.spawn" },
+  /* "I should always be able to create a new session." A session is the DEFAULT way in: the
+     entry agent takes the brief and puts specialists to work, exactly as a Claude Code session
+     does. Picking one of forty specialists yourself is a staffing decision, and it stays — one
+     step over, honestly labelled — for when that is genuinely what you mean. */
+  { id: "session", label: "+ Session", command: "interact.agents.newSession" },
+  { id: "company", label: "Staff", command: "interact.agents.spawn" },
 ];
 
 export interface RailHeader {

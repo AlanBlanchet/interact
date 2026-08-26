@@ -15,7 +15,7 @@ import * as vscode from "vscode";
 import { AgentRun, activityOf, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
-import { conversationTitle, roleOf } from "./roster";
+import { agentLabel, conversationTitle, roleOf } from "./roster";
 import { agentDocument, agentView } from "./agentPanel";
 import { DIM_FOREGROUND } from "./themeTokens";
 import { modelChosenFor } from "./agentModels";
@@ -25,6 +25,7 @@ import { scopeStore } from "./scopeStore";
 import { interactCli } from "./interactCli";
 import { describeMode, knownModes, type PermissionMode } from "./permissionModes";
 import { chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
+import { sessionTabs } from "./sessionTabs";
 import { IO_SCHEME, ioTarget } from "./ioDocument";
 import { agentsDir } from "./paths";
 
@@ -294,6 +295,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // One of your own sessions: shown in full, steered in its own window — the composer
       // says so instead of offering a Send the CLI would refuse.
       readOnly: run?.status === "foreign",
+      // Everyone on this errand: the entry agent first (the way back), then whoever it put to
+      // work, then their own helpers. Live dots say who is still going while you read someone
+      // else's transcript.
+      tabs: run
+        ? sessionTabs(all as never[], run.run_id,
+            (r) => agentLabel(r as never, companyOf(readOrg()) ?? undefined))
+        : [],
       awaitingReply: isAwaitingReply(turns),
       run: run
         ? ({ ...run, permission: describeMode(run.permission_mode, this.modes) } as never)
