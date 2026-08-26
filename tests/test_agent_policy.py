@@ -184,6 +184,11 @@ def test_policy_shows_what_each_agent_resolves_to(cli_policy, capsys):
     assert "visual-critic" in out and "@eyes" in out and "cap.vlm and price.in < 10" in out
     assert "vision" in out and "mcp__interact__screenshot" in out
     assert "codex" in out and "off" in out
+    # The resolution shown is the one the SPAWN will make — per switched-on vendor CLI, from the
+    # pool that CLI can run — not the catalog's cheapest, which the claude binary cannot run.
+    line = next(l for l in out.splitlines() if l.strip().startswith("visual-critic"))
+    assert "claude ⇒" in line and "gemini" not in line, line
+    assert "codex ⇒" not in line, "a switched-off provider is not consulted"
 
 
 def test_providers_toggle_from_the_cli(cli_policy, capsys):

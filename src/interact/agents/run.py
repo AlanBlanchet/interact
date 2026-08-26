@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from interact.agents.profiles import overlay_for, profiles_from
 from interact.agents import registry as reg
 from interact.agents.providers import AgentProvider
+from interact.criteria import Criteria, CriteriaError, Variables
 
 
 
@@ -102,6 +103,17 @@ class ModelUnavailable(RuntimeError):
     quietly resolves to some other model is worse than none, because it looks like it worked."""
 
 
+def is_criterion(text: str) -> bool:
+    """A model CRITERION rather than a model id, told apart by SHAPE: a comparison operator, an
+    `and`, or a lone variable name (`cap.vlm`) — no model id is spelled like a variable. The one
+    shape test the spawn and the `agents policy` display share, so they cannot disagree."""
+    return (
+        any(op in text for op in ("<", ">", "="))
+        or " and " in text
+        or text.strip() in {v.name for v in Variables.all()}
+    )
+
+
 def _resolve_criteria(
     model: str, available_only: bool, env: dict[str, str] | None = None,
     provider: AgentProvider | None = None,
@@ -120,19 +132,11 @@ def _resolve_criteria(
     — its own vendor's models through its login, a routed one when its key is here — never the
     cheapest model in the whole catalog handed to a binary that cannot run it.
     """
-    from interact.criteria import Criteria, CriteriaError, Variables
-
     if model.startswith("@"):
         # A profile: a NAME for a criterion (`"profiles": {"eyes": "cap.vlm and ..."}`), honoured
         # wherever a model may be named — resolved to its rule here, then read like any criterion.
         model = load_policy().rule(model)
-    # A lone variable (`cap.vlm`) is a criterion too — and no model id is spelled like a variable.
-    is_criterion = (
-        any(op in model for op in ("<", ">", "="))
-        or " and " in model
-        or model.strip() in {v.name for v in Variables.all()}
-    )
-    if not is_criterion:
+    if not is_criterion(model):
         return model
     try:
         criteria = Criteria.parse(model)

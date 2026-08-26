@@ -733,8 +733,11 @@ def agents_policy() -> None:
     Each agent row shows the rule as WRITTEN and what it currently RESOLVES to, so a criterion
     that quietly matches nothing is visible here rather than at the spawn that fails.
     """
+    import os
+
     from interact.agents.policy import Policy, policy_path
-    from interact.criteria import Criteria, CriteriaError
+    from interact.agents.providers import PROVIDERS, provider_for
+    from interact.agents.run import ModelUnavailable, is_criterion, resolve_model
 
     policy = Policy.load()
     print(f"policy: {policy_path()}")
@@ -748,12 +751,20 @@ def agents_policy() -> None:
             resolved = policy.criterion_for(agent) or ""
             shown = rule if rule == resolved else f"{rule}  →  {resolved}"
             note = ""
-            if any(op in resolved for op in "<>=") or " and " in resolved:
-                try:
-                    chosen = Criteria.parse(resolved).choose()
-                    note = f"  ⇒ {chosen.id}" if chosen else "  ⇒ NOTHING qualifies right now"
-                except CriteriaError as err:
-                    note = f"  ⇒ INVALID: {err}"
+            if is_criterion(resolved):
+                # What each switched-on vendor CLI would ACTUALLY run — resolved by the code the
+                # spawn uses, per CLI, because the pool is what that binary can be pointed at; a
+                # catalog-wide answer here once named a model the claude spawn could never run.
+                answers = []
+                for pname in PROVIDERS:
+                    if not policy.provider_active(pname):
+                        continue
+                    try:
+                        _, chosen = resolve_model(resolved, dict(os.environ), provider=provider_for(pname))
+                        answers.append(f"{pname} ⇒ {chosen}")
+                    except ModelUnavailable as err:
+                        answers.append(f"{pname} ⇒ NOTHING ({str(err).splitlines()[0]})")
+                note = "  " + "; ".join(answers) if answers else "  ⇒ every provider is switched off"
             print(f"  {agent:<16} {shown}{note}")
     if policy.toolsets:
         print("\ntoolsets")
@@ -764,7 +775,6 @@ def agents_policy() -> None:
         for agent in policy.agent_tools:
             print(f"  {agent:<16} {', '.join(policy.tools_for(agent))}")
     print("\nproviders")
-    from interact.agents.providers import PROVIDERS
     for name in PROVIDERS:
         print(f"  {name:<8} {'on' if policy.provider_active(name) else 'off'}")
 
