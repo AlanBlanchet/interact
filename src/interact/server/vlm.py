@@ -180,6 +180,15 @@ async def _run_compare(
         return f"compare error: {e}"
 
 
+#: Every query answer is a REPORT from the agent's eyes, never an act. Without this the caller's
+#: query ("close the dialog") read as an instruction and came back as "Closed." (#119).
+_OBSERVER = (
+    "You are the eyes of an automation agent and can only LOOK. Answer with what is visible — "
+    "which element (by its number), where it is, what state it is in — never as an action you "
+    "took ('Clicked X', 'Closed'): the agent decides what to do with what you saw."
+)
+
+
 async def _media_response(
     data: bytes,
     context: str,
@@ -189,16 +198,24 @@ async def _media_response(
     mime: str = "image/png",
     model_override: str | None = None,
 ) -> str | None:
+    """Analyse ``data`` when a ``query`` is given; save it when a ``path`` is given. Returns the
+    analysis, or None when there was neither. Whenever a file was written the reply ends with where
+    it landed (``context`` standing in for the analysis when no query was asked), so no tool that
+    routes its save through here can stay silent about the location (#120)."""
+    result = None
     try:
-        if not query:
-            return None
-        r = await _vlm(data, context, query, media_type, mime, model_override=model_override)
-        return _fmt_timing(r)
+        if query:
+            r = await _vlm(
+                data, f"{_OBSERVER}\n\n{context}", query, media_type, mime, model_override=model_override
+            )
+            result = _fmt_timing(r)
     finally:
         # Save AFTER the (slow) VLM call, in a finally — so the file on disk is exactly the frame
         # that was analyzed/returned, and is still written even if the VLM errors (#17).
-        if path:
-            core._save_to_path(path, data)
+        dest = core._save_to_path(path, data) if path else None
+    if dest is None:
+        return result
+    return f"{result or context}\n{core._saved_note(dest, data)}"
 
 
 async def _analyze(state, query: str | None = None, model_override: str | None = None) -> str:
