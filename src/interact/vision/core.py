@@ -1,14 +1,17 @@
 import base64
 import json
 import logging
+import re
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import litellm
+import openai
 from pydantic import BaseModel
 
 from interact.config import Config
@@ -271,6 +274,65 @@ def _schema_instruction(response_format: type[BaseModel] | dict) -> str:
     )
 
 
+_MODEL_FIX = (
+    "Pass model=<id> on this call, or pin one with `interact config set image.model <id>` "
+    "(video.model / audio.model / component.model for the other roles); list_providers shows what "
+    "is configured. Or skip the model: screenshot(return_image=True) hands you the pixels."
+)
+
+
+class VisionError(Exception):
+    """A provider refused or never answered a model call, said in the tool's own words with the way
+    out. Raised at the one litellm seam (:func:`_provider_faults`) for the classes an agent can act
+    on; ``@instrumented`` turns it into the ``ERROR:`` line every tool returns, so a 429 from an
+    out-of-credits account reads as a billing problem to fix, not as an interact traceback to
+    report (#124, #125). The raw litellm exception stays chained as ``__cause__``."""
+
+    def __init__(self, model: str, *, provider: str, cause: str, said: str = ""):
+        self.model, self.provider, self.cause, self.said = model, provider, cause, said
+        quote = f" — {said}" if said else ""
+        super().__init__(f"{provider} {cause} for model {model}{quote}. {_MODEL_FIX}")
+
+
+# What to tell the agent per litellm class, most specific first (``Timeout`` is an
+# ``APIConnectionError``). The catch-all is openai's ``APIError``, not litellm's: every litellm
+# exception subclasses its OPENAI counterpart (litellm's documented contract), so
+# ``litellm.RateLimitError`` is a SIBLING of ``litellm.exceptions.APIError`` under
+# ``openai.APIError``, never its child — a catch-all keyed on litellm's class misses every 429 /
+# 5xx / timeout. So an unlisted provider error still gets the ERROR: shape and the way out.
+_PROVIDER_FAULTS: dict[type[Exception], str] = {
+    litellm.exceptions.RateLimitError: "is rate-limited or out of credits",
+    litellm.exceptions.AuthenticationError: "rejected the API key",
+    litellm.exceptions.NotFoundError: "does not know this model id",
+    litellm.exceptions.Timeout: "did not answer",
+    litellm.exceptions.APIConnectionError: "did not answer",
+    openai.APIError: "failed the request",
+}
+
+
+def _provider_said(err: Exception) -> str:
+    """The provider's own sentence: litellm's stacked prefixes (``litellm.RateLimitError:
+    RateLimitError: OpenAIException - ``) dropped, first line only — the rest is a JSON body the
+    agent cannot act on."""
+    text = str(getattr(err, "message", None) or err).strip()
+    text = re.sub(r"^(litellm\.\w+:\s*|\w+Error:\s*|\w+Exception\s*-\s*)+", "", text)
+    first = text.splitlines()[0] if text else ""
+    return first.strip().rstrip(".")[:200]
+
+
+@contextmanager
+def _provider_faults(model: str):
+    """Around a litellm call: a provider fault becomes a :class:`VisionError` naming ``model`` — the
+    id the caller passed, which litellm may have stripped of its provider prefix. Anything that is
+    not a litellm provider error (a bug of ours) passes through untouched."""
+    try:
+        yield
+    except tuple(_PROVIDER_FAULTS) as err:
+        cause = next(text for cls, text in _PROVIDER_FAULTS.items() if isinstance(err, cls))
+        provider = getattr(err, "llm_provider", None) or "the provider"
+        raise VisionError(model, provider=provider, cause=cause, said=_provider_said(err)) from err
+
+
 async def _vision_completion(
     messages: list[dict],
     model: str,
@@ -301,7 +363,8 @@ async def _vision_completion(
             kwargs["messages"] = msgs
 
     t0 = time.monotonic()
-    response = await litellm.acompletion(**kwargs)
+    with _provider_faults(model):
+        response = await litellm.acompletion(**kwargs)
     elapsed = time.monotonic() - t0
 
     _log.debug(
@@ -360,10 +423,15 @@ async def analyze_media(
         litellm.exceptions.BadRequestError,
         litellm.exceptions.UnsupportedParamsError,
         litellm.exceptions.APIError,
+        VisionError,
     ):
         # A native video send can be rejected (provider 400, unsupported, oversized). Retry once
         # with ffmpeg-sampled frames so video analysis is never worse than before #48. For any
-        # other call (no native video sent) the error is genuine — re-raise.
+        # other call (no native video sent) the error is genuine — re-raise. _vision_completion
+        # now raises VisionError for EVERY provider fault (the raw classes stay listed for one that
+        # still reaches here), so a native send that timed out or hit a 429 "request too large"
+        # gets the smaller-frames retry too — before, only a 400 did, because litellm's 429 / 5xx /
+        # timeout classes never were litellm.APIError subclasses.
         if not sent_native_video:
             raise
         media_parts, _ = await _build_media_content(media, model, config, force_sampled=True)
@@ -394,7 +462,7 @@ async def transcribe_audio(
     try:
         tf.write(audio_bytes)
         tf.close()
-        with open(tf.name, "rb") as fh:
+        with open(tf.name, "rb") as fh, _provider_faults(model):
             response = await litellm.atranscription(model=model, file=fh)
     finally:
         Path(tf.name).unlink(missing_ok=True)

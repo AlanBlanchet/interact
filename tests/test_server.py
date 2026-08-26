@@ -8,7 +8,7 @@ import pytest
 from PIL import Image as PILImage
 
 import interact.vision.detect as det
-from interact.vision import VLMResult
+from interact.vision import VisionError, VLMResult
 
 _DESKTOP_CTX = "Desktop window: Test (800x600)"
 
@@ -661,8 +661,11 @@ async def test_vlm_rate_limit_triggers_fallback(srv):
         ),
         lambda: __import__("litellm").exceptions.APIError(500, "boom", "test", "test"),
         lambda: ValueError("bad payload"),
+        lambda: VisionError(
+            "primary/model", provider="openai", cause="is rate-limited or out of credits", said="no credits"
+        ),
     ],
-    ids=["RateLimitError", "APIError", "ValueError"],
+    ids=["RateLimitError", "APIError", "ValueError", "VisionError"],
 )
 @pytest.mark.asyncio
 async def test_vlm_falls_back_on_error(srv, make_error):
@@ -846,3 +849,78 @@ async def test_selector_wait_still_waits_for_visibility(srv):
     page.wait_for_selector = AsyncMock()
     await srv._wait(page, "#status")
     page.wait_for_selector.assert_called_once()
+
+
+# --- #124/#125: a provider fault is an ERROR: line with the way out, not a raw litellm traceback ---
+
+
+@pytest.mark.asyncio
+async def test_a_provider_fault_on_a_page_query_reaches_the_agent_as_an_ERROR_string(srv, monkeypatch):
+    """`screenshot(query=…)` on a browser page surfaced OpenAI's no-credits 429 as a raw
+    ``litellm.RateLimitError`` (#124, #125): the page-query path calls the model with no fallback
+    chain around it, so the exception left the tool instead of taking the documented ``ERROR:``
+    shape every other failure has. Closed at the same seam as CaptureError — ``@instrumented`` — so
+    navigate(query=) and the next page-query tool get it for free."""
+    import base64
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import RateLimitError
+
+    state = MagicMock(title="Billing", url="http://x", screenshot_base64=base64.b64encode(_PNG).decode())
+
+    async def no_credits(**_kwargs):
+        raise RateLimitError(
+            message="RateLimitError: OpenAIException - You have no credits remaining.",
+            llm_provider="openai",
+            model="gpt-4o",
+        )
+
+    monkeypatch.setattr(srv.targets, "_resolve_target", lambda *a, **k: (None, MagicMock(), None))
+    monkeypatch.setattr(srv.capture, "_capture", AsyncMock(return_value=state))
+    monkeypatch.setattr("interact.vision.core.litellm.acompletion", no_credits)
+    monkeypatch.setattr(
+        "interact.vision.core.litellm.validate_environment", lambda model: {"keys_in_environment": True}
+    )
+    fn = getattr(srv.screenshot, "fn", srv.screenshot)
+    out = await fn(query="what is on this page?")
+    assert isinstance(out, str), "a provider fault must be a readable result, not an exception"
+    assert out.startswith("ERROR:"), out
+    assert "no credits remaining" in out and "out of credits" in out, out
+    assert "list_providers" in out and "image.model" in out, out
+
+
+@pytest.mark.parametrize(
+    "make_error, expect",
+    [
+        (
+            lambda m: VisionError(m, provider="openai", cause="is rate-limited or out of credits", said="no credits"),
+            "list_providers",
+        ),
+        (lambda m: ValueError("bad payload"), "ValueError: bad payload"),
+    ],
+    ids=["VisionError", "ValueError"],
+)
+@pytest.mark.asyncio
+async def test_vlm_exhausted_chain_is_an_ERROR_line_that_says_why(srv, make_error, expect):
+    """Every model failed → the agent used to get "[All 2 fallbacks failed — last error on X:
+    RateLimitError]": a class name, no ERROR: prefix, no way out. Now it is an ERROR: line carrying
+    the last failure's own words — a VisionError's guidance, or the class + message of anything else."""
+    from interact.config import Config
+    from interact.models import Model, ModelCapability, ModelChain
+
+    async def _mock(media, context, cfg, query=None, *, model, **kwargs):
+        raise make_error(model)
+
+    primary = Model(id="primary/model", provider="test", capabilities={ModelCapability.VLM})
+    fallback = Model(id="fallback/model", provider="test", capabilities={ModelCapability.VLM})
+    chain = ModelChain(role="image", preferences=[primary, fallback])
+
+    with (
+        patch("interact.server.vlm.analyze_media", _mock),
+        patch.object(Config, "chain_for", return_value=chain),
+        patch.object(Model, "is_available", return_value=True),
+    ):
+        result = await srv._vlm(_PNG, "ctx")
+
+    assert result.text.startswith("ERROR:"), result.text
+    assert "fallback/model" in result.text and expect in result.text, result.text

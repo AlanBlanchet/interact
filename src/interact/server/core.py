@@ -26,6 +26,7 @@ from interact.browser import SessionRegistry
 from interact.debug_utils import Debug, _CURRENT_INV
 from interact.desktop import CaptureError
 from interact.runtime import breaker, config  # noqa: F401 — breaker re-exported for tests/vlm
+from interact.vision import VisionError
 
 _log = logging.getLogger("interact")
 
@@ -285,19 +286,20 @@ def instrumented(fn):
             _responded = True
             Debug.dump_output(inv, result)
             return result
-        except CaptureError as e:
-            # A capture that cannot produce pixels is an ANSWER — "that window is gone, try
-            # target='screen'" — not a transport failure. Raised, it arrives as an exception and
-            # an agent testing for the documented "ERROR:" prefix does not find one; every other
+        except (CaptureError, VisionError) as e:
+            # A capture that cannot produce pixels, or a provider that refused / never answered the
+            # model call, is an ANSWER — "that window is gone, try target='screen'", "openai is out
+            # of credits, pass model=" — not a transport failure. Raised, it arrives as an exception
+            # and an agent testing for the documented "ERROR:" prefix does not find one; every other
             # failure in this server is a readable string. Converted at the one seam every tool
-            # passes through, so the next capture-taking tool cannot forget to do it.
+            # passes through, so the next capture-taking or page-querying tool cannot forget to do
+            # it (#124/#125 was exactly that: the page-query path has no fallback chain around it).
             #
             # `_responded` deliberately stays False: the body raised BEFORE reaching
             # `_session_response`, so the baseline was never refreshed and the drift note was
             # never delivered — exactly the state the `finally` below exists to settle. Setting it
-            # True here would read as "handled" and quietly skip that cleanup. Inert today (every
-            # CaptureError needs a desktop target, which the cleanup already excludes), and a trap
-            # for the first browser-side capture failure.
+            # True here would read as "handled" and quietly skip that cleanup. A VisionError from a
+            # browser page query is the browser-side failure that cleanup was waiting for.
             result = f"ERROR: {e}"
             Debug.dump_output(inv, result)
             return result

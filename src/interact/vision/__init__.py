@@ -11,6 +11,7 @@ imported by their own path (``interact.vision.critique`` etc.).
 from interact.vision.core import (  # noqa: F401
     _UNSET,
     MediaItem,
+    VisionError,
     VLMResult,
     _Unset,
     _audio_content,

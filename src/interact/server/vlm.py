@@ -10,6 +10,7 @@ from interact.server.core import breaker, config
 from interact.vision import (
     _UNSET,
     MediaItem,
+    VisionError,
     VLMResult,
     _Unset,
     analyze_media,
@@ -19,6 +20,18 @@ from interact.vision.measure import blank_frame_reason
 
 _log = logging.getLogger("interact")
 _MAX_FALLBACKS = core._MAX_FALLBACKS
+
+
+def _blame(err: Exception) -> str:
+    """One clause for the log line and the fallback note: a VisionError's human cause ("openai is
+    rate-limited or out of credits"), else the exception's class name."""
+    return f"{err.provider} {err.cause}" if isinstance(err, VisionError) else type(err).__name__
+
+
+def _describe(err: Exception) -> str:
+    """The whole failure for the exhausted-chain ERROR: a VisionError already carries the way out;
+    anything else needs its class name too, since str() of a bare exception can be empty."""
+    return str(err) if isinstance(err, VisionError) else f"{type(err).__name__}: {err}".rstrip(": ")
 
 
 def _effective_model(model_override: str | None, role: str) -> str:
@@ -94,8 +107,7 @@ async def _vlm(
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as primary_err:
-        primary_type = type(primary_err).__name__
-        _log.warning("%s on %s, attempting fallback chain", primary_type, effective_model)
+        _log.warning("%s on %s, attempting fallback chain", _blame(primary_err), effective_model)
         breaker.trip(effective_model)
 
         chain = config.chain_for(routing)
@@ -106,14 +118,14 @@ async def _vlm(
         ]
 
         prev_model = effective_model
-        prev_err_type = primary_type
+        prev_blame = _blame(primary_err)
         last_err: Exception = primary_err
         for fallback in candidates[:_MAX_FALLBACKS]:
             try:
                 result = await _call(fallback.litellm_id())
                 result.text = (
-                    f"[Fallback: used {fallback.id} after {prev_model} "
-                    f"failed with {prev_err_type}]\n\n{result.text}"
+                    f"[Fallback: used {fallback.id} after {prev_model} failed: {prev_blame}]"
+                    f"\n\n{result.text}"
                 )
                 result.model = fallback.id
                 return result
@@ -122,13 +134,17 @@ async def _vlm(
             except Exception as err:
                 breaker.trip(fallback.id)
                 prev_model = fallback.id
-                prev_err_type = type(err).__name__
+                prev_blame = _blame(err)
                 last_err = err
 
+        # Every model tried failed: an ERROR: line the agent can branch on, ending in the last
+        # failure's own words — a VisionError's guidance, or the class + message of anything else —
+        # not the bare class name it used to be.
+        tried = 1 + len(candidates[:_MAX_FALLBACKS])
         return VLMResult(
             text=(
-                f"[All {1 + len(candidates[:_MAX_FALLBACKS])} fallbacks failed "
-                f"— last error on {prev_model}: {type(last_err).__name__}]"
+                f"ERROR: every model failed ({tried} tried, no fallback left) — last, {prev_model}: "
+                f"{_describe(last_err)}"
             ),
             elapsed=0,
             model=effective_model,

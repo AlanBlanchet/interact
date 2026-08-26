@@ -17,6 +17,7 @@ dependencies = [
     "pynput>=1.7", # cross-platform pointer + keyboard for the macOS/Windows desktop backend (#24)
     "httpx>=0.28.1",
     "litellm>=1.83.4,<2",
+    "openai>=1.0",  # imported directly (vision/core.py maps its exception tree), not only via litellm
     "mcp[cli]>=1.27.0,<2",
     "numpy>=1.26",
     "pillow>=12.2.0",
