@@ -162,3 +162,25 @@ def test_coord_format_load_from_config_clears_registry():
     prefixes = {f.prefix for f in CoordFormat.registry()}
     assert prefixes == {"b/", "c/"}
     CoordFormat._reset()
+
+
+_TYPO_RESPONSE = json.dumps(
+    [
+        # The misspelling a real model produced (#122): one letter off a known box key.
+        {"role": "button", "name": "OK", "box_2dd": [37, 896, 64, 928]},
+        # A four-number list under an unrelated key is NOT a box.
+        {"role": "swatch", "name": "Red", "color": [255, 0, 0, 255]},
+    ]
+)
+
+
+def test_a_misspelled_box_key_is_still_a_box(caplog):
+    """#122: a model wrote `box_2dd`; dropping the entry silently turned one typo into
+    "0 elements". A four-number list under a key one edit away from a box key is read as the
+    box — and said so in the log — while a four-list under an unrelated key stays out."""
+    fmt = CoordFormat(box_order=BoxOrder.YXYX, normalized=True, box_key="box_2d")
+    with caplog.at_level(logging.WARNING, logger="interact.formats"):
+        elements = fmt.parse(_TYPO_RESPONSE, 1000, 1000)
+    assert elements is not None and len(elements) == 1, elements
+    assert elements[0].name == "OK"
+    assert "box_2dd" in caplog.text
