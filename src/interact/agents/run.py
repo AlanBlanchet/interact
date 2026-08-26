@@ -21,7 +21,9 @@ from interact.agents.providers import AgentProvider
 
 
 
-def resolve_model(model: str | None, env: dict[str, str]) -> tuple[dict[str, str], str | None]:
+def resolve_model(
+    model: str | None, env: dict[str, str], available_only: bool = True
+) -> tuple[dict[str, str], str | None]:
     """Split a model id into (env overlay, what the vendor CLI should be asked for).
 
     A `provider/name` id says two different things at once: WHERE to send the request, and WHICH
@@ -36,10 +38,43 @@ def resolve_model(model: str | None, env: dict[str, str]) -> tuple[dict[str, str
     """
     if not model:
         return {}, None
+    model = _resolve_criteria(model, available_only)
     overlay = overlay_for(model, env)
     if not overlay:
         return {}, model
     return overlay, overlay.get("ANTHROPIC_MODEL", model)
+
+
+class ModelUnavailable(RuntimeError):
+    """A criterion nothing currently clears. Raised rather than falling back: a criterion that
+    quietly resolves to some other model is worse than none, because it looks like it worked."""
+
+
+def _resolve_criteria(model: str, available_only: bool) -> str:
+    """A CRITERION where a model id goes.
+
+    "we could say agent: 'MMLU > 0.8' to use a model that has MMLU above a criteria for a
+    benchmark... Or also control price". A pin is frozen at the moment it was typed; a criterion
+    is re-resolved every spawn, so a better or cheaper model that ships tomorrow is used tomorrow.
+
+    Told apart by SHAPE, not by a flag: a model id has no comparison operator and no spaces, so
+    `claude-sonnet-5` is an id and `screenspot > 0.85 and price < 10` is a requirement. The
+    vendor CLI never learns criteria exist — by the time it is invoked this is a model name.
+    """
+    from interact.criteria import Criteria, CriteriaError
+
+    if not any(op in model for op in ("<", ">", "=")) and " and " not in model:
+        return model
+    try:
+        criteria = Criteria.parse(model)
+    except CriteriaError as err:
+        raise ModelUnavailable(f"{model!r} is not a usable model criterion: {err}") from err
+    chosen = criteria.choose(available_only=available_only)
+    if chosen is None:
+        raise ModelUnavailable(
+            f"no configured model clears {criteria}.\n{criteria.explain(available_only)}"
+        )
+    return chosen.id
 
 
 def _interact_command() -> tuple[str, list[str]]:
