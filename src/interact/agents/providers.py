@@ -86,7 +86,8 @@ class AgentProvider(ABC):
     @abstractmethod
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
-                permission_mode: str | None = None) -> list[str]:
+                permission_mode: str | None = None,
+                allowed_tools: list[str] | None = None) -> list[str]:
         """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
         (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
 
@@ -213,7 +214,8 @@ class ClaudeCodeProvider(AgentProvider):
 
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
-                permission_mode: str | None = None) -> list[str]:
+                permission_mode: str | None = None,
+                allowed_tools: list[str] | None = None) -> list[str]:
         argv = [
             self.binary, "-p", task,
             "--output-format", "stream-json",
@@ -228,6 +230,10 @@ class ClaudeCodeProvider(AgentProvider):
             argv += ["--agent", agent]
         if mcp_config:
             argv += ["--mcp-config", mcp_config]
+        # A TOOLSET, expanded. Absent means unrestricted — an allow-list nobody asked for would
+        # silently take tools away from every agent that never mentioned one.
+        if allowed_tools:
+            argv += ["--allowedTools", ",".join(allowed_tools)]
         argv += self._permission_flag(permission_mode)
         return argv
 
@@ -379,7 +385,8 @@ class CodexProvider(AgentProvider):
 
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
-                permission_mode: str | None = None) -> list[str]:
+                permission_mode: str | None = None,
+                allowed_tools: list[str] | None = None) -> list[str]:
         # No permission_modes() here: Codex has sandbox and approval flags, but this adapter's
         # own `verified = False` says these flags were never exercised against a real binary, and
         # a guessed autonomy setting is the last thing to ship on an unverified adapter.

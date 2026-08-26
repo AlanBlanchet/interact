@@ -45,6 +45,55 @@ def resolve_model(
     return overlay, overlay.get("ANTHROPIC_MODEL", model)
 
 
+def load_policy():
+    """The policy file, read fresh. Not cached: the whole point of a criterion is that it
+    re-resolves, and a policy edited in the panel must bite on the very next spawn."""
+    from interact.agents.policy import Policy
+
+    return Policy.load()
+
+
+def model_for_agent(agent: str | None) -> str | None:
+    """What this agent runs on, per the policy — a profile's criterion, its own criterion, or a
+    plain model id. None when the policy does not mention it, which leaves the caller's own
+    choice (and ultimately the vendor's default) untouched."""
+    if not agent:
+        return None
+    try:
+        return load_policy().criterion_for(agent)
+    except Exception:
+        return None  # a broken policy must never make an unrelated spawn impossible
+
+
+def tools_for_agent(agent: str | None) -> list[str]:
+    """The tools this agent may use, expanded from its toolsets and fully prefixed."""
+    if not agent:
+        return []
+    try:
+        return load_policy().tools_for(agent)
+    except Exception:
+        return []
+
+
+def check_provider_active(provider: str) -> None:
+    """Refuse to spawn through a provider the operator switched off.
+
+    "we should be able to, from interact, chose if we activate the agents or not for a provider" —
+    off means OFF at the one place every spawn passes through, not merely hidden in a picker.
+    """
+    from interact.agents.policy import policy_path
+
+    try:
+        active = load_policy().provider_active(provider)
+    except Exception:
+        return  # a broken policy disables nothing; it is not a kill switch by accident
+    if not active:
+        raise RuntimeError(
+            f"agents are switched off for {provider!r} in {policy_path()} — "
+            f'set {{"providers": {{"{provider}": true}}}} there to use it again'
+        )
+
+
 class ModelUnavailable(RuntimeError):
     """A criterion nothing currently clears. Raised rather than falling back: a criterion that
     quietly resolves to some other model is worse than none, because it looks like it worked."""
@@ -244,8 +293,12 @@ async def run_agent(
             "interact drives the vendor's own binary with your own login; install and sign into "
             "it first."
         )
+    check_provider_active(provider.name)
     run_id = str(uuid.uuid4())
     parent = parent_run_id or os.environ.get("INTERACT_PARENT_RUN_ID") or None
+    # The policy speaks for an agent that did not bring its own model: a profile is written once
+    # and worn by many, which is the whole reason it exists.
+    model = model or model_for_agent(agent)
     # A run named after its agent DEFINITION ("visual-critic") is self-describing in the panel;
     # falling back to the provider ("claude") tells you nothing about what it is for.
     label = name or agent or provider.name
@@ -255,6 +308,7 @@ async def run_agent(
         # interact — the child would otherwise carry two registrations of the same server.
         mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name) else None,
         run_id=run_id, agent=agent, permission_mode=permission_mode,
+        allowed_tools=tools_for_agent(agent),
     )
     # The child inherits our environment MINUS any parent tag, which we set explicitly below —
     # otherwise a grandchild would inherit its grandparent's id and the tree would be wrong.

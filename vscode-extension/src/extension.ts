@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { ACTIVITY_SCHEME, activityPath, formatActivity, runIdFromPath } from "./activityDocument";
 import { IO_INLINE, IO_SCHEME, ioFromPath } from "./ioDocument";
 import { ChatViewProvider } from "./chatView";
+import { interactCli } from "./interactCli";
 import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
@@ -578,6 +579,34 @@ export async function activate(
           ? `Sent to ${running.length - failed} of ${running.length} — ${failed} could not be reached.`
           : `Sent to all ${running.length}.`,
       );
+    }),
+    /* WHICH PROVIDERS DRIVE AGENTS HERE. "we should be able to, from interact, chose if we
+     *  activate the agents or not for a provider (claude, codex, other...)". A checklist of the
+     *  providers interact knows; unticking one switches it off at the one place every spawn
+     *  passes through (`~/.interact/agents.json`, via the CLI, so the panel and the terminal
+     *  agree on a single fact). */
+    vscode.commands.registerCommand("interact.agents.providers", async () => {
+      const listed = await interactCli(["agents", "providers"]);
+      // Only `<name> on|off …` rows are providers; the indented `agents:` / `permission modes:`
+      // continuation lines under each one are detail, not a provider called "agents:".
+      const rows = listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+        .map((l) => l.split(/\s+/)).filter((p) => p.length >= 2 && (p[1] === "on" || p[1] === "off"));
+      if (!rows.length) {
+        void vscode.window.showInformationMessage("Interact: no agent providers are installed here.");
+        return;
+      }
+      const picked = await vscode.window.showQuickPick(
+        rows.map(([name, state]) => ({ label: name, picked: state === "on",
+          description: state === "on" ? "agents run through it" : "switched off" })),
+        { title: "Providers that run agents", canPickMany: true,
+          placeHolder: "Tick a provider to let interact drive agents through it" },
+      );
+      if (!picked) return;  // Escape cancels; nothing changes
+      const on = new Set(picked.map((p) => p.label));
+      for (const [name] of rows) {
+        await interactCli(["agents", "providers", name, on.has(name) ? "on" : "off"]);
+      }
+      agentsProvider.refresh();
     }),
     vscode.commands.registerCommand("interact.agents.workspace", async () => {
       if (await scope.pick()) {

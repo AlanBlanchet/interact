@@ -1,3 +1,4 @@
+import re
 import json
 import logging
 import os
@@ -663,6 +664,25 @@ __all__ = [
 ]
 
 
+#: Words that name the KIND of a source rather than the source itself — dropped when initials
+#: are derived, so "OpenCompass video leaderboard" becomes "oc" and not "ovl".
+_SOURCE_NOISE = {"leaderboard", "leaderboards", "benchmark", "the", "of", "and", "for"}
+
+
+def _namespace_of(source: str) -> str:
+    """A short, stable namespace for a source nobody has named explicitly.
+
+    Initials of the significant words ("Artificial Analysis" -> "aa"); a single significant word
+    becomes itself ("MMAU" -> "mmau"). Deterministic, so it never shifts under a reader.
+    """
+    words = [w for w in re.split(r"[\s\-_]+", source) if w and w.lower() not in _SOURCE_NOISE]
+    if not words:
+        return "x"
+    if len(words) == 1:
+        return words[0].lower()
+    return "".join(w[0] for w in words).lower()
+
+
 class Benchmark(RegistryMixin, BaseModel):
     """A benchmark for evaluating VLM capability.
 
@@ -680,11 +700,22 @@ class Benchmark(RegistryMixin, BaseModel):
     # Surfaced in the config so the user can supply an optional key per source — no CLI needed.
     source: str = ""
     source_auth: str = ""
+    #: The variable namespace this benchmark's score is addressed by — "aa" for Artificial
+    #: Analysis, "gui" for the grounding leaderboard, and so on. A NAMESPACE IS THE SOURCE: a
+    #: bare `screenspot` hides who measured it, and two leaderboards rarely agree. Derived from
+    #: the source's initials when the data does not say, so a benchmark added tomorrow is
+    #: addressable the same day with nothing to edit here.
+    namespace: str = ""
     metric: str = "accuracy"
     url: str = ""
     published: PublishedTable | None = None
 
     _measured: dict[str, float] = PrivateAttr(default_factory=dict)
+
+    @property
+    def variable(self) -> str:
+        """How a criterion names this benchmark's score: ``<namespace>.<id>``."""
+        return f"{self.namespace or _namespace_of(self.source)}.{self.id}"
 
     def score_for(self, model: "Model") -> float | None:
         """Measured [0, 1] score for ``model``, or None if not evaluated."""
@@ -891,6 +922,7 @@ Benchmark._register(
         name="ScreenSpot",
         category="gui_grounding",
         source="GUI-Agent grounding leaderboard",
+        namespace="gui",
         source_auth="",
         description=(
             "GUI grounding: given an instruction, click the right single element across "
@@ -906,6 +938,7 @@ Benchmark._register(
         name="ScreenSpot-Pro",
         category="gui_grounding",
         source="GUI-Agent grounding leaderboard",
+        namespace="gui",
         source_auth="",
         description=(
             "Hard GUI grounding on professional high-resolution apps (23 apps, 5 industries, "
@@ -953,6 +986,7 @@ Benchmark._register(
         name="Video-MME",
         category="video",
         source="OpenCompass video leaderboard",
+        namespace="oc",
         source_auth="",
         description=(
             "Full-spectrum video understanding: 900 videos (11s–1hr) across 6 domains with "
@@ -968,6 +1002,7 @@ Benchmark._register(
         name="MVBench",
         category="video",
         source="OpenCompass video leaderboard",
+        namespace="oc",
         source_auth="",
         description=(
             "20 temporal-reasoning tasks (action/sequence understanding) that can't be solved "
@@ -983,6 +1018,7 @@ Benchmark._register(
         name="MLVU",
         category="video",
         source="OpenCompass video leaderboard",
+        namespace="oc",
         source_auth="",
         description=(
             "Multi-task LONG-video understanding: 3-minute-to-2-hour videos across 9 tasks "

@@ -27,6 +27,7 @@ export interface Benchmark {
   category?: "image" | "gui_grounding" | "video" | "audio";
   source?: string;
   source_auth?: string;
+  namespace?: string;
   metric?: string;
   url?: string;
   published?: PublishedTable | null;

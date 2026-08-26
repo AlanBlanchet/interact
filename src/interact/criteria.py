@@ -1,30 +1,31 @@
-"""Choosing a model by what it SCORES, not by what it is called.
+"""Choosing a model by what it SCORES, and saying who measured it.
 
-    agent_models.json:  {"visual-critic": "screenspot > 0.85 and price < 10"}
+    ~/.interact/agents.json:  {"agents": {"visual-critic": "cap.vlm and gui.screenspot > 0.85"}}
 
 A pinned model id is a claim frozen at the moment somebody typed it. It cannot notice a better
 model shipping, a price cut, or — the case that cost this project weeks — that the tier was never
 good enough for the job it was pinned to. A CRITERION is that claim written down instead:
 "whatever currently clears this bar, cheapest first", re-resolved every time it is asked.
 
-The grammar is deliberately one line of English:
+Every variable is NAMESPACED BY ITS SOURCE, because a bare ``intelligence`` hides who measured it
+and two leaderboards rarely agree:
 
-    screenspot > 0.85          a published benchmark score (any id in benchmarks.json)
-    price < 5                  input $/M — "control price", his words
-    out_price <= 20            output $/M, when that is the side that hurts
-    intelligence >= 30         the catalog's own capability score
-    vlm                        a capability, demanded by name
-    ... and ...                several terms, all of which must hold
+    aa.intelligence        Artificial Analysis' capability score
+    aa.mmmu, aa.mmbench    benchmarks Artificial Analysis publishes
+    gui.screenspot         the GUI-Agent grounding leaderboard
+    oc.video_mme           the OpenCompass video leaderboard
+    price.in / price.out   $ per million tokens, from the provider catalog
+    cap.vlm                a capability, demanded by name
 
-Everything is checked at PARSE time: an unknown field raises rather than silently matching
-nothing at three in the morning, which is how a criterion becomes a lie.
+The set is DERIVED, never a hardcoded list: a benchmark added to the registry tomorrow is usable
+in a criterion the same day, and a model that ships tomorrow and clears the bar is simply used.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Callable
 
 from interact.models import Benchmark, Model, ModelCapability
 
@@ -33,12 +34,74 @@ class CriteriaError(ValueError):
     """A criterion that cannot be evaluated — raised where it is WRITTEN, never at use."""
 
 
-#: Fields that are not benchmarks: how to read them off a model.
-_SCALARS: dict[str, str] = {
-    "price": "input_cost_per_million",
-    "out_price": "output_cost_per_million",
-    "intelligence": "intelligence_score",
-}
+@dataclass(frozen=True)
+class Variable:
+    """One comparable fact about a model, and where the number comes from."""
+
+    name: str
+    describe: str
+    read: Callable[[Model], float | None]
+    #: True for a yes/no (a capability), which takes no operator.
+    flag: bool = False
+
+
+class Variables:
+    """Every comparison interact can make, derived from what is registered right now."""
+
+    #: Scalars off the model record. Namespaced by SOURCE: the capability score is Artificial
+    #: Analysis', the prices are the provider catalog's, and saying so is the whole point.
+    _SCALARS: dict[str, tuple[str, str]] = {
+        "aa.intelligence": ("intelligence_score", "Artificial Analysis capability score"),
+        "price.in": ("input_cost_per_million", "input cost, $ per million tokens"),
+        "price.out": ("output_cost_per_million", "output cost, $ per million tokens"),
+    }
+
+    @classmethod
+    def all(cls) -> list[Variable]:
+        out: list[Variable] = []
+        for name, (attr, describe) in cls._SCALARS.items():
+            out.append(Variable(name, describe, _reader(attr)))
+        for bench in Benchmark.registry():
+            out.append(Variable(
+                bench.variable, f"{bench.name} — {bench.source or 'published'}",
+                _bench_reader(bench),
+            ))
+        for cap in ModelCapability:
+            out.append(Variable(
+                f"cap.{cap.value}", f"the model can do {cap.value}",
+                _cap_reader(cap), flag=True,
+            ))
+        return out
+
+    @classmethod
+    def by_name(cls, name: str) -> Variable | None:
+        return next((v for v in cls.all() if v.name == name), None)
+
+    @classmethod
+    def names(cls) -> list[str]:
+        return sorted(v.name for v in cls.all())
+
+
+def _reader(attr: str) -> Callable[[Model], float | None]:
+    return lambda model: getattr(model, attr, None)
+
+
+def _bench_reader(bench: Benchmark) -> Callable[[Model], float | None]:
+    def read(model: Model) -> float | None:
+        measured = bench.score_for(model)
+        if measured is not None:
+            return measured
+        for scored, value in bench.published_models_in_registry():
+            if scored.id == model.id:
+                return value
+        return None
+
+    return read
+
+
+def _cap_reader(cap: ModelCapability) -> Callable[[Model], float | None]:
+    return lambda model: 1.0 if model.can(cap) else 0.0
+
 
 _OPS = {
     ">": lambda a, b: a > b,
@@ -53,9 +116,17 @@ _TERM = re.compile(r"^\s*([\w.-]+)\s*(>=|<=|==|=|>|<)\s*(-?\d+(?:\.\d+)?)\s*$")
 _BARE = re.compile(r"^\s*([\w.-]+)\s*$")
 
 
+def _did_you_mean(name: str) -> str:
+    """The namespaced variables whose tail matches what they typed — so a bare `intelligence`
+    is answered with `aa.intelligence` rather than the whole catalogue."""
+    tail = name.rsplit(".", 1)[-1].lower()
+    near = [n for n in Variables.names() if n.rsplit(".", 1)[-1].lower() == tail]
+    return f" Did you mean: {', '.join(near)}?" if near else ""
+
+
 @dataclass(frozen=True)
 class Term:
-    """One clause. A bare capability has no op or value — it is a yes/no."""
+    """One clause. A capability has no op or value — it is a yes/no."""
 
     field: str
     op: str = ""
@@ -67,30 +138,17 @@ class Term:
     def score_of(self, model: Model) -> float | None:
         """What this term measures on ``model``, or None when nothing measured it.
 
-        None is NOT zero and never qualifies: "unknown" is exactly the thing a criterion is
-        written to exclude.
+        None is NOT zero and never qualifies: "unknown" is exactly what a criterion excludes.
         """
-        attr = _SCALARS.get(self.field)
-        if attr is not None:
-            return getattr(model, attr, None)
-        bench = Benchmark.by_id(self.field)
-        if bench is None:
-            return None
-        measured = bench.score_for(model)
-        if measured is not None:
-            return measured
-        for scored, value in bench.published_models_in_registry():
-            if scored.id == model.id:
-                return value
-        return None
+        var = Variables.by_name(self.field)
+        return None if var is None else var.read(model)
 
     def holds(self, model: Model) -> bool:
-        if not self.op:
-            cap = ModelCapability(self.field)
-            return model.can(cap)
         got = self.score_of(model)
         if got is None:
             return False
+        if not self.op:
+            return got > 0
         return _OPS[self.op](got, self.value)
 
 
@@ -101,9 +159,6 @@ class Criteria:
     terms: tuple[Term, ...] = field(default_factory=tuple)
     source: str = ""
 
-    #: Cache of what a capability name may be, so a typo is caught rather than treated as one.
-    _CAPS: ClassVar[set[str]] = {c.value for c in ModelCapability}
-
     def __str__(self) -> str:
         return self.source or " and ".join(str(t) for t in self.terms)
 
@@ -111,8 +166,8 @@ class Criteria:
     def parse(cls, text: str) -> "Criteria":
         """Read a criterion, refusing anything nobody can evaluate.
 
-        Raises `CriteriaError` with the offending clause — the message is read by whoever typed
-        it, so it names the thing they typed, never the parser's internals.
+        Raises `CriteriaError` naming the clause THEY typed — an unknown or un-namespaced
+        variable fails here, at the moment it is written, never silently matching nothing later.
         """
         if not text or not text.strip():
             raise CriteriaError("an empty criterion selects nothing — say what you want")
@@ -122,17 +177,22 @@ class Criteria:
                 continue
             if (m := _TERM.match(clause)) is not None:
                 name, op, value = m.group(1), m.group(2), float(m.group(3))
-                if name not in _SCALARS and Benchmark.by_id(name) is None:
-                    known = ", ".join(sorted([*_SCALARS, *(b.id for b in Benchmark.registry())]))
+                var = Variables.by_name(name)
+                if var is None:
                     raise CriteriaError(
-                        f"{name!r} is not a benchmark or a measure interact knows. Try one of: {known}"
+                        f"{name!r} is not a variable interact knows.{_did_you_mean(name)}"
                     )
+                if var.flag:
+                    raise CriteriaError(f"{name!r} is a yes/no — write it on its own, not with {op}")
                 terms.append(Term(name, op, value))
             elif (m := _BARE.match(clause)) is not None:
                 name = m.group(1)
-                if name not in cls._CAPS:
+                var = Variables.by_name(name)
+                if var is None or not var.flag:
                     raise CriteriaError(
-                        f"{name!r} is not a capability. Try one of: {', '.join(sorted(cls._CAPS))}"
+                        f"{name!r} is not a capability.{_did_you_mean(name)}"
+                        if var is None else
+                        f"{name!r} is a measurement — compare it, e.g. '{name} > 0.8'"
                     )
                 terms.append(Term(name))
             else:
@@ -144,11 +204,11 @@ class Criteria:
         return cls(tuple(terms), text.strip())
 
     def qualifying(self, available_only: bool = True) -> list[Model]:
-        """Every model that clears EVERY term, cheapest first.
+        """Every model clearing EVERY term, cheapest first.
 
         Cheapest-first is the point: the criterion is a FLOOR on quality, and under that floor
-        thrift decides — which is the opposite of a pinned id, where the price is whatever the
-        pin happened to cost.
+        thrift decides — the opposite of a pin, where the price is whatever the pin happened to
+        cost on the day it was typed.
         """
         pool = [m for m in Model.registry() if not available_only or m.is_available()]
         fit = [m for m in pool if all(t.holds(m) for t in self.terms)]
@@ -162,18 +222,13 @@ class Criteria:
         return fit[0] if fit else None
 
     def explain(self, available_only: bool = True) -> str:
-        """Why nothing qualified — which term did the excluding, and how close anyone got.
-
-        A criterion that matches nothing is a question ("is my bar too high, or is nothing
-        scored?"), and the answer is knowable, so it is answered rather than left to a shrug.
-        """
+        """Why nothing qualified — which term excluded everyone, and how close anyone got."""
         pool = [m for m in Model.registry() if not available_only or m.is_available()]
         if not pool:
             return "no model is configured at all — add a provider key first"
         fit = self.qualifying(available_only)
         if fit:
-            best = fit[0]
-            return f"{len(fit)} model(s) clear {self}; cheapest is {best.id}"
+            return f"{len(fit)} model(s) clear {self}; cheapest is {fit[0].id}"
         lines = [f"nothing clears {self}:"]
         for term in self.terms:
             kept = [m for m in pool if term.holds(m)]
@@ -184,6 +239,6 @@ class Criteria:
             if not scored:
                 lines.append(f"  {term} — nothing in the catalog is scored on '{term.field}'")
             else:
-                near = max(scored, key=lambda p: p[1] or 0)
+                near = max(scored, key=lambda pair: pair[1] or 0)
                 lines.append(f"  {term} — nobody passes; best is {near[0]} at {near[1]:g}")
         return "\n".join(lines)

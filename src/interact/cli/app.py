@@ -707,6 +707,68 @@ def agents_send(run_id: str, message: str) -> None:
     print(f"Delivered to {run.name} ({run_id[:8]}). It is answering now.")
 
 
+@agents_app.command(name="variables")
+def agents_variables() -> None:
+    """Every comparison a model criterion can make, and who measured each one.
+
+    The discovery surface for writing a criterion: you cannot write ``aa.mmmu > 0.7`` if nothing
+    tells you it exists. Each variable is namespaced by its SOURCE — a bare ``intelligence``
+    hides who measured it, and two leaderboards rarely agree.
+    """
+    from interact.criteria import Variables
+
+    rows = Variables.all()
+    width = max(len(v.name) for v in rows)
+    for v in sorted(rows, key=lambda v: v.name):
+        kind = "yes/no  " if v.flag else "measure "
+        print(f"  {v.name:<{width}}  {kind} {v.describe}")
+    print("\nWrite one as  cap.vlm and gui.screenspot > 0.85 and price.in < 10  — cheapest that"
+          " clears every term is used, and re-resolved at every spawn.")
+
+
+@agents_app.command(name="policy")
+def agents_policy() -> None:
+    """What ~/.interact/agents.json says: profiles, who wears them, toolsets, providers.
+
+    Each agent row shows the rule as WRITTEN and what it currently RESOLVES to, so a criterion
+    that quietly matches nothing is visible here rather than at the spawn that fails.
+    """
+    from interact.agents.policy import Policy, policy_path
+    from interact.criteria import Criteria, CriteriaError
+
+    policy = Policy.load()
+    print(f"policy: {policy_path()}")
+    if policy.profiles:
+        print("\nprofiles")
+        for name, rule in policy.profiles.items():
+            print(f"  @{name:<14} {rule}")
+    if policy.agents:
+        print("\nagents")
+        for agent, rule in policy.agents.items():
+            resolved = policy.criterion_for(agent) or ""
+            shown = rule if rule == resolved else f"{rule}  →  {resolved}"
+            note = ""
+            if any(op in resolved for op in "<>=") or " and " in resolved:
+                try:
+                    chosen = Criteria.parse(resolved).choose()
+                    note = f"  ⇒ {chosen.id}" if chosen else "  ⇒ NOTHING qualifies right now"
+                except CriteriaError as err:
+                    note = f"  ⇒ INVALID: {err}"
+            print(f"  {agent:<16} {shown}{note}")
+    if policy.toolsets:
+        print("\ntoolsets")
+        for name in policy.toolsets:
+            print(f"  @{name:<14} {', '.join(policy.expand_toolset(name))}")
+    if policy.agent_tools:
+        print("\nagent tools")
+        for agent in policy.agent_tools:
+            print(f"  {agent:<16} {', '.join(policy.tools_for(agent))}")
+    print("\nproviders")
+    from interact.agents.providers import PROVIDERS
+    for name in PROVIDERS:
+        print(f"  {name:<8} {'on' if policy.provider_active(name) else 'off'}")
+
+
 @agents_app.command(name="clear")
 def agents_clear(run_id: str | None = None) -> None:
     """Forget finished agent runs — all of them, or one by the short id `agents list` prints.
@@ -724,14 +786,45 @@ def agents_clear(run_id: str | None = None) -> None:
 
 
 @agents_app.command(name="providers")
-def agents_providers() -> None:
-    """Which agent CLIs can be spawned here, and the named agents each can resolve."""
+def agents_providers(name: str | None = None, state: str | None = None) -> None:
+    """Which agent CLIs drive agents here — list them, or switch one on/off.
+
+    ``interact agents providers`` lists each provider as ``<name> <on|off> <availability>``, then
+    the named agents and permission modes it can resolve. ``interact agents providers codex off``
+    switches one off at the one place every spawn passes through (``~/.interact/agents.json``),
+    so the panel's toggle and this command read and write the same fact. Unmentioned providers
+    are ON: a CLI you installed is one you meant to use.
+
+    Parameters
+    ----------
+    name
+        A provider (claude, codex, ...). Omit to list.
+    state
+        ``on`` or ``off``.
+    """
+    import sys
+
+    from interact.agents.policy import Policy
     from interact.agents.providers import PROVIDERS
 
+    policy = Policy.load()
+    if name is not None:
+        if state not in ("on", "off"):
+            print(f"say 'on' or 'off' for {name!r} — not {state!r}", file=sys.stderr)
+            raise SystemExit(2)
+        if name not in PROVIDERS:
+            print(f"unknown provider {name!r}; interact knows: {', '.join(PROVIDERS)}",
+                  file=sys.stderr)
+            raise SystemExit(2)
+        policy.set_provider_active(name, state == "on")
+        print(f"{name} {state}")
+        return
     for p in PROVIDERS.values():
-        state = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
+        switch = "on" if policy.provider_active(p.name) else "off"
+        avail = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
         note = f" — {p.caveat}" if not p.verified else ""
-        print(f"  {p.name:8} {state}{note}")
+        # `<name> <on|off>` first: the panel's toggle parses exactly those two tokens.
+        print(f"{p.name:8} {switch:3} {avail}{note}")
         if definitions := p.agent_definitions():
             print(f"           agents: {', '.join(definitions)}")
         if modes := p.permission_modes():

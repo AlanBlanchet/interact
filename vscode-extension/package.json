@@ -246,6 +246,11 @@
         "icon": "$(person-add)"
       },
       {
+        "command": "interact.agents.providers",
+        "title": "Interact: Providers That Run Agents",
+        "icon": "$(plug)"
+      },
+      {
         "command": "interact.agents.workspace",
         "title": "Interact: Show Agents From Workspace…",
         "icon": "$(folder-library)"

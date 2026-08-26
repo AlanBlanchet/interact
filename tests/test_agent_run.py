@@ -47,7 +47,7 @@ class _FakeProvider(AgentProvider):
         return True
 
     def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
-                permission_mode=None):
+                permission_mode=None, allowed_tools=None):
         return [sys.executable, "-c", self.script]
 
     def parse(self, line):
@@ -59,7 +59,7 @@ class _CrashingProvider(_FakeProvider):
     name = "crash"
 
     def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
-                permission_mode=None):
+                permission_mode=None, allowed_tools=None):
         return [sys.executable, "-c", "import sys; sys.exit(3)"]
 
 
