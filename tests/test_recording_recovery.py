@@ -8,12 +8,24 @@ context, so a slow page bricks recording for the rest of that session.
 The re-navigation is also the wrong thing to fail on. By the time it runs the recording context
 already exists and is capturing; losing the whole recording because the page was slow to come
 back trades something valuable for something cosmetic.
+
+The same context swap has a second way of being silently wrong (#123): it carried COOKIES only, so
+a page's localStorage — an app's logged-in / onboarded state — was gone when the page came back.
+The agent then recorded a fresh-origin render and read its first-visit banner as a "flash" bug.
 """
 
 import pytest
 
 from interact.browser import BrowserManager
 from interact.config import Config
+
+# What Playwright's storage_state() holds: the cookie jar AND each origin's localStorage.
+_STATE = {
+    "cookies": [],
+    "origins": [
+        {"origin": "http://127.0.0.1:3000", "localStorage": [{"name": "onboarded", "value": "1"}]}
+    ],
+}
 
 
 class _Page:
@@ -28,16 +40,14 @@ class _Page:
 
 
 class _Context:
-    def __init__(self, page):
+    def __init__(self, page, built_with: dict | None = None):
         self.pages = [page]
+        self.built_with = built_with or {}  # the kwargs _new_context was asked to build it with
 
-    async def cookies(self):
-        return []
+    async def storage_state(self):
+        return _STATE
 
     async def close(self):
-        pass
-
-    async def add_cookies(self, c):
         pass
 
 
@@ -52,7 +62,7 @@ def _mgr(goto_fails: bool, new_context_fails: bool = False) -> BrowserManager:
     async def new_context(*a, **k):
         if new_context_fails:
             raise RuntimeError("browser died")
-        mgr._context = _Context(page)
+        mgr._context = _Context(page, built_with=k)
 
     mgr.ensure_ready = ready
     mgr._new_context = new_context
@@ -107,3 +117,32 @@ async def test_it_reports_where_the_page_actually_landed():
     mgr._new_context = new_context
 
     assert (await mgr.start_recording())[0] == "about:blank"
+
+
+async def _start(mgr: BrowserManager):
+    await mgr.start_recording()
+
+
+async def _stop(mgr: BrowserManager):
+    await mgr.start_recording()
+    await mgr.stop_recording()
+
+
+async def _viewport_change(mgr: BrowserManager):
+    await mgr._rebuild_context()  # what emulate_device does
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swap", [_start, _stop, _viewport_change])
+async def test_a_context_swap_carries_the_whole_storage_state(swap):
+    """#123: every path that rebuilds the context re-added the old context's COOKIES and nothing
+    else, so localStorage was wiped on record(start) AND again on record(stop) — while
+    `document.cookie` survived, which is exactly what made the loss look like the page's own doing.
+    Playwright's storage_state() carries both; the rebuilt context must be built from it."""
+    mgr = _mgr(goto_fails=False)
+
+    await swap(mgr)
+
+    assert mgr._context.built_with.get("storage_state") == _STATE, (
+        "the rebuilt context was not given the session's storage state — localStorage is gone"
+    )

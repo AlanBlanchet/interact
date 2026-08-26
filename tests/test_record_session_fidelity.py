@@ -109,6 +109,43 @@ async def test_a_rebuilt_context_keeps_the_forced_media_features():
 
 
 @pytest.mark.asyncio
+async def test_a_recording_keeps_the_pages_local_storage(http_origin):
+    """#123: `record(start=True)` swapped the context carrying only its COOKIES, so the page came
+    back with its localStorage gone — an app's logged-in / onboarded state — and the agent recorded
+    a fresh-origin render, reading its first-visit banner as a "flash" regression. `document.cookie`
+    surviving is what pinned the loss on the page instead of the recorder. The stop swap dropped it a
+    second time. Real Playwright, real http origin: the mocked test cannot know what storage_state
+    holds, only that it was handed over."""
+    mgr = _mgr()
+    try:
+        await mgr.ensure_ready()
+    except Exception as exc:
+        pytest.skip(f"no launchable chromium: {exc}")
+    try:
+        page = await mgr.get_page()
+        await page.goto(http_origin)
+        await page.evaluate("() => localStorage.setItem('onboarded', '1')")
+
+        url, trouble = await mgr.start_recording()
+
+        assert trouble is None and url.rstrip("/") == http_origin
+        page = await mgr.get_page()
+        assert await page.evaluate("() => localStorage.getItem('onboarded')") == "1", (
+            "record(start) wiped the page's localStorage"
+        )
+
+        await mgr.stop_recording()
+
+        page = await mgr.get_page()
+        assert page.url.rstrip("/") == http_origin
+        assert await page.evaluate("() => localStorage.getItem('onboarded')") == "1", (
+            "record(stop) wiped the page's localStorage"
+        )
+    finally:
+        await mgr.close()
+
+
+@pytest.mark.asyncio
 async def test_the_recorded_frames_are_the_emulated_size_on_a_real_recording():
     """#110's symptom was PIXELS — ffprobe said 1280x720 — so the closing evidence has to be the
     produced video, not the kwargs that ask for it."""

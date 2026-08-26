@@ -1,5 +1,8 @@
 import os
 import sys
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -91,6 +94,23 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_integration)
         if no_linux_display and "desktop" in item.keywords:
             item.add_marker(skip_desktop)
+
+@pytest.fixture
+def http_origin(tmp_path):
+    """A real http origin serving one static page, for anything the browser keys by ORIGIN —
+    localStorage above all: a `data:` / `about:blank` page has an opaque origin, so state set there
+    never survives anything and a test on it proves nothing. Yields the origin (no trailing slash)."""
+    (tmp_path / "index.html").write_text("<title>origin</title><body>served</body>")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
 
 # --- shared image fixtures (blankness, capture and VLM-gate tests all build frames) ---
 

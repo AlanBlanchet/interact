@@ -319,56 +319,33 @@ class BrowserManager:
         if self._recording_dir:
             raise RuntimeError("Already recording — call stop_recording first")
         await self.ensure_ready()
-        page = self._active_page()
-        url = page.url if page and page.url != "about:blank" else None
-        cookies = await self._context.cookies() if self._context else []
-        await self._context.close()
-        self._element_map.clear()
+        # Playwright records only a context created with record_video_dir, so recording is a
+        # context swap — _rebuild_context carries the session (state + URL) across it (#123).
         self._recording_dir = tempfile.TemporaryDirectory()
         try:
-            await self._new_context(record_video_dir=self._recording_dir.name)
-            if cookies:
-                await self._context.add_cookies(cookies)
+            return await self._rebuild_context(record_video_dir=self._recording_dir.name)
         except Exception:
             # Whatever went wrong, this session is NOT recording. Leaving the marker set makes
             # every later attempt fail with "Already recording" for the rest of the session —
             # which is how one slow page ended recording permanently in a real run.
             self._recording_dir.cleanup()
             self._recording_dir = None
-            # The old context was closed before the swap, so without this the session is left
-            # with a dead one and every later action fails for a second, unrelated-looking reason.
-            try:
-                await self._new_context()
-            except Exception:
-                self._context = None
             raise
-        page = self._context.pages[0]
-        if not url:
-            return "about:blank", None
-        return await _restore_url(page, url)
 
     async def stop_recording(self) -> bytes:
         if not self._recording_dir:
             raise RuntimeError("Not recording — call start_recording first")
-        page = self._active_page()
-        url = page.url if page and page.url != "about:blank" else None
-        cookies = await self._context.cookies() if self._context else []
-        await self._context.close()
-        self._context = None
-        video_files = sorted(Path(self._recording_dir.name).glob("*.webm"))
-        if not video_files:
-            video_files = sorted(Path(self._recording_dir.name).iterdir())
-        video_bytes = video_files[-1].read_bytes() if video_files else b""
-        self._recording_dir.cleanup()
-        self._recording_dir = None
-        self._element_map.clear()
-        await self._new_context()
-        if cookies:
-            await self._context.add_cookies(cookies)
-        page = self._context.pages[0]
-        if url:
-            await _restore_url(page, url)
-        return video_bytes
+        recording_dir, self._recording_dir = self._recording_dir, None
+        try:
+            # Closing the recording context is what finalizes the video; the swap back to a plain
+            # context carries the session's state + URL across, same as the start (#123).
+            await self._rebuild_context()
+            video_files = sorted(Path(recording_dir.name).glob("*.webm"))
+            if not video_files:
+                video_files = sorted(Path(recording_dir.name).iterdir())
+            return video_files[-1].read_bytes() if video_files else b""
+        finally:
+            recording_dir.cleanup()
 
     async def close(self):
         if self._persistent and self._context:
@@ -395,48 +372,50 @@ class BrowserManager:
         reset: bool = False,
     ) -> str:
         """Set the session's viewport / device profile (true device metrics: CSS size, DPR, touch),
-        then rebuild the context so later navigations & screenshots see it. Preserves cookies and
-        re-opens the current URL. Returns a short human description. Raises ValueError on an unknown
-        device name."""
+        then rebuild the context so later navigations & screenshots see it. Preserves the session's
+        storage state (cookies + localStorage) and re-opens the current URL — saying so in the
+        returned description if the page could not be re-opened, since the agent reads only that.
+        Returns a short human description. Raises ValueError on an unknown device name."""
         await self.ensure_ready()
         if reset:
             self._device_override = None
-            await self._rebuild_context()
-            return (
+            described = (
                 f"viewport reset to {self._config.viewport_width}x"
                 f"{self._config.viewport_height} (DPR 1)"
             )
-        profile: dict = {}
-        if device:
-            spec = (self._playwright.devices or {}).get(device)
-            if spec is None:
-                raise ValueError(
-                    f"Unknown device {device!r}. Use a Playwright device name "
-                    "(e.g. 'iPhone 13', 'Pixel 7', 'iPad Mini'), or give explicit width+height."
-                )
-            vp = spec.get("viewport") or {}
-            profile = {
-                "width": vp.get("width"),
-                "height": vp.get("height"),
-                "device_scale_factor": spec.get("device_scale_factor"),
-                "is_mobile": spec.get("is_mobile"),
-                "has_touch": spec.get("has_touch"),
-                "user_agent": spec.get("user_agent"),
-            }
-        # Explicit fields override / extend a named device.
-        for key, val in (
-            ("width", width),
-            ("height", height),
-            ("device_scale_factor", device_scale_factor),
-            ("is_mobile", is_mobile),
-            ("has_touch", has_touch),
-            ("user_agent", user_agent),
-        ):
-            if val is not None:
-                profile[key] = val
-        self._device_override = profile
-        await self._rebuild_context()
-        return self._describe_device(profile)
+        else:
+            profile: dict = {}
+            if device:
+                spec = (self._playwright.devices or {}).get(device)
+                if spec is None:
+                    raise ValueError(
+                        f"Unknown device {device!r}. Use a Playwright device name "
+                        "(e.g. 'iPhone 13', 'Pixel 7', 'iPad Mini'), or give explicit width+height."
+                    )
+                vp = spec.get("viewport") or {}
+                profile = {
+                    "width": vp.get("width"),
+                    "height": vp.get("height"),
+                    "device_scale_factor": spec.get("device_scale_factor"),
+                    "is_mobile": spec.get("is_mobile"),
+                    "has_touch": spec.get("has_touch"),
+                    "user_agent": spec.get("user_agent"),
+                }
+            # Explicit fields override / extend a named device.
+            for key, val in (
+                ("width", width),
+                ("height", height),
+                ("device_scale_factor", device_scale_factor),
+                ("is_mobile", is_mobile),
+                ("has_touch", has_touch),
+                ("user_agent", user_agent),
+            ):
+                if val is not None:
+                    profile[key] = val
+            self._device_override = profile
+            described = self._describe_device(profile)
+        _, trouble = await self._rebuild_context()
+        return f"{described} ({trouble})" if trouble else described
 
     @staticmethod
     def _describe_device(p: dict) -> str:
@@ -455,21 +434,43 @@ class BrowserManager:
         )
         return "viewport set to " + ", ".join(bits) + note
 
-    async def _rebuild_context(self):
-        """Recreate the context with current kwargs, preserving cookies and the open URL — for a
-        setting fixed at context creation (viewport / DPR / mobile / touch) that changed
-        mid-session. Mirrors the start/stop-recording swap."""
+    async def _rebuild_context(self, record_video_dir: str | None = None) -> tuple[str, str | None]:
+        """Recreate the context with the current kwargs — for a setting fixed at context creation
+        (viewport / DPR / mobile / touch, a recording's video dir) that changed mid-session — and
+        carry the session across the swap: its storage state and the active tab's URL.
+
+        The state is Playwright's ``storage_state`` — cookies AND every origin's localStorage — the
+        same snapshot the idle-close restore (#36) and the Basic-auth rebuild (#70) carry. The swap
+        used to re-add only the cookies (#123): the page came back logged in but with its
+        localStorage gone, so an onboarded app re-rendered as a first visit and an agent recording
+        it read the returning banner as a "flash" bug in the page. sessionStorage and in-memory JS
+        state cannot survive any swap — a fresh context is a fresh page. A persistent session keeps
+        its state in the on-disk profile, so there is nothing to snapshot.
+
+        Returns where the page actually landed + what went wrong restoring it, if anything (see
+        ``_restore_url``): the new context already exists by then, so a slow page is not fatal.
+        """
         page = self._active_page()
         url = page.url if page and page.url != "about:blank" else None
-        cookies = await self._context.cookies() if self._context else []
+        state = (
+            await self._context.storage_state() if self._context and not self._persistent else None
+        )
         if self._context:
             await self._context.close()
         self._element_map.clear()
-        await self._new_context()
-        if cookies:
-            await self._context.add_cookies(cookies)
-        if url:
-            await self._context.pages[0].goto(url)
+        try:
+            await self._new_context(storage_state=state, record_video_dir=record_video_dir)
+        except Exception:
+            # The old context is already closed, so without this the session is left with a dead
+            # one and every later action fails for a second, unrelated-looking reason.
+            try:
+                await self._new_context(storage_state=state)
+            except Exception:
+                self._context = None
+            raise
+        if not url:
+            return "about:blank", None
+        return await _restore_url(self._context.pages[0], url)
 
     def set_http_credentials(self, username: str, password: str) -> None:
         """Provide HTTP Basic-auth credentials for this session so Playwright authenticates at the
