@@ -1,6 +1,8 @@
 import hashlib
+import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +17,16 @@ REPO_ROOT = Path(__file__).parents[1]
 GATE = REPO_ROOT / "scripts" / "repository_gate.py"
 ITERATION_ID = "20260827-workflow-gates-test"
 HASH = "a" * 64
+LEGACY_SUPERSEDED = '{"iteration_id":"20260827-workflow-gates","state":"SUPERSEDED","evidence":{"closed_commit":"723624d4a2a24a4c340d6667f06518fd983ca3c0","reason":"post-commit validation incorrectly compared the clean index with the historical candidate staged-diff hash"}}'
+
+
+def load_gate_module():
+    spec = importlib.util.spec_from_file_location("repository_gate_test_module", GATE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture
@@ -379,7 +391,10 @@ def implemented_event():
 def candidate_event(root: Path):
     tree = subprocess.run(["git", "write-tree"], cwd=root, text=True, capture_output=True, check=True).stdout.strip()
     staged_diff = subprocess.run(
-        ["git", "diff", "--cached", "--binary"], cwd=root, capture_output=True, check=True
+        ["git", "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"],
+        cwd=root,
+        capture_output=True,
+        check=True,
     ).stdout
     acceptance_sha256 = hashlib.sha256(
         json.dumps(baseline_event()["evidence"]["acceptance"], separators=(",", ":")).encode()
@@ -405,12 +420,13 @@ def review_event(candidate: dict[str, object]):
             "acceptance_sha256": evidence["acceptance_sha256"],
             "reviewers": [
                 {
+                    "schema_version": 1,
                     "reviewer": "reviewer",
-                    "task": "functional-diff-review",
+                    "task": "functional_diff_review",
                     "candidate_tree": evidence["tree"],
                     "acceptance_sha256": evidence["acceptance_sha256"],
                     "inspected_paths": ["scripts/repository_gate.py"],
-                    "findings": ["no findings"],
+                    "findings": [],
                     "disposition": "approved",
                     "commands": [
                         {
@@ -480,7 +496,7 @@ def valid_events(root: Path, terminal: str):
     events.append(event("COMMITTED", {"commit": head, "tree": tree, "candidate_tree": tree}))
     if terminal == "COMMITTED":
         return events
-    for name in ("pm", "developer"):
+    for name in ("pm", "developer", "reviewer"):
         memory = root / ".github" / "memory" / f"{name}.md"
         memory.parent.mkdir(parents=True, exist_ok=True)
         memory.write_text(f"# memory\n\n- {ITERATION_ID}\n")
@@ -491,12 +507,82 @@ def valid_events(root: Path, terminal: str):
                 "acceptance": {"gate enforced": "satisfied"},
                 "blockers": [],
                 "processes": [],
-                "participants": ["pm", "developer"],
-                "memory_markers": ["pm", "developer"],
+                "participants": ["pm", "developer", "reviewer"],
+                "memory_markers": ["pm", "developer", "reviewer"],
             },
         )
     )
     return events
+
+
+def close_recovery_epoch(
+    root: Path,
+    events: list[dict[str, object]],
+    filename: str,
+    participants: list[str],
+):
+    stage(root, filename, filename.encode() + b"\n")
+    candidate = candidate_event(root)
+    events.extend([candidate, review_event(candidate), verified_event(candidate)])
+    return close_verified_epoch(root, events, filename, participants)
+
+
+def close_verified_epoch(
+    root: Path,
+    events: list[dict[str, object]],
+    message: str,
+    participants: list[str],
+):
+    subprocess.run(["git", "commit", "-qm", message], cwd=root, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=True
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=root, text=True, capture_output=True, check=True
+    ).stdout.strip()
+    events.append(event("COMMITTED", {"commit": commit, "tree": tree, "candidate_tree": tree}))
+    reviewer_names = {
+        reviewer["reviewer"]
+        for item in events
+        if item["state"] == "REVIEWED"
+        for reviewer in item["evidence"]["reviewers"]
+    }
+    effective_participants = sorted(set(participants) | reviewer_names)
+    for participant in effective_participants:
+        memory = root / ".github" / "memory" / f"{participant.replace('_', '-')}.md"
+        memory.parent.mkdir(parents=True, exist_ok=True)
+        memory.write_text(f"# memory\n\n- {ITERATION_ID}\n")
+    events.append(
+        event(
+            "CLOSED",
+            {
+                "acceptance": {"gate enforced": "satisfied"},
+                "blockers": [],
+                "processes": [],
+                "participants": list(effective_participants),
+                "memory_markers": list(effective_participants),
+            },
+        )
+    )
+    return commit, tree
+
+
+def supersede_closed_epoch(events: list[dict[str, object]], commit: str):
+    events.extend(
+        [
+            event(
+                "SUPERSEDED",
+                {
+                    "schema_version": 1,
+                    "closed_commit": commit,
+                    "contradicted_claim": "verification_evidence",
+                    "recovery": "RED",
+                },
+            ),
+            red_event(),
+            implemented_event(),
+        ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -555,7 +641,6 @@ def test_invalid_ledger_evidence_fails_closed(git_repo: Path, mutation: str, mes
         ("red-empty-includes", "includes"),
         ("empty-reviewers", "reviewers"),
         ("empty-inspected-paths", "inspected_paths"),
-        ("empty-findings", "findings"),
         ("empty-review-commands", "commands"),
         ("review-command-failed", "exit_code"),
         ("review-candidate", "candidate"),
@@ -576,8 +661,6 @@ def test_ledger_requires_complete_success_evidence(git_repo: Path, mutation: str
         events[5]["evidence"]["reviewers"] = []
     elif mutation == "empty-inspected-paths":
         events[5]["evidence"]["reviewers"][0]["inspected_paths"] = []
-    elif mutation == "empty-findings":
-        events[5]["evidence"]["reviewers"][0]["findings"] = []
     elif mutation == "empty-review-commands":
         events[5]["evidence"]["reviewers"][0]["commands"] = []
     elif mutation == "review-command-failed":
@@ -644,10 +727,619 @@ def test_committed_event_must_match_current_head(git_repo: Path):
     assert "current head" in result.stderr.lower()
 
 
+@pytest.mark.parametrize("terminal", ["COMMITTED", "CLOSED"])
+def test_post_commit_clean_index_uses_head_binding_not_candidate_diff_hash(
+    git_repo: Path, terminal: str
+):
+    stage(git_repo, "candidate.txt", b"candidate content\n")
+    events = valid_events(git_repo, "VERIFIED")
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=git_repo, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=git_repo, text=True, capture_output=True, check=True
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=git_repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    events.append(event("COMMITTED", {"commit": commit, "tree": tree, "candidate_tree": tree}))
+    if terminal == "CLOSED":
+        for name in ("pm", "developer", "reviewer"):
+            memory = git_repo / ".github" / "memory" / f"{name}.md"
+            memory.parent.mkdir(parents=True, exist_ok=True)
+            memory.write_text(f"# memory\n\n- {ITERATION_ID}\n")
+        events.append(
+            event(
+                "CLOSED",
+                {
+                    "acceptance": {"gate enforced": "satisfied"},
+                    "blockers": [],
+                    "processes": [],
+                    "participants": ["pm", "developer", "reviewer"],
+                    "memory_markers": ["pm", "developer", "reviewer"],
+                },
+            )
+        )
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_committed_state_rejects_dirty_staged_index(git_repo: Path):
+    events = valid_events(git_repo, "COMMITTED")
+    stage(git_repo, "unexpected.txt", b"unexpected staged change\n")
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "index must be clean" in result.stderr.lower()
+
+
+def test_two_recovery_epochs_bind_only_latest_commit_to_head(git_repo: Path):
+    stage(git_repo, "epoch-a.txt", b"epoch a\n")
+    events = valid_events(git_repo, "VERIFIED")
+    commit_a, _ = close_verified_epoch(
+        git_repo, events, "epoch a", ["pm", "developer", "reviewer_a"]
+    )
+    supersede_closed_epoch(events, commit_a)
+    commit_b, _ = close_recovery_epoch(
+        git_repo, events, "epoch-b.txt", ["pm", "developer", "reviewer_a", "reviewer_b"]
+    )
+    supersede_closed_epoch(events, commit_b)
+    close_recovery_epoch(
+        git_repo,
+        events,
+        "epoch-c.txt",
+        ["pm", "developer", "reviewer_a", "reviewer_b", "reviewer_c"],
+    )
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("tamper", ["commit", "tree"])
+def test_superseded_historical_commit_remains_cryptographically_bound(
+    git_repo: Path, tamper: str
+):
+    stage(git_repo, "epoch-a.txt", b"epoch a\n")
+    events = valid_events(git_repo, "VERIFIED")
+    commit_a, _ = close_verified_epoch(git_repo, events, "epoch a", ["pm", "developer"])
+    supersede_closed_epoch(events, commit_a)
+    commit_b, tree_b = close_recovery_epoch(
+        git_repo, events, "epoch-b.txt", ["pm", "developer"]
+    )
+    historical = events[7]["evidence"]
+    historical[tamper] = commit_b if tamper == "commit" else tree_b
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "commit" in result.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("wrong_commit", "closed commit"),
+        ("missing_evidence", "state order"),
+        ("designed_without_review", "state order"),
+    ],
+)
+def test_supersession_control_shapes_fail_closed(
+    git_repo: Path, mutation: str, expected: str
+):
+    events = valid_events(git_repo, "CLOSED")
+    commit = events[7]["evidence"]["commit"]
+    control = event(
+        "SUPERSEDED",
+        {"schema_version": 1, "closed_commit": commit, "contradicted_claim": "acceptance_reconciliation", "recovery": "RED"},
+    )
+    events.append(control)
+    if mutation == "wrong_commit":
+        control["evidence"]["closed_commit"] = "0" * 40
+        events.append(red_event())
+    elif mutation == "missing_evidence":
+        events.append(implemented_event())
+    else:
+        events.append(designed_event())
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert expected in result.stderr.lower()
+
+
+def test_recovery_to_designed_requires_typed_review_finding(git_repo: Path):
+    events = valid_events(git_repo, "CLOSED")
+    committed = events[7]["evidence"]
+    prior_review = json.loads(json.dumps(events[5]["evidence"]["reviewers"][0]))
+    prior_review["disposition"] = "changes_requested"
+    prior_review["findings"] = [
+        {
+            "claim": "acceptance_reconciliation",
+            "detail": "interface acceptance was contradicted",
+        }
+    ]
+    events.extend(
+        [
+            event(
+                "SUPERSEDED",
+                {
+                    "schema_version": 1,
+                    "closed_commit": committed["commit"],
+                    "contradicted_claim": "acceptance_reconciliation",
+                    "recovery": "DESIGNED",
+                    "review": prior_review,
+                },
+            ),
+            designed_event(),
+            red_event(),
+            implemented_event(),
+        ]
+    )
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_closed_memory_markers_reconcile_participants_across_recovery_epochs(git_repo: Path):
+    stage(git_repo, "epoch-a.txt", b"epoch a\n")
+    events = valid_events(git_repo, "VERIFIED")
+    commit, _ = close_verified_epoch(
+        git_repo, events, "epoch a", ["pm", "developer", "reviewer_a"]
+    )
+    supersede_closed_epoch(events, commit)
+    close_recovery_epoch(git_repo, events, "epoch-b.txt", ["pm", "developer"])
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "memory marker" in result.stderr.lower()
+
+
+def test_committed_clean_index_ignores_hostile_textconv(git_repo: Path):
+    script = git_repo / "constant-textconv.sh"
+    script.write_text("#!/bin/sh\nprintf 'unchanged\\n'\n")
+    script.chmod(0o755)
+    stage(git_repo, ".gitattributes", b"*.masked diff=hide\n")
+    stage(git_repo, "tracked.masked", b"before\n")
+    subprocess.run(["git", "add", "constant-textconv.sh"], cwd=git_repo, check=True)
+    subprocess.run(["git", "config", "diff.hide.textconv", "./constant-textconv.sh"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "textconv fixture"], cwd=git_repo, check=True)
+    events = valid_events(git_repo, "COMMITTED")
+    stage(git_repo, "tracked.masked", b"after\n")
+    visible = subprocess.run(
+        ["git", "diff", "--cached", "--binary"], cwd=git_repo, capture_output=True, check=True
+    )
+    assert visible.stdout == b""
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "index" in result.stderr.lower()
+
+
+@pytest.mark.parametrize("terminal", ["COMMITTED", "CLOSED"])
+def test_terminal_verification_never_executes_mutating_textconv(
+    git_repo: Path, terminal: str
+):
+    script = git_repo / "mutating-textconv.sh"
+    script.write_text("#!/bin/sh\ngit reset -q HEAD\nprintf 'unchanged\\n'\n")
+    script.chmod(0o755)
+    stage(git_repo, ".gitattributes", b"*.masked diff=mutating\n")
+    stage(git_repo, "tracked.masked", b"before\n")
+    subprocess.run(["git", "add", "mutating-textconv.sh"], cwd=git_repo, check=True)
+    subprocess.run(["git", "config", "diff.mutating.textconv", "./mutating-textconv.sh"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "mutating textconv fixture"], cwd=git_repo, check=True)
+    events = valid_events(git_repo, terminal)
+    stage(git_repo, "tracked.masked", b"after\n")
+    dirty_tree = subprocess.run(
+        ["git", "write-tree"], cwd=git_repo, text=True, capture_output=True, check=True
+    ).stdout.strip()
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+    remaining_tree = subprocess.run(
+        ["git", "write-tree"], cwd=git_repo, text=True, capture_output=True, check=True
+    ).stdout.strip()
+
+    assert result.returncode == 1
+    assert remaining_tree == dirty_tree
+
+
+def test_precommit_candidate_diff_disables_mutating_textconv(git_repo: Path):
+    script = git_repo / "conditional-textconv.sh"
+    script.write_text(
+        "#!/bin/sh\nif test -e mutate-index; then git reset -q HEAD; fi\nprintf 'unchanged\\n'\n"
+    )
+    script.chmod(0o755)
+    stage(git_repo, ".gitattributes", b"*.masked diff=conditional\n")
+    stage(git_repo, "tracked.masked", b"before\n")
+    subprocess.run(["git", "add", "conditional-textconv.sh"], cwd=git_repo, check=True)
+    subprocess.run(["git", "config", "diff.conditional.textconv", "./conditional-textconv.sh"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "conditional textconv fixture"], cwd=git_repo, check=True)
+    stage(git_repo, "tracked.masked", b"after\n")
+    events = valid_events(git_repo, "CANDIDATE_FROZEN")
+    expected_tree = events[-1]["evidence"]["tree"]
+    (git_repo / "mutate-index").write_text("armed\n")
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+    remaining_tree = subprocess.run(
+        ["git", "write-tree"], cwd=git_repo, text=True, capture_output=True, check=True
+    ).stdout.strip()
+
+    assert result.returncode == 0, result.stderr
+    assert remaining_tree == expected_tree
+
+
+def test_historical_commit_rejects_symbolic_revision_instead_of_full_object_id(git_repo: Path):
+    stage(git_repo, "epoch-a.txt", b"epoch a\n")
+    events = valid_events(git_repo, "VERIFIED")
+    commit_a, _ = close_verified_epoch(git_repo, events, "epoch a", ["pm", "developer"])
+    supersede_closed_epoch(events, commit_a)
+    close_recovery_epoch(git_repo, events, "epoch-b.txt", ["pm", "developer"])
+    events[7]["evidence"]["commit"] = "HEAD~1"
+    events[9]["evidence"]["closed_commit"] = "HEAD~1"
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "commit" in result.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("target", "field"),
+    [("red", "failing_assertion"), ("red", "summary"), ("review", "summary"), ("review", "findings")],
+)
+def test_audit_narratives_must_be_nonempty(
+    git_repo: Path, target: str, field: str
+):
+    events = valid_events(git_repo, "REVIEWED")
+    if target == "red":
+        events[2]["evidence"][field] = "   "
+    elif field == "findings":
+        events[5]["evidence"]["reviewers"][0][field] = ["   "]
+    else:
+        events[5]["evidence"]["reviewers"][0]["commands"][0][field] = "   "
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("event_index", "field", "list_entry"),
+    [
+        (0, "request", False),
+        (0, "acceptance", True),
+        (1, "interpretation", False),
+        (1, "non_goals", True),
+        (1, "owners", True),
+        (1, "interfaces", True),
+        (1, "invariants", True),
+        (1, "edge_cases", True),
+        (1, "trust_boundaries", True),
+        (1, "tests", True),
+        (1, "negative_controls", True),
+        (1, "cost", False),
+        (1, "visual_route", False),
+        (1, "compatibility", False),
+        (3, "summary", False),
+        (5, "task", False),
+    ],
+)
+def test_required_schema_narratives_reject_whitespace(
+    git_repo: Path, event_index: int, field: str, list_entry: bool
+):
+    events = valid_events(git_repo, "REVIEWED")
+    evidence = events[event_index]["evidence"]
+    if event_index == 5:
+        evidence = evidence["reviewers"][0]
+    evidence[field] = ["   "] if list_entry else "   "
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "claim", "expected_returncode"),
+    [
+        ("contradicted_claim", "gate enforced", 0),
+        ("contradicted_claim", "commit_binding", 0),
+        ("contradicted_claim", "x", 1),
+        ("reason", "commit binding was wrong", 1),
+    ],
+)
+def test_superseded_claim_schema_cutover(
+    git_repo: Path, field: str, claim: str, expected_returncode: int
+):
+    events = valid_events(git_repo, "CLOSED")
+    commit = events[7]["evidence"]["commit"]
+    events.extend(
+        [
+            event(
+                "SUPERSEDED",
+                {"schema_version": 1, "closed_commit": commit, field: claim, "recovery": "RED"},
+            ),
+            red_event(),
+        ]
+    )
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == expected_returncode, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutation", "accepted"),
+    [
+        ("exact", True),
+        ("whitespace", False),
+        ("key_order", False),
+        ("ordinal", False),
+        ("iteration", False),
+        ("commit", False),
+        ("second_legacy", False),
+    ],
+)
+def test_immutable_v0_superseded_migration_tuple(
+    git_repo: Path, mutation: str, accepted: bool
+):
+    module = load_gate_module()
+    iteration_id = "20260827-workflow-gates"
+    items = []
+    for _ in range(28):
+        item = baseline_event()
+        item["iteration_id"] = iteration_id
+        items.append(json.dumps(item, separators=(",", ":")))
+    items.append(
+        json.dumps(
+            event(
+                "COMMITTED",
+                {
+                    "commit": "723624d4a2a24a4c340d6667f06518fd983ca3c0",
+                    "tree": "a" * 40,
+                    "candidate_tree": "a" * 40,
+                },
+            ),
+            separators=(",", ":"),
+        ).replace(ITERATION_ID, iteration_id)
+    )
+    closed = event(
+        "CLOSED",
+        {
+            "acceptance": {"gate enforced": "satisfied"},
+            "blockers": [],
+            "processes": [],
+            "participants": ["pm", "developer"],
+            "memory_markers": ["pm", "developer"],
+        },
+    )
+    items.append(json.dumps(closed, separators=(",", ":")).replace(ITERATION_ID, iteration_id))
+    legacy = LEGACY_SUPERSEDED
+    if mutation == "whitespace":
+        legacy += " "
+    elif mutation == "key_order":
+        legacy = legacy.replace('{"iteration_id":', '{"state":"SUPERSEDED","iteration_id":').replace(',"state":"SUPERSEDED"', "", 1)
+    elif mutation == "iteration":
+        legacy = legacy.replace(iteration_id, iteration_id + "-other")
+    elif mutation == "commit":
+        legacy = legacy.replace("723624d4", "823624d4")
+    if mutation == "ordinal":
+        items.insert(0, items.pop())
+    else:
+        items.append(legacy)
+    if mutation == "second_legacy":
+        items.append(legacy)
+    path = git_repo / f"{iteration_id}.md"
+    path.write_text("\n".join(f"```workflow-event\n{item}\n```" for item in items) + "\n")
+
+    try:
+        parsed = module.RepositoryGate(root=git_repo)._parse_events(path)
+        outcome = parsed[-1].state == "SUPERSEDED"
+    except module._GateError:
+        outcome = False
+
+    assert outcome is accepted
+
+
+@pytest.mark.parametrize(
+    ("findings", "expected_returncode"),
+    [
+        ([{"claim": "commit_binding", "detail": "tree binding contradicted"}], 0),
+        ([{"claim": "verification_evidence", "detail": "wrong claim"}], 1),
+        (["tree binding contradicted"], 1),
+        ([], 1),
+    ],
+)
+def test_v1_recovery_review_findings_bind_outer_claim(
+    git_repo: Path, findings: list[object], expected_returncode: int
+):
+    events = valid_events(git_repo, "CLOSED")
+    commit = events[7]["evidence"]["commit"]
+    review = json.loads(json.dumps(events[5]["evidence"]["reviewers"][0]))
+    review["disposition"] = "changes_requested"
+    review["findings"] = findings
+    events.extend(
+        [
+            event(
+                "SUPERSEDED",
+                {
+                    "schema_version": 1,
+                    "closed_commit": commit,
+                    "contradicted_claim": "commit_binding",
+                    "recovery": "DESIGNED",
+                    "review": review,
+                },
+            ),
+            designed_event(),
+        ]
+    )
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == expected_returncode, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("disposition", "findings", "accepted"),
+    [
+        ("approved", [], True),
+        ("approved", [{"claim": "commit_binding", "detail": "unexpected"}], False),
+        ("changes_requested", [], False),
+        (
+            "changes_requested",
+            [{"claim": "commit_binding", "detail": "tree binding contradicted"}],
+            True,
+        ),
+        ("rejected", ["no findings"], False),
+    ],
+)
+def test_v1_reviewer_schema_uses_structural_findings(
+    disposition: str, findings: list[object], accepted: bool
+):
+    module = load_gate_module()
+    candidate = candidate_event(REPO_ROOT)
+    raw = review_event(candidate)["evidence"]["reviewers"][0]
+    raw["schema_version"] = 1
+    raw["disposition"] = disposition
+    raw["findings"] = findings
+
+    try:
+        module._Reviewer.model_validate(raw)
+        outcome = True
+    except module.ValidationError:
+        outcome = False
+
+    assert outcome is accepted
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["exact", "byte", "key_order", "candidate_context", "extra_unversioned"],
+)
+def test_immutable_v0_approved_reviewer_migrations(git_repo: Path, mutation: str):
+    module = load_gate_module()
+    source = (REPO_ROOT / ".github" / "memory" / "iterations" / "20260827-workflow-gates.md").read_text()
+    matches = list(re.finditer(r"^```workflow-event\s*$\n(.*?)\n^```\s*$", source, re.MULTILINE | re.DOTALL))
+    reviewed = matches[26].group(1)
+    marker = '"reviewers":['
+    position = reviewed.index(marker) + len(marker)
+    decoder = json.JSONDecoder()
+    first, first_end = decoder.raw_decode(reviewed, position)
+    second_start = first_end + 1
+    _second, second_end = decoder.raw_decode(reviewed, second_start)
+    first_raw = reviewed[position:first_end]
+    second_raw = reviewed[second_start:second_end]
+    if mutation == "byte":
+        reviewed = reviewed.replace(first_raw, first_raw.replace('"security"', '"security "', 1), 1)
+    elif mutation == "key_order":
+        reordered = {"task": first["task"], **{key: value for key, value in first.items() if key != "task"}}
+        reviewed = reviewed.replace(first_raw, json.dumps(reordered, separators=(",", ":")), 1)
+    elif mutation == "extra_unversioned":
+        reviewed = reviewed[:second_end] + "," + second_raw + reviewed[second_end:]
+    source = source[: matches[26].start(1)] + reviewed + source[matches[26].end(1) :]
+    if mutation == "candidate_context":
+        source = source.replace(
+            '"tree":"660f50f49f1bb16b9f918f9f280e6fa75e4eaa56"',
+            '"tree":"760f50f49f1bb16b9f918f9f280e6fa75e4eaa56"',
+            1,
+        )
+    path = git_repo / "20260827-workflow-gates.md"
+    path.write_text(source)
+
+    try:
+        module.RepositoryGate(root=git_repo)._parse_events(path)
+        outcome = True
+    except module._GateError:
+        outcome = False
+
+    assert outcome is (mutation == "exact")
+
+
+@pytest.mark.parametrize("identity_field", ["reviewer", "task", "participants", "memory_markers"])
+def test_agent_id_is_canonical_at_schema_ingress(git_repo: Path, identity_field: str):
+    events = valid_events(git_repo, "CLOSED")
+    if identity_field in {"reviewer", "task"}:
+        events[5]["evidence"]["reviewers"][0][identity_field] = "../escape"
+    else:
+        events[8]["evidence"][identity_field][0] = "../escape"
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "escape" not in result.stderr
+
+
+@pytest.mark.parametrize("review_source", ["REVIEWED", "SUPERSEDED"])
+def test_final_memory_union_includes_each_review_source(git_repo: Path, review_source: str):
+    stage(git_repo, "epoch-a.txt", b"epoch a\n")
+    events = valid_events(git_repo, "VERIFIED")
+    commit, _ = close_verified_epoch(git_repo, events, "epoch a", ["pm", "developer"])
+    if review_source == "REVIEWED":
+        events[-1]["evidence"]["participants"].remove("reviewer")
+        events[-1]["evidence"]["memory_markers"].remove("reviewer")
+    else:
+        review = json.loads(json.dumps(events[5]["evidence"]["reviewers"][0]))
+        review["reviewer"] = "recovery_reviewer"
+        review["disposition"] = "changes_requested"
+        review["findings"] = [
+            {"claim": "commit_binding", "detail": "commit binding contradicted"}
+        ]
+        events.extend(
+            [
+                event(
+                    "SUPERSEDED",
+                    {
+                        "schema_version": 1,
+                        "closed_commit": commit,
+                        "contradicted_claim": "commit_binding",
+                        "recovery": "DESIGNED",
+                        "review": review,
+                    },
+                ),
+                designed_event(),
+                red_event(),
+                implemented_event(),
+            ]
+        )
+        close_recovery_epoch(git_repo, events, "epoch-b.txt", ["pm", "developer", "reviewer"])
+    ledger = write_ledger(git_repo, events)
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+
+    assert result.returncode == 1
+    assert "memory marker" in result.stderr.lower()
+
+
 @pytest.mark.parametrize("disposition", ["changes_requested", "rejected"])
 def test_nonapproved_review_invalidates_candidate(git_repo: Path, disposition: str):
     events = valid_events(git_repo, "REVIEWED")
     events[5]["evidence"]["reviewers"][0]["disposition"] = disposition
+    events[5]["evidence"]["reviewers"][0]["findings"] = [
+        {"claim": "gate enforced", "detail": "candidate must change"}
+    ]
     ledger = write_ledger(git_repo, events)
 
     result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
@@ -659,8 +1351,9 @@ def test_nonapproved_review_invalidates_candidate(git_repo: Path, disposition: s
 def test_mixed_review_dispositions_invalidate_candidate(git_repo: Path):
     events = valid_events(git_repo, "REVIEWED")
     second = json.loads(json.dumps(events[5]["evidence"]["reviewers"][0]))
-    second["reviewer"] = "second-reviewer"
+    second["reviewer"] = "second_reviewer"
     second["disposition"] = "changes_requested"
+    second["findings"] = [{"claim": "gate enforced", "detail": "candidate must change"}]
     events[5]["evidence"]["reviewers"].append(second)
     ledger = write_ledger(git_repo, events)
 
@@ -831,7 +1524,8 @@ def test_participant_memories_are_canonical_contained_regular_files(git_repo: Pa
     result = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
 
     assert result.returncode == 1
-    assert "memory" in result.stderr.lower()
+    assert ("malformed" if boundary == "noncanonical" else "memory") in result.stderr.lower()
+    assert "escape" not in result.stderr
 
 
 def test_confidential_term_file_rejects_same_inode_mutation(git_repo: Path):
@@ -901,6 +1595,33 @@ def test_active_ledger_discovery_requires_exactly_one(git_repo: Path, count: int
 
     assert result.returncode == 1
     assert "active ledger" in result.stderr.lower()
+
+
+def test_active_discovery_selects_latest_unsuperseded_recovery_epoch(git_repo: Path):
+    directory = git_repo / ".github" / "memory" / "iterations"
+    directory.mkdir(parents=True)
+    closed_events = valid_events(git_repo, "CLOSED")
+    for ledger_id, recovered in (("closed-history", False), ("active-recovery", True)):
+        events = json.loads(json.dumps(closed_events))
+        for item in events:
+            item["iteration_id"] = ledger_id
+        if recovered:
+            commit = events[7]["evidence"]["commit"]
+            supersede_closed_epoch(events, commit)
+            for item in events[9:]:
+                item["iteration_id"] = ledger_id
+        (directory / f"{ledger_id}.md").write_text(
+            "\n".join("```workflow-event\n" + json.dumps(item) + "\n```" for item in events)
+            + "\n"
+        )
+    for name in ("pm", "developer", "reviewer"):
+        (git_repo / ".github" / "memory" / f"{name}.md").write_text(
+            "# memory\n\n- closed-history\n- active-recovery\n"
+        )
+
+    result = run_gate(git_repo, "verify-ledger")
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_scanner_fails_closed_when_git_is_unavailable(git_repo: Path):

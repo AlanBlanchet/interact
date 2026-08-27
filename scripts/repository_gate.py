@@ -8,9 +8,16 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 State = Literal[
     "BASELINED",
@@ -22,6 +29,7 @@ State = Literal[
     "VERIFIED",
     "COMMITTED",
     "CLOSED",
+    "SUPERSEDED",
 ]
 FindingClass = Literal[
     "private-key",
@@ -33,6 +41,10 @@ FindingClass = Literal[
     "confidential-term",
     "unscannable-oversize",
 ]
+NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+AgentId = Annotated[
+    str, StringConstraints(strip_whitespace=True, pattern=r"^[a-z][a-z0-9_]*$")
+]
 
 
 class _StrictModel(BaseModel):
@@ -40,8 +52,8 @@ class _StrictModel(BaseModel):
 
 
 class _Baseline(_StrictModel):
-    request: str
-    acceptance: list[str]
+    request: NonBlankStr
+    acceptance: list[NonBlankStr] = Field(min_length=1)
     branch: str
     head: str
     status: str
@@ -53,18 +65,18 @@ class _Baseline(_StrictModel):
 
 
 class _Design(_StrictModel):
-    interpretation: str
-    non_goals: list[str]
-    owners: list[str]
-    interfaces: list[str]
-    invariants: list[str]
-    edge_cases: list[str]
-    trust_boundaries: list[str]
-    tests: list[str]
-    negative_controls: list[str]
-    cost: str
-    visual_route: str
-    compatibility: str
+    interpretation: NonBlankStr
+    non_goals: list[NonBlankStr] = Field(min_length=1)
+    owners: list[NonBlankStr] = Field(min_length=1)
+    interfaces: list[NonBlankStr] = Field(min_length=1)
+    invariants: list[NonBlankStr] = Field(min_length=1)
+    edge_cases: list[NonBlankStr] = Field(min_length=1)
+    trust_boundaries: list[NonBlankStr] = Field(min_length=1)
+    tests: list[NonBlankStr] = Field(min_length=1)
+    negative_controls: list[NonBlankStr] = Field(min_length=1)
+    cost: NonBlankStr
+    visual_route: NonBlankStr
+    compatibility: NonBlankStr
 
 
 class _CommandEvidence(_StrictModel):
@@ -74,16 +86,16 @@ class _CommandEvidence(_StrictModel):
     includes: list[str] = Field(min_length=1)
     excludes: list[str]
     exit_code: int
-    summary: str
+    summary: NonBlankStr
 
 
 class _Red(_CommandEvidence):
-    failing_assertion: str
+    failing_assertion: NonBlankStr
 
 
 class _Implemented(_StrictModel):
     owned_paths: list[str] = Field(min_length=1)
-    summary: str
+    summary: NonBlankStr
 
 
 class _Candidate(_StrictModel):
@@ -93,15 +105,27 @@ class _Candidate(_StrictModel):
     acceptance_sha256: str
 
 
+class _ReviewFinding(_StrictModel):
+    claim: NonBlankStr
+    detail: NonBlankStr
+
+
 class _Reviewer(_StrictModel):
-    reviewer: str = Field(min_length=1)
-    task: str = Field(min_length=1)
+    schema_version: Literal[1]
+    reviewer: AgentId
+    task: AgentId
     candidate_tree: str
     acceptance_sha256: str
     inspected_paths: list[str] = Field(min_length=1)
-    findings: list[str] = Field(min_length=1)
+    findings: list[_ReviewFinding]
     disposition: Literal["approved", "changes_requested", "rejected"]
     commands: list[_CommandEvidence] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_finding_cardinality(self):
+        if (self.disposition == "approved") == bool(self.findings):
+            raise ValueError("review finding cardinality is invalid")
+        return self
 
 
 class _Reviewed(_StrictModel):
@@ -126,8 +150,45 @@ class _Closed(_StrictModel):
     acceptance: dict[str, Literal["satisfied", "blocked"]] = Field(min_length=1)
     blockers: list[str]
     processes: list[str]
-    participants: list[str] = Field(min_length=2)
-    memory_markers: list[str] = Field(min_length=2)
+    participants: list[AgentId] = Field(min_length=2)
+    memory_markers: list[AgentId] = Field(min_length=2)
+
+
+class _Superseded(_StrictModel):
+    schema_version: Literal[1]
+    closed_commit: str
+    contradicted_claim: NonBlankStr
+    recovery: Literal["RED", "DESIGNED"]
+    review: _Reviewer | None = None
+
+    @model_validator(mode="after")
+    def validate_recovery_shape(self):
+        if (self.recovery == "DESIGNED") != (self.review is not None):
+            raise ValueError("SUPERSEDED recovery evidence is malformed")
+        return self
+
+
+class _MigrationRecord(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    raw_sha256: str
+    iteration_id: str
+    ordinal: int
+    preceding_closed_commit: str
+    contradicted_claim: str
+    recovery: Literal["RED", "DESIGNED"]
+
+
+class _ReviewerMigrationRecord(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    raw_sha256: str
+    iteration_id: str
+    event_ordinal: int
+    reviewer_index: int
+    preceding_candidate_tree: str
+    preceding_commit: str | None
+    reviewer: AgentId
 
 
 class _RawEvent(_StrictModel):
@@ -139,7 +200,7 @@ class _RawEvent(_StrictModel):
 class _Event(_StrictModel):
     iteration_id: str
     state: State
-    evidence: _Baseline | _Design | _Red | _Implemented | _Candidate | _Reviewed | _Verified | _Committed | _Closed
+    evidence: _Baseline | _Design | _Red | _Implemented | _Candidate | _Reviewed | _Verified | _Committed | _Closed | _Superseded
 
 
 class _Finding(_StrictModel):
@@ -166,6 +227,45 @@ class RepositoryGate(BaseModel):
         "COMMITTED",
         "CLOSED",
     )
+    _CLOSURE_CLAIMS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "acceptance_reconciliation",
+            "commit_binding",
+            "memory_reconciliation",
+            "process_cleanup",
+            "verification_evidence",
+        }
+    )
+    _MIGRATIONS: ClassVar[tuple[_MigrationRecord, ...]] = (
+        _MigrationRecord(
+            raw_sha256="0fde8406dffad9517285681d7992bc294f55dd4e91d197ea483540b8a3076d60",
+            iteration_id="20260827-workflow-gates",
+            ordinal=31,
+            preceding_closed_commit="723624d4a2a24a4c340d6667f06518fd983ca3c0",
+            contradicted_claim="commit_binding",
+            recovery="RED",
+        ),
+    )
+    _REVIEWER_MIGRATIONS: ClassVar[tuple[_ReviewerMigrationRecord, ...]] = (
+        _ReviewerMigrationRecord(
+            raw_sha256="105b66cb076bb4f7faa7639b24aedf8eb2368a922670dcad579729f79d40be80",
+            iteration_id="20260827-workflow-gates",
+            event_ordinal=27,
+            reviewer_index=0,
+            preceding_candidate_tree="660f50f49f1bb16b9f918f9f280e6fa75e4eaa56",
+            preceding_commit=None,
+            reviewer="security",
+        ),
+        _ReviewerMigrationRecord(
+            raw_sha256="6ed1a5652f8b4f9a2eb463425387e5a7c82d77f027bfc02b41090cfa79536449",
+            iteration_id="20260827-workflow-gates",
+            event_ordinal=27,
+            reviewer_index=1,
+            preceding_candidate_tree="660f50f49f1bb16b9f918f9f280e6fa75e4eaa56",
+            preceding_commit=None,
+            reviewer="quality",
+        ),
+    )
     _EVIDENCE_TYPES = {
         "BASELINED": _Baseline,
         "DESIGNED": _Design,
@@ -176,6 +276,7 @@ class RepositoryGate(BaseModel):
         "VERIFIED": _Verified,
         "COMMITTED": _Committed,
         "CLOSED": _Closed,
+        "SUPERSEDED": _Superseded,
     }
     # Detector declarations are structurally suppressed only while this exact tuple is parsed.
     _DETECTORS: ClassVar[tuple[tuple[FindingClass, bytes], ...]] = (
@@ -433,8 +534,43 @@ class RepositoryGate(BaseModel):
         if not matches or text.count("```workflow-event") != len(matches):
             raise _GateError("ledger contains no workflow events")
         events: list[_Event] = []
-        for match in matches:
+        for index, match in enumerate(matches):
             block = match.group(1)
+            block = self._migrate_reviewers(block, index + 1, events)
+            migration = next(
+                (
+                    record
+                    for record in self._MIGRATIONS
+                    if record.raw_sha256 == hashlib.sha256(block.encode()).hexdigest()
+                ),
+                None,
+            )
+            if migration is not None:
+                preceding_commit = next(
+                    (
+                        event.evidence.commit
+                        for event in reversed(events)
+                        if isinstance(event.evidence, _Committed)
+                    ),
+                    None,
+                )
+                if (
+                    index + 1 != migration.ordinal
+                    or preceding_commit != migration.preceding_closed_commit
+                ):
+                    raise _GateError("legacy workflow event migration binding is invalid")
+                block = json.dumps(
+                    {
+                        "iteration_id": migration.iteration_id,
+                        "state": "SUPERSEDED",
+                        "evidence": {
+                            "schema_version": 1,
+                            "closed_commit": migration.preceding_closed_commit,
+                            "contradicted_claim": migration.contradicted_claim,
+                            "recovery": migration.recovery,
+                        },
+                    }
+                )
             try:
                 raw = _RawEvent.model_validate_json(block)
             except ValidationError as error:
@@ -447,18 +583,94 @@ class RepositoryGate(BaseModel):
                 raise _GateError(self._safe_validation_message(raw.state, evidence_type, error)) from error
             except ValueError as error:
                 raise _GateError("ledger event evidence is malformed") from error
-            if raw.state == "CLOSED" and text[match.end() :].strip():
-                raise _GateError("CLOSED event must be terminal")
+            if raw.state == "CLOSED":
+                boundary = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+                if text[match.end() : boundary].strip():
+                    raise _GateError("CLOSED event must be terminal")
+                if index + 1 < len(matches):
+                    try:
+                        following = json.loads(matches[index + 1].group(1))
+                    except (json.JSONDecodeError, TypeError):
+                        raise _GateError("CLOSED event must be terminal") from None
+                    if not isinstance(following, dict) or following.get("state") != "SUPERSEDED":
+                        raise _GateError("CLOSED event must be terminal")
         expected_id = path.stem
         if any(item.iteration_id != expected_id for item in events):
             raise _GateError("ledger filename and iteration id differ")
         return events
+
+    def _migrate_reviewers(self, block: str, event_ordinal: int, events: list[_Event]):
+        try:
+            envelope = json.loads(block)
+        except json.JSONDecodeError:
+            return block
+        evidence = envelope.get("evidence") if isinstance(envelope, dict) else None
+        reviewers = evidence.get("reviewers") if isinstance(evidence, dict) else None
+        if not isinstance(envelope, dict) or envelope.get("state") != "REVIEWED" or not isinstance(reviewers, list):
+            return block
+        if all(isinstance(reviewer, dict) and reviewer.get("schema_version") == 1 for reviewer in reviewers):
+            return block
+        marker = '"reviewers":['
+        if marker not in block:
+            raise _GateError("unversioned reviewer evidence has no migration")
+        candidate = next(
+            (event.evidence for event in reversed(events) if isinstance(event.evidence, _Candidate)),
+            None,
+        )
+        preceding_commit = next(
+            (event.evidence.commit for event in reversed(events) if isinstance(event.evidence, _Committed)),
+            None,
+        )
+        decoder = json.JSONDecoder()
+        position = block.index(marker) + len(marker)
+        replacements: list[tuple[int, int, str]] = []
+        for reviewer_index in range(len(reviewers)):
+            raw_reviewer, end = decoder.raw_decode(block, position)
+            exact = block[position:end]
+            if not isinstance(raw_reviewer, dict) or raw_reviewer.get("schema_version") != 1:
+                digest = hashlib.sha256(exact.encode()).hexdigest()
+                migration = next(
+                    (
+                        record
+                        for record in self._REVIEWER_MIGRATIONS
+                        if record.raw_sha256 == digest
+                    ),
+                    None,
+                )
+                if (
+                    migration is None
+                    or migration.iteration_id != envelope.get("iteration_id")
+                    or migration.event_ordinal != event_ordinal
+                    or migration.reviewer_index != reviewer_index
+                    or candidate is None
+                    or migration.preceding_candidate_tree != candidate.tree
+                    or migration.preceding_commit != preceding_commit
+                    or migration.reviewer != raw_reviewer.get("reviewer")
+                ):
+                    raise _GateError("unversioned reviewer evidence has no migration")
+                raw_reviewer["schema_version"] = 1
+                raw_reviewer["findings"] = []
+                replacements.append(
+                    (position, end, json.dumps(raw_reviewer, separators=(",", ":")))
+                )
+            position = end + (1 if end < len(block) and block[end] == "," else 0)
+        for start, end, replacement in reversed(replacements):
+            block = block[:start] + replacement + block[end:]
+        return block
 
     def _validate_sequence(self, events: list[_Event]):
         expected_index = 0
         candidate_seen = False
         remediation_red = False
         for item in events:
+            if item.state == "SUPERSEDED":
+                if expected_index != len(self._STATES):
+                    raise _GateError("ledger state order is invalid")
+                assert isinstance(item.evidence, _Superseded)
+                expected_index = 1 if item.evidence.review is not None else 2
+                candidate_seen = False
+                remediation_red = False
+                continue
             if expected_index == len(self._STATES):
                 raise _GateError("ledger has content after CLOSED")
             if candidate_seen and item.state == "RED" and expected_index in {5, 6, 7}:
@@ -475,14 +687,18 @@ class RepositoryGate(BaseModel):
                 remediation_red = False
             elif remediation_red and item.state == "IMPLEMENTED":
                 expected_index = 4
+        if events[-1].state == "SUPERSEDED":
+            raise _GateError("SUPERSEDED must be followed by recovery evidence")
 
     def _validate_bindings(self, events: list[_Event]):
         candidate: _Candidate | None = None
+        committed: _Committed | None = None
         baseline = events[0].evidence
         assert isinstance(baseline, _Baseline)
         acceptance_sha256 = hashlib.sha256(
             json.dumps(baseline.acceptance, separators=(",", ":"), ensure_ascii=True).encode()
         ).hexdigest()
+        memory_participants: set[str] = {"pm", "developer"}
         for item in events:
             if item.state == "CANDIDATE_FROZEN":
                 assert isinstance(item.evidence, _Candidate)
@@ -493,15 +709,8 @@ class RepositoryGate(BaseModel):
                 assert isinstance(item.evidence, _Reviewed)
                 self._require_candidate(candidate, item.evidence.candidate_tree, item.evidence.acceptance_sha256)
                 for reviewer in item.evidence.reviewers:
-                    self._require_candidate(
-                        candidate, reviewer.candidate_tree, reviewer.acceptance_sha256
-                    )
-                    if reviewer.disposition != "approved":
-                        raise _GateError(
-                            "candidate is invalid and must be changed and re-frozen"
-                        )
-                    if any(command.exit_code != 0 for command in reviewer.commands):
-                        raise _GateError("REVIEWED command exit_code must be zero")
+                    memory_participants.add(reviewer.reviewer)
+                    self._validate_review(reviewer, candidate, "approved", "REVIEWED")
             elif item.state == "VERIFIED":
                 assert isinstance(item.evidence, _Verified)
                 self._require_candidate(candidate, item.evidence.candidate_tree, item.evidence.acceptance_sha256)
@@ -510,56 +719,125 @@ class RepositoryGate(BaseModel):
             elif item.state == "COMMITTED":
                 assert isinstance(item.evidence, _Committed)
                 self._validate_commit(candidate, item.evidence)
+                committed = item.evidence
             elif item.state == "CLOSED":
                 assert isinstance(item.evidence, _Closed)
                 if set(item.evidence.acceptance) != set(baseline.acceptance):
                     raise _GateError("CLOSED acceptance does not reconcile with BASELINED acceptance")
-                self._validate_memories(events[0].iteration_id, item.evidence, candidate)
+                memory_participants.update(item.evidence.participants)
+                self._validate_memories(
+                    events[0].iteration_id, item.evidence, candidate, memory_participants
+                )
             elif item.state == "RED":
                 assert isinstance(item.evidence, _Red)
                 if item.evidence.exit_code == 0:
                     raise _GateError("RED exit_code must be nonzero")
                 candidate = None
+            elif item.state == "SUPERSEDED":
+                assert isinstance(item.evidence, _Superseded)
+                if committed is None or item.evidence.closed_commit != committed.commit:
+                    raise _GateError("SUPERSEDED event does not match closed commit")
+                if (
+                    item.evidence.contradicted_claim not in baseline.acceptance
+                    and item.evidence.contradicted_claim not in self._CLOSURE_CLAIMS
+                ):
+                    raise _GateError("SUPERSEDED contradicted claim is not recognized")
+                if item.evidence.review is not None:
+                    review = item.evidence.review
+                    memory_participants.add(review.reviewer)
+                    if any(
+                        finding.claim != item.evidence.contradicted_claim
+                        for finding in review.findings
+                    ):
+                        raise _GateError("SUPERSEDED review finding does not match claim")
+                    self._validate_review(review, candidate, "nonapproved", "SUPERSEDED")
+                candidate = None
+                committed = None
         if candidate is not None:
-            current = self._git(b"write-tree")
-            assert current is not None
-            if current.decode().strip() != candidate.tree:
-                raise _GateError("candidate is stale")
-            staged_diff = self._git(b"diff", b"--cached", b"--binary")
-            assert staged_diff is not None
-            if hashlib.sha256(staged_diff).hexdigest() != candidate.staged_diff_sha256:
-                raise _GateError("candidate staged diff hash is stale")
+            terminal = events[-1].state
+            if terminal in {"COMMITTED", "CLOSED"}:
+                if committed is None:
+                    raise _GateError("active committed epoch is incomplete")
+                current_index = self._git(b"write-tree")
+                assert current_index is not None
+                if current_index.decode().strip() != committed.tree:
+                    raise _GateError("committed repository index must be clean")
+                current_head = self._git(b"rev-parse", b"HEAD", allowed_failure=True)
+                current_tree = self._git(b"rev-parse", b"HEAD^{tree}", allowed_failure=True)
+                if current_head is None or current_tree is None:
+                    raise _GateError("current HEAD must be a commit")
+                if current_head.decode().strip() != committed.commit:
+                    raise _GateError("current HEAD does not match recorded commit")
+                if current_tree.decode().strip() != committed.tree:
+                    raise _GateError("current HEAD tree does not match candidate tree")
+            else:
+                staged_diff = self._git(
+                    b"diff",
+                    b"--cached",
+                    b"--binary",
+                    b"--no-ext-diff",
+                    b"--no-textconv",
+                )
+                assert staged_diff is not None
+                current = self._git(b"write-tree")
+                assert current is not None
+                if current.decode().strip() != candidate.tree:
+                    raise _GateError("candidate is stale")
+                if hashlib.sha256(staged_diff).hexdigest() != candidate.staged_diff_sha256:
+                    raise _GateError("candidate staged diff hash is stale")
 
     @staticmethod
     def _require_candidate(candidate: _Candidate | None, tree: str, acceptance_sha256: str):
         if candidate is None or tree != candidate.tree or acceptance_sha256 != candidate.acceptance_sha256:
             raise _GateError("review or verification does not match candidate")
 
+    def _validate_review(
+        self,
+        review: _Reviewer,
+        candidate: _Candidate | None,
+        expected_disposition: Literal["approved", "nonapproved"],
+        purpose: Literal["REVIEWED", "SUPERSEDED"],
+    ):
+        self._require_candidate(candidate, review.candidate_tree, review.acceptance_sha256)
+        is_approved = review.disposition == "approved"
+        if (expected_disposition == "approved") != is_approved:
+            if purpose == "REVIEWED":
+                raise _GateError("candidate is invalid and must be changed and re-frozen")
+            raise _GateError("SUPERSEDED review must contradict the closure claim")
+        if any(command.exit_code != 0 for command in review.commands):
+            raise _GateError(f"{purpose} review command exit_code must be zero")
+
     def _validate_commit(self, candidate: _Candidate | None, committed: _Committed):
         if candidate is None or committed.candidate_tree != candidate.tree or committed.tree != candidate.tree:
             raise _GateError("commit tree does not match candidate tree")
-        actual = self._git(b"rev-parse", os.fsencode(committed.commit + "^{tree}"), allowed_failure=True)
+        canonical_commit = self._git(
+            b"rev-parse",
+            b"--verify",
+            os.fsencode(committed.commit + "^{commit}"),
+            allowed_failure=True,
+        )
+        if canonical_commit is None or canonical_commit.decode().strip() != committed.commit:
+            raise _GateError("recorded commit must be a canonical full object id")
+        actual = self._git(
+            b"rev-parse", os.fsencode(committed.commit + "^{tree}"), allowed_failure=True
+        )
         if actual is None or actual.decode().strip() != committed.tree:
             raise _GateError("recorded commit tree does not match Git")
-        current_head = self._git(b"rev-parse", b"HEAD", allowed_failure=True)
-        current_tree = self._git(b"rev-parse", b"HEAD^{tree}", allowed_failure=True)
-        if current_head is None or current_tree is None:
-            raise _GateError("current HEAD must be a commit")
-        if current_head.decode().strip() != committed.commit:
-            raise _GateError("current HEAD does not match recorded commit")
-        if current_tree.decode().strip() != committed.tree:
-            raise _GateError("current HEAD tree does not match candidate tree")
-
-    def _validate_memories(self, iteration_id: str, closed: _Closed, candidate: _Candidate | None):
-        required = set(closed.participants) | {"pm", "developer"}
+    def _validate_memories(
+        self,
+        iteration_id: str,
+        closed: _Closed,
+        candidate: _Candidate | None,
+        required: set[str],
+    ):
         prompt_paths = {"AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"}
         if candidate is not None and prompt_paths.intersection(candidate.owned_paths):
             required.add("librarian")
         if set(closed.memory_markers) != required:
             raise _GateError("memory marker set does not match participants")
+        if set(closed.participants) != required:
+            raise _GateError("CLOSED participant set does not reconcile review identities")
         for participant in required:
-            if re.fullmatch(r"[a-z][a-z0-9_]*", participant) is None:
-                raise _GateError("memory participant identifier is not canonical")
             path = self.root / ".github" / "memory" / f"{participant.replace('_', '-')}.md"
             try:
                 metadata = path.lstat()
