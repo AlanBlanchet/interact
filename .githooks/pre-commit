@@ -44,7 +44,39 @@ if git diff --cached --name-only | grep -qE '^src/interact/(models|formats|api_t
     fi
 fi
 
-# 3) Typecheck + build the VS Code extension when its source changes — the real gate that catches
+# 3) Provider-independent staged-content and workflow-evidence gates. Run after generators that
+#    can mutate the index, so every reviewed candidate must include their output.
+git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || {
+    echo "[hook] FAIL: cannot resolve repository Git directory"
+    exit 1
+}
+gate_exec=$(mktemp "$git_dir/interact-repository-gate.XXXXXX") || {
+    echo "[hook] FAIL: cannot create private staged-gate artifact"
+    exit 1
+}
+chmod 0600 "$gate_exec"
+trap 'rm -f "$gate_exec"' EXIT HUP INT TERM
+if ! git show :scripts/repository_gate.py >"$gate_exec" 2>/dev/null; then
+    echo "[hook] FAIL: staged repository gate is unavailable"
+    exit 1
+fi
+staged_gate_hash=$(git rev-parse :scripts/repository_gate.py 2>/dev/null) || {
+    echo "[hook] FAIL: staged repository gate identity is unavailable"
+    exit 1
+}
+materialized_gate_hash=$(git hash-object "$gate_exec" 2>/dev/null) || {
+    echo "[hook] FAIL: staged repository gate cannot be verified"
+    exit 1
+}
+if [ "$staged_gate_hash" != "$materialized_gate_hash" ]; then
+    echo "[hook] FAIL: staged repository gate identity mismatch"
+    exit 1
+fi
+uv run python "$gate_exec" hook
+rm -f "$gate_exec"
+trap - EXIT HUP INT TERM
+
+# 4) Typecheck + build the VS Code extension when its source changes — the real gate that catches
 #    TS errors before they land. (Packaging/installing the .vsix is a separate manual step, not
 #    done here: the .vsix is gitignored, so rebuilding it every commit just burns time.)
 if git diff --cached --name-only | grep -q "^vscode-extension/"; then
