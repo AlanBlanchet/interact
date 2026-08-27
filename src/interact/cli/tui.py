@@ -19,8 +19,8 @@ from pathlib import Path
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.css.query import NoMatches
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import (
     Button,
     DataTable,
@@ -36,13 +36,21 @@ from textual.widgets import (
 )
 
 from interact.cli.clients import ClientTarget
-from interact.config import SETTINGS, Setting, groups
-from interact.config import UserConfig
+from interact.cli.usage import UsageReport
+from interact.config import SETTINGS, Setting, UserConfig, groups
 
 # The three model roles (image/component/video) come from the shared schema — the Status tab
 # shows the model resolved for each; the Config tab renders every setting from the same schema.
 _MODEL_SETTINGS = [s for s in SETTINGS if s.kind == "model"]
 _TAB_ORDER = ("tab-status", "tab-connectors", "tab-config", "tab-keys", "tab-usage")
+
+
+def _provider_usage_rows(report: UsageReport) -> list[tuple[str, int, float, int]]:
+    """Rows from persisted provider identity; model display names are not provider ids."""
+    return [
+        (group.name, group.calls, group.cost, group.unknown_cost_calls)
+        for group in report.by_provider
+    ]
 
 
 def _mask(value: str | None) -> str:
@@ -312,8 +320,6 @@ class InteractTUI(App):
 
     # ── Status (fast: no model-registry load) ──────────────────────────────────
     def _status_text(self) -> str:
-        from interact.cli.usage import UsageReport
-
         cwd = Path(".").resolve()
         bound = [t.label for t in ClientTarget.all() if t.registrations(cwd)]
         report = UsageReport.build(since_days=30)
@@ -334,9 +340,7 @@ class InteractTUI(App):
     def _load_registry_info(self) -> None:
         """Worker: load the registry off the UI thread, resolve providers + auto models +
         the by-provider usage breakdown, then update the panels. Fails soft."""
-        from interact.cli.usage import UsageReport
-
-        provider_rows: list[tuple[str, int, float]] = []
+        provider_rows: list[tuple[str, int, float, int]] = []
         try:
             from interact.models import Model, ModelCapability
             from interact.runtime import config
@@ -354,26 +358,14 @@ class InteractTUI(App):
 
             lines = []
             for setting in _MODEL_SETTINGS:
+                if setting.role is None:
+                    continue
                 configured = UserConfig.get(setting.env)
                 lines.append(f"  {setting.role:<10} {configured}" if configured
                              else f"  {setting.role:<10} [dim]auto →[/dim] {auto(setting.role)}")
             self._model_lines = tuple(lines)
 
-            def provider_of(name: str) -> str:
-                model = Model.by_id(name)
-                if model:
-                    return model.provider
-                if "/" in name:
-                    return name.split("/", 1)[0]
-                return next((m.provider for m in Model.registry() if m.id.endswith(f"/{name}")), "?")
-
-            totals: dict[str, list] = {}
-            for group in UsageReport.build().by_model:
-                acc = totals.setdefault(provider_of(group.name), [0, 0.0])
-                acc[0] += group.calls
-                acc[1] += group.cost
-            provider_rows = sorted(((p, c, cost) for p, (c, cost) in totals.items()),
-                                   key=lambda r: r[2], reverse=True)
+            provider_rows = _provider_usage_rows(UsageReport.build())
         except Exception as exc:
             self._models_info = f"[red]unavailable: {exc}[/red]"
 
@@ -385,8 +377,15 @@ class InteractTUI(App):
                 table = self.query_one("#provider-table", DataTable)
                 table.clear(columns=True)
                 table.add_columns("provider", "calls", "cost")
-                for provider, calls, cost in provider_rows:
-                    table.add_row(provider, str(calls), f"${cost:.4f}")
+                for provider, calls, cost, unknown in provider_rows:
+                    shown = (
+                        f"${cost:.4f} + unknown"
+                        if unknown and cost
+                        else "unknown"
+                        if unknown
+                        else f"${cost:.4f}"
+                    )
+                    table.add_row(provider, str(calls), shown)
             except NoMatches:
                 pass  # widgets gone (closing) — nothing to update
 
@@ -508,19 +507,35 @@ class InteractTUI(App):
 
     # ── Usage ────────────────────────────────────────────────────────────────
     def _refresh_usage_basic(self) -> None:
-        from interact.cli.usage import UsageReport
-
         report = UsageReport.build()
+        session_note = (
+            f" · {report.session_usage_calls} session calls (account impact unknown)"
+            if report.session_usage_calls
+            else ""
+        )
         self.query_one("#usage-summary", Static).update(
-            f"All-time: {report.entries} calls · ${report.total_cost:.4f} · "
+            f"All-time: {report.entries} calls · observed metered API spend "
+            f"${report.total_cost:.4f}{session_note} · "
             f"{report.total_input:,} input + {report.total_output:,} output tokens"
         )
         table = self.query_one("#usage-table", DataTable)
         table.clear(columns=True)
         table.add_columns("model", "calls", "tokens in", "tokens out", "cost")
         for group in report.by_model[:25]:
-            table.add_row(group.name, str(group.calls), f"{group.input_tokens:,}",
-                          f"{group.output_tokens:,}", f"${group.cost:.4f}")
+            shown = (
+                f"${group.cost:.4f} + unknown"
+                if group.unknown_cost_calls and group.cost
+                else "unknown"
+                if group.unknown_cost_calls
+                else f"${group.cost:.4f}"
+            )
+            table.add_row(
+                group.name,
+                str(group.calls),
+                f"{group.input_tokens:,}",
+                f"{group.output_tokens:,}",
+                shown,
+            )
 
     # ── Update banner ────────────────────────────────────────────────────────────
     def _check_update(self) -> None:

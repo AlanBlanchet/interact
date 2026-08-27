@@ -3,9 +3,18 @@ RESOLVED model per role (not an opaque 'auto'), plus the sovereign quality tier 
 report the build. A grep of availability isn't the answer; resolution (frontier-first, first-available)
 is. The shared helper is exercised here once; the three commands just call it."""
 
+import importlib
+import json
+
 import pytest
 
 from interact import cli
+from interact.agents.providers import ClaudeCodeProvider, CodexProvider, MEDIA_PROVIDERS
+from interact.config import Config, UserConfig
+from interact.models import Model
+import interact.ollama as ollama
+from interact.runtime import config as runtime_config
+from interact.server.tools_meta import list_providers
 
 
 @pytest.fixture
@@ -39,6 +48,79 @@ def test_providers_includes_the_resolved_selection(_only_zai, capsys):
     cli.providers()
     out = capsys.readouterr().out
     assert "Resolved selection" in out and "zai/glm-4.5v" in out
+
+
+def test_media_transport_status_is_registry_derived_and_actionable(monkeypatch, capsys):
+    app_module = importlib.import_module("interact.cli.app")
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
+    monkeypatch.setattr(CodexProvider, "available", lambda self: False)
+    config = Config(
+        media_backend="auto",
+        media_billing="session_only",
+        media_provider_order=tuple(MEDIA_PROVIDERS),
+    )
+
+    app_module._print_media_transport(config)
+
+    output = capsys.readouterr().out
+    assert "backend=auto" in output and "billing=session_only" in output
+    assert " → ".join(MEDIA_PROVIDERS) in output
+    assert "claude" in output and "installed" in output
+    assert "codex" not in output.lower()
+    assert "no metered API fallback" in output
+
+
+@pytest.mark.asyncio
+async def test_list_providers_reports_subscription_auth_without_credentials(monkeypatch):
+    async def authenticated(self, env, *, timeout=10):
+        assert not any("KEY" in name or "TOKEN" in name for name in env)
+        return self.name == "claude"
+
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
+    monkeypatch.setattr(ClaudeCodeProvider, "subscription_authenticated", authenticated)
+    monkeypatch.setattr(Model, "load_registry", lambda: None)
+    monkeypatch.setattr(Model, "live_providers", lambda: set())
+    monkeypatch.setattr(ollama, "serving", lambda: [])
+    monkeypatch.setattr(runtime_config, "media_backend", "auto")
+    monkeypatch.setattr(runtime_config, "media_billing", "session_only")
+
+    payload = json.loads(await list_providers())
+
+    media = payload["media"]
+    assert media["backend"] == "auto" and media["billing"] == "session_only"
+    assert media["provider_order"] == list(MEDIA_PROVIDERS)
+    by_name = {item["provider"]: item for item in media["subscription_providers"]}
+    assert by_name["claude"]["authenticated"] is True
+    assert set(by_name) == {"claude"}
+    assert "credential" not in json.dumps(payload).lower()
+
+
+@pytest.mark.asyncio
+async def test_list_providers_refreshes_a_live_config_file_edit(
+    monkeypatch, tmp_path
+) -> None:
+    config_file = tmp_path / "config.env"
+    monkeypatch.setattr(UserConfig, "PATH", config_file)
+    monkeypatch.setattr(Model, "load_registry", lambda: None)
+    monkeypatch.setattr(Model, "live_providers", lambda: set())
+    monkeypatch.setattr(ollama, "serving", lambda: [])
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: False)
+    monkeypatch.setattr(CodexProvider, "available", lambda self: False)
+    runtime_config.clear_overrides()
+    baseline = json.loads(await list_providers())["media"]
+    UserConfig.set("INTERACT_MEDIA_BACKEND", "session")
+    UserConfig.set("INTERACT_MEDIA_BILLING", "session_only")
+    UserConfig.set("INTERACT_MEDIA_PROVIDER_ORDER", "claude")
+    UserConfig.set("INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR", "claude")
+
+    edited = json.loads(await list_providers())["media"]
+    config_file.unlink()
+    restored = json.loads(await list_providers())["media"]
+
+    assert edited["backend"] == "session" and edited["billing"] == "session_only"
+    assert edited["provider_order"] == ["claude"]
+    assert restored["backend"] == baseline["backend"]
+    assert restored["billing"] == baseline["billing"]
 
 
 def test_version_command_prints_the_installed_version(capsys):

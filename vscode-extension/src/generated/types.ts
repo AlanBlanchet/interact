@@ -135,3 +135,21 @@ export interface UpstreamSource {
   benchmark_id: string;
   insecure?: boolean;
 }
+/**
+ * Canonical on-disk media accounting row, owned by its only writer.
+ */
+export interface UsageEntry {
+  timestamp: string;
+  model: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  backend: "session" | "api" | "none";
+  provider: string;
+  billing: "session_usage" | "metered_api" | "none";
+  outcome: "succeeded" | "failed" | "cancelled";
+  request_id?: string | null;
+  session_id?: string | null;
+  incremental_cost_usd?: number | null;
+  api_equivalent_cost_usd?: number | null;
+  cost?: number | null;
+}

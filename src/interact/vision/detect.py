@@ -87,16 +87,21 @@ async def _vlm_detect_elements(
         transform = transform.with_crop(crop_offset[0], crop_offset[1])
     vlm_bytes, vlm_w, vlm_h = transform.resize_image(screenshot_bytes, img_w, img_h)
 
-    # Resolve each role to a concrete model at this boundary via the one resolution site
-    # (Config.resolve_model): the configured id, else the first available model in the role's
-    # chain. Without it an unconfigured (auto) install ran detection with an empty-string model
-    # → instant silent failure (0 elements, 0.00s).
-    component_model = config.resolve_model("component", breaker=breaker)
-    image_model = config.resolve_model("image", breaker=breaker)
+    # A session provider emits the provider-neutral schema below; an unrelated API catalog/model
+    # must not choose its coordinate dialect or appear as the model that ran. Auto/API fallback is
+    # resolved inside server.vlm's separate breaker-aware API path.
+    session_transport = config.media_sessions_enabled() and not model_override
+    component_model = (
+        "" if session_transport else config.resolve_model("component", breaker=breaker)
+    )
+    image_model = "" if session_transport else config.resolve_model("image", breaker=breaker)
 
     if model_override:
         use_component = False
         detection_model = model_override
+    elif session_transport:
+        use_component = not simple
+        detection_model = ""
     else:
         use_component = (
             not simple
@@ -112,9 +117,10 @@ async def _vlm_detect_elements(
     task_coord_formats: list[CoordFormat] = []
 
     def _enqueue(model: str, label: str):
-        fmt = CoordFormat.for_model(model)
-        structured = (
-            not simple and fmt == CoordFormat() and _model_supports_structured(model)
+        fmt = CoordFormat() if session_transport else CoordFormat.for_model(model)
+        structured = not simple and (
+            session_transport
+            or (fmt == CoordFormat() and _model_supports_structured(model))
         )
         preamble = (
             f"This image is {vlm_w}x{vlm_h} pixels. "
@@ -131,11 +137,10 @@ async def _vlm_detect_elements(
                 media_type=label,
                 max_tokens=None,
                 response_format=resp_fmt,
-                # Pass the RESOLVED detection model, not the outer model_override: in auto mode
-                # model_override is None, and forwarding it made _vlm fall back to the (empty)
-                # configured image model → an empty-string model id → instant silent failure
-                # (0 elements, 0.00s). `model` is already the resolved component/image/override.
-                model_override=model,
+                # Only a caller's explicit override belongs on a subscription CLI's --model.
+                # Auto-resolved API catalog ids are still used above for prompt formatting, but
+                # forwarding one here would silently replace the CLI's configured/default model.
+                model_override=model_override,
             )
         )
         task_labels.append(label)
@@ -144,6 +149,8 @@ async def _vlm_detect_elements(
 
     if model_override:
         _enqueue(detection_model, "override")
+    elif session_transport:
+        _enqueue("", "component" if use_component else "image")
     elif use_component:
         _enqueue(component_model, "component")
     else:
@@ -161,7 +168,7 @@ async def _vlm_detect_elements(
                 label,
                 r if isinstance(r, BaseException) else r.text,
             )
-            if label == "component":
+            if label == "component" and component_model:
                 breaker.trip(component_model)
             continue
         parsed = None
@@ -171,9 +178,9 @@ async def _vlm_detect_elements(
                 parsed = _structured_to_elements(detection)
                 if parsed and all(el.x == 0 for el in parsed):
                     _log.warning("Structured output garbage (all x=0), discarding")
-                    breaker.trip(
-                        component_model if label == "component" else image_model
-                    )
+                    broken_model = component_model if label == "component" else image_model
+                    if broken_model:
+                        breaker.trip(broken_model)
                     parsed = None
             except Exception:
                 _log.warning(
@@ -214,12 +221,20 @@ async def _vlm_detect_elements(
     )
 
     Debug.save("vlm_raw", raw_text, invocation_id=invocation_id)
-    vlm_label = model_override or (component_model if use_component else image_model)
+    actual = next(
+        (r for r in results if not isinstance(r, BaseException) and r.text), None
+    )
+    vlm_label = (
+        actual.model if actual is not None and actual.model
+        else model_override or (component_model if use_component else image_model)
+    )
     Debug.save(
         "vlm_meta",
         json.dumps(
             {
                 "model": vlm_label,
+                "provider": actual.provider if actual is not None else "",
+                "backend": actual.backend if actual is not None else "none",
                 "elements": len(all_elements),
                 "elapsed_s": round(elapsed, 3),
                 "vlm_resize": [vlm_w, vlm_h],
@@ -270,7 +285,8 @@ async def judge_missing_elements(
         "detection completeness check",
         config,
         prompt,
-        model=config.resolve_model("component", model_override or ""),
+        model=model_override or "",
+        role="component",
     )
     text = (result.text or "").strip()
     if not text or text.upper().startswith("NONE") or text.startswith("["):

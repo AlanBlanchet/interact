@@ -13,22 +13,39 @@ interact is an MCP *server*. Handing a spawned agent interact's own server confi
 is what lets a Claude agent spawn a Codex agent — they meet on MCP, which is vendor-neutral.
 """
 
+import hashlib
 import json
-from pathlib import Path
+import os
+import re
 import shutil
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar
+from pathlib import Path
+from typing import ClassVar, Protocol
 
 from interact.agents.events import AgentEvent
-from interact.models import Model
 from interact.agents.profiles import overlay_for
-
+from interact.models import Model
+from interact.processes import run_isolated_process
 
 #: A transcript is read by a human, and a 50k-char tool result is not read — it is scrolled past,
 #: while bloating every refresh that parses the file. Keep the head, say what was cut.
 _CLIP = 2000
+def _safe_process_detail(value: str) -> str:
+    """One redacted diagnostic line; child output must never become a credential log."""
+    value = re.sub(
+        r"(?i)(api[_-]?key|auth[_-]?token|authorization|bearer)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        value,
+    )
+    value = re.sub(
+        r"(?:[A-Za-z]:)?[/\\][^\s:]*media-jobs[/\\]job-[^\s:/\\]+(?:[/\\][^\s:]*)?",
+        "[media-stage]",
+        value,
+    )
+    return _clip(value.replace("\x00", ""), 500)
 
 
 def _clip(text: str, limit: int = _CLIP) -> str:
@@ -67,6 +84,50 @@ class PermissionMode:
     unrestricted: bool = False
 
 
+@dataclass(frozen=True)
+class _MediaResult:
+    text: str
+    input_tokens: int
+    output_tokens: int
+    reported_cost_usd: float | None
+
+
+@dataclass
+class _MediaProcessFailure(Exception):
+    message: str
+    events: tuple[AgentEvent, ...] = ()
+    exit_code: int | None = None
+    stderr_bytes: int | None = None
+    stderr_sha256: str | None = None
+    timeout_phase: str | None = None
+    elapsed_seconds: float | None = None
+
+    def __str__(self) -> str:
+        return self.message
+
+
+class _MediaProcessTimeout(_MediaProcessFailure, TimeoutError):
+    pass
+
+
+def _failure_event_facts(events: list[AgentEvent]) -> tuple[AgentEvent, ...]:
+    """Retain accounting/session facts without retaining provider text or tool payloads."""
+    return tuple(
+        AgentEvent(
+            kind="other",
+            session_id=event.session_id,
+            input_tokens=event.input_tokens,
+            output_tokens=event.output_tokens,
+            cost_usd=event.cost_usd,
+        )
+        for event in events
+        if event.session_id is not None
+        or event.input_tokens is not None
+        or event.output_tokens is not None
+        or event.cost_usd is not None
+    )
+
+
 class AgentProvider(ABC):
     """How to launch one vendor's agent CLI and read what it emits."""
 
@@ -80,10 +141,67 @@ class AgentProvider(ABC):
     #: real binary — the adapter says so instead of pretending to be tested.
     verified: ClassVar[bool] = True
     caveat: ClassVar[str | None] = None
+    auth_home_env: ClassVar[tuple[str, ...]] = ()
 
     def available(self) -> bool:
         """Is the CLI installed? (Being logged in is the CLI's business, never ours.)"""
         return shutil.which(self.binary) is not None
+
+    def executable(self) -> str:
+        """Resolved executable path, so PATH cannot change between auth preflight and execution."""
+        found = shutil.which(self.binary)
+        if found is None:
+            raise FileNotFoundError(f"{self.name} CLI is not installed")
+        return found
+
+    def subscription_env(
+        self, base: dict[str, str] | None = None, *, temp_dir: Path | None = None
+    ) -> dict[str, str]:
+        """Minimal environment for a subscription-authenticated child.
+
+        In particular, API keys, auth-token overrides and base URLs are absent.  This makes an
+        existing API key unable to silently take precedence over the user's Claude.ai/ChatGPT
+        subscription and keeps unrelated credentials out of child tools and diagnostics.
+        """
+        source = os.environ if base is None else base
+        exact = {
+            "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TERM",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "no_proxy", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+        }
+        exact.update(self.auth_home_env)
+        env = {
+            key: value
+            for key, value in source.items()
+            if key in exact or key.startswith("LC_")
+        }
+        if temp_dir is not None:
+            env["TMPDIR"] = str(temp_dir)
+        return env
+
+    def auth_command(self) -> list[str]:
+        """Non-interactive command reporting how this CLI is authenticated."""
+        raise NotImplementedError
+
+    def accepts_subscription_auth(self, stdout: str, stderr: str) -> bool:
+        """True only for the vendor's consumer-subscription login, never API-backed auth."""
+        raise NotImplementedError
+
+    async def subscription_authenticated(
+        self, env: dict[str, str], *, timeout: float = 10
+    ) -> bool:
+        """Run the CLI's own auth-status command without reading a credential store."""
+        argv = self.auth_command()
+        try:
+            returncode, stdout_bytes, stderr_bytes = await run_isolated_process(
+                argv, cwd=Path.cwd(), env=env, timeout=timeout
+            )
+        except (OSError, TimeoutError):
+            return False
+        stdout = stdout_bytes.decode(errors="replace")
+        stderr = stderr_bytes.decode(errors="replace")
+        return returncode == 0 and self.accepts_subscription_auth(stdout, stderr)
 
     #: Catalog providers whose models this CLI runs through its OWN login — no API key in our env.
     native_providers: frozenset[str] = frozenset()
@@ -205,6 +323,12 @@ class ClaudeCodeProvider(AgentProvider):
 
     name = "claude"
     native_providers = frozenset({"anthropic"})
+    media_model_field = "claude_media_model"
+    auth_home_env = ("CLAUDE_CONFIG_DIR",)
+    no_extra_usage_guidance = (
+        "in Claude Settings → Usage, keep Usage credits disabled, ensure prepaid balance is zero, "
+        "and turn auto-reload off"
+    )
 
     def can_run(self, model: Model, env: dict[str, str]) -> bool:
         if super().can_run(model, env):
@@ -213,7 +337,156 @@ class ClaudeCodeProvider(AgentProvider):
         # (ollama) is reachable too — when that provider is actually available here.
         return bool(overlay_for(f"{model.provider}/{model.id}", env)) and model.is_available()
     binary = "claude"
+    session_media_kinds = frozenset({"image", "video"})
     can_resume = True
+
+    def auth_command(self) -> list[str]:
+        return [self.executable(), "auth", "status"]
+
+    def media_help_text(self) -> str:
+        """Installed parser vocabulary only; this never authenticates or starts a model turn."""
+        completed = subprocess.run(
+            [self.executable(), "--help"], capture_output=True, text=True, timeout=10, check=False
+        )
+        if completed.returncode:
+            raise RuntimeError("Claude CLI help is unavailable")
+        return completed.stdout
+
+    def accepts_subscription_auth(self, stdout: str, stderr: str) -> bool:
+        try:
+            status = json.loads(stdout)
+        except ValueError:
+            return False
+        return bool(
+            isinstance(status, dict)
+            and status.get("loggedIn") is True
+            and status.get("authMethod") == "claude.ai"
+        )
+
+    def supports_session_media(self, media_kind: str) -> bool:
+        return media_kind in self.session_media_kinds
+
+    async def media_isolation_args(
+        self, env: dict[str, str], *, cwd: Path, timeout: float
+    ) -> tuple[str, ...]:
+        return ()
+
+    async def run_media_process(
+        self,
+        argv: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        timeout: float,
+        stdin: bytes | None = None,
+    ) -> list[AgentEvent]:
+        started = time.monotonic()
+        try:
+            returncode, stdout_bytes, stderr_bytes = await run_isolated_process(
+                argv, cwd=cwd, env=env, timeout=timeout, stdin=stdin
+            )
+        except TimeoutError as exc:
+            raise _MediaProcessTimeout(
+                f"{self.name} media session timed out after {timeout:g}s",
+                timeout_phase="provider_media",
+                elapsed_seconds=time.monotonic() - started,
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(f"{self.name} CLI could not start: {exc.strerror or exc}") from exc
+        events = [
+            event
+            for line in stdout_bytes.decode(errors="replace").splitlines()
+            if (event := self.parse(line))
+        ]
+        facts = _failure_event_facts(events)
+        failure_kwargs = {
+            "events": facts,
+            "stderr_bytes": len(stderr_bytes),
+            "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+            "elapsed_seconds": time.monotonic() - started,
+        }
+        if returncode:
+            raise _MediaProcessFailure(
+                f"{self.name} media session exited {returncode}",
+                exit_code=returncode,
+                **failure_kwargs,
+            )
+        errors = [event for event in events if event.kind in ("error", "rate_limit")]
+        if errors:
+            category = "subscription quota or rate limit" if errors[-1].kind == "rate_limit" else "provider reported failure"
+            raise _MediaProcessFailure(f"{self.name} media session failed: {category}", **failure_kwargs)
+        if not any(event.kind == "done" for event in events):
+            raise _MediaProcessFailure(
+                f"{self.name} media session exited without a final result", **failure_kwargs
+            )
+        if not any(
+            (event.kind == "text" or event.final_text) and event.text.strip()
+            for event in events
+        ):
+            raise _MediaProcessFailure(
+                f"{self.name} media session returned no final message", **failure_kwargs
+            )
+        return events
+
+    async def media_cli_version(
+        self, env: dict[str, str], *, cwd: Path, timeout: float
+    ) -> str:
+        try:
+            returncode, stdout, _ = await run_isolated_process(
+                [self.executable(), "--version"], cwd=cwd, env=env, timeout=timeout
+            )
+        except (OSError, TimeoutError):
+            return "unavailable"
+        line = stdout.decode(errors="replace").splitlines()[0].strip() if stdout else ""
+        if returncode or re.fullmatch(r"[A-Za-z0-9 ._+()/-]{1,120}", line) is None:
+            return "unavailable"
+        return line
+
+    def media_result(self, events: list[AgentEvent]) -> _MediaResult:
+        terminal = next(event for event in reversed(events) if event.kind == "done")
+        text = terminal.text if terminal.final_text else next(
+            event.text for event in reversed(events)
+            if event.kind == "text" and event.text.strip()
+        )
+        return _MediaResult(
+            text=text,
+            input_tokens=terminal.input_tokens or 0,
+            output_tokens=terminal.output_tokens or 0,
+            reported_cost_usd=terminal.cost_usd,
+        )
+
+    def media_command(
+        self,
+        *,
+        cwd: Path,
+        model: str | None,
+        media_paths: list[Path],
+        schema_path: Path | None,
+        schema_json: str | None,
+        mcp_config: Path,
+        settings_path: Path,
+        isolation_args: tuple[str, ...] = (),
+    ) -> list[str]:
+        argv = [
+            self.executable(), "-p",
+            "--output-format", "stream-json", "--verbose",
+            "--safe-mode", "--no-session-persistence",
+            "--permission-mode", "dontAsk",
+            "--mcp-config", str(mcp_config), "--strict-mcp-config",
+            "--settings", str(settings_path),
+        ]
+        if media_paths:
+            if any(any(char in str(path) for char in "*?[](){},") for path in media_paths):
+                raise ValueError("Claude media staging path contains permission-rule metacharacters")
+            rules = ",".join(f"Read({path})" for path in media_paths)
+            argv += ["--tools", "Read", "--allowedTools", rules]
+        else:
+            argv += ["--tools", ""]
+        if model:
+            argv += ["--model", model]
+        if schema_json:
+            argv += ["--json-schema", schema_json]
+        return argv
 
     #: Read off `claude --help` on the INSTALLED binary (2.1.233), not from memory of the docs —
     #: which would have produced "default" and missed auto/manual/dontAsk entirely.
@@ -363,13 +636,19 @@ class ClaudeCodeProvider(AgentProvider):
         if kind == "result":
             usage = raw.get("usage") or {}
             failed = bool(raw.get("is_error"))
+            structured = raw.get("structured_output")
+            has_final = structured is not None or bool(raw.get("result"))
+            detail = json.dumps(structured) if structured is not None else str(
+                raw.get("result") or raw.get("stop_reason") or raw.get("subtype") or ""
+            )
             return AgentEvent(
                 kind="error" if failed else "done",
                 session_id=sid, raw_type=kind,
-                text=str(raw.get("stop_reason") or raw.get("subtype") or ""),
+                text=detail,
                 cost_usd=raw.get("total_cost_usd"),
-                input_tokens=usage.get("input_tokens"),
+                input_tokens=_prompt_tokens(usage),
                 output_tokens=usage.get("output_tokens"),
+                final_text=has_final,
             )
 
         return AgentEvent(kind="other", session_id=sid, raw_type=kind)
@@ -394,19 +673,21 @@ class ClaudeCodeProvider(AgentProvider):
 class CodexProvider(AgentProvider):
     """OpenAI's Codex CLI (Apache-2.0), driven through its documented `codex exec` mode.
 
-    UNVERIFIED: codex is not installed on the machine this adapter was written on, so the flags
-    come from documentation and have never been exercised. It says so rather than quietly
-    building a command that may be wrong — and note OpenAI has publicly declined to clarify how
-    their consumer-subscription automation terms apply to scripted CLI use, so the Claude path is
-    the one to lean on until that's settled.
+    The general agent adapter remains unverified.
     """
 
     name = "codex"
     native_providers = frozenset({"openai", "chatgpt"})
     binary = "codex"
     verified = False
-    caveat = ("unverified: built from docs, never run against a real binary; and OpenAI has not "
-              "clarified how consumer-subscription terms apply to scripted use")
+    caveat = "unverified: the general agent adapter has not been exercised end-to-end"
+
+    def auth_command(self) -> list[str]:
+        return [self.executable(), "login", "status"]
+
+    def accepts_subscription_auth(self, stdout: str, stderr: str) -> bool:
+        status = f"{stdout}\n{stderr}".strip().lower()
+        return "logged in using chatgpt" in status and "api key" not in status
 
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
@@ -430,10 +711,72 @@ class CodexProvider(AgentProvider):
             return None
         if not isinstance(raw, dict):
             return None
-        return AgentEvent(kind="other", raw_type=str(raw.get("type", "")), text=line[:200])
+        kind = str(raw.get("type", ""))
+        if kind == "thread.started":
+            return AgentEvent(kind="started", session_id=raw.get("thread_id"), raw_type=kind)
+        if kind in ("turn.failed", "error"):
+            error = raw.get("error") or {}
+            text = error.get("message", "") if isinstance(error, dict) else str(error)
+            return AgentEvent(kind="error", raw_type=kind, text=_clip(text or line))
+        if kind == "item.completed":
+            item = raw.get("item") or {}
+            item_type = item.get("type") if isinstance(item, dict) else None
+            if item_type == "agent_message":
+                return AgentEvent(kind="text", raw_type=kind, text=str(item.get("text") or ""))
+            if item_type == "command_execution":
+                failed = item.get("status") == "failed" or bool(item.get("exit_code"))
+                return AgentEvent(
+                    kind="error" if failed else "tool_result",
+                    raw_type=kind,
+                    text=_clip(str(item.get("aggregated_output") or item.get("status") or "")),
+                )
+        if kind == "turn.completed":
+            usage = raw.get("usage") or {}
+            return AgentEvent(
+                kind="done",
+                raw_type=kind,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+            )
+        return AgentEvent(kind="other", raw_type=kind, text=_clip(line, 200))
 
 
-PROVIDERS: dict[str, AgentProvider] = {p.name: p for p in (ClaudeCodeProvider(), CodexProvider())}
+class _MediaSessionProvider(Protocol):
+    name: str
+    native_providers: frozenset[str]
+    media_model_field: str
+    no_extra_usage_guidance: str
+
+    def available(self) -> bool: ...
+    def executable(self) -> str: ...
+    def model_id_for(self, model: Model) -> str: ...
+    def subscription_env(
+        self, base: dict[str, str] | None = None, *, temp_dir: Path | None = None
+    ) -> dict[str, str]: ...
+    async def subscription_authenticated(
+        self, env: dict[str, str], *, timeout: float = 10
+    ) -> bool: ...
+    async def media_isolation_args(
+        self, env: dict[str, str], *, cwd: Path, timeout: float
+    ) -> tuple[str, ...]: ...
+    async def media_cli_version(
+        self, env: dict[str, str], *, cwd: Path, timeout: float
+    ) -> str: ...
+    def media_command(
+        self, *, cwd: Path, model: str | None, media_paths: list[Path],
+        schema_path: Path | None, schema_json: str | None, mcp_config: Path,
+        settings_path: Path, isolation_args: tuple[str, ...] = (),
+    ) -> list[str]: ...
+    async def run_media_process(
+        self, argv: list[str], *, cwd: Path, env: dict[str, str], timeout: float,
+        stdin: bytes | None = None,
+    ) -> list[AgentEvent]: ...
+    def media_result(self, events: list[AgentEvent]) -> _MediaResult: ...
+
+
+_claude = ClaudeCodeProvider()
+PROVIDERS: dict[str, AgentProvider] = {p.name: p for p in (_claude, CodexProvider())}
+MEDIA_PROVIDERS: dict[str, _MediaSessionProvider] = {_claude.name: _claude}
 
 
 def provider_for(name: str) -> AgentProvider:

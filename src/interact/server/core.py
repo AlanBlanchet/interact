@@ -23,9 +23,12 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from interact.browser import SessionRegistry
-from interact.debug_utils import Debug, _CURRENT_INV, resolve_output_path
+from interact.debug_utils import _CURRENT_INV, Debug, resolve_output_path
 from interact.desktop import CaptureError
-from interact.runtime import breaker, config  # noqa: F401 — breaker re-exported for tests/vlm
+from interact.runtime import (  # noqa: F401 — breaker re-exported for tests/vlm
+    breaker,
+    config,
+)
 from interact.vision import VisionError
 
 _log = logging.getLogger("interact")
@@ -178,7 +181,10 @@ def _session_response(session: str, body: str) -> str:
         if n
     ]
     _observe_session_url(session)  # rebaseline: this is where this call left it
-    return "\n".join([f"[session: {session}]", *notes, body])
+    metadata = [f"[session: {session}]", *notes]
+    # ERROR is a public machine-readable prefix used by agents and clients. Session metadata may
+    # enrich the response, but must never hide that prefix.
+    return "\n".join([body, *metadata] if body.startswith("ERROR:") else [*metadata, body])
 
 
 def _not_found(what: str) -> str:

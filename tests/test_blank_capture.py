@@ -56,8 +56,8 @@ async def test_a_blank_capture_is_never_sent_to_the_vlm():
     out = await srv.vlm._media_response(
         _png((0, 0, 0), size=(400, 300)), "Desktop window: Code (1920x1080)", "what is on screen?"
     )
-    assert out and out.startswith("ERROR:"), out
-    assert "blank" in out.lower()
+    assert out.text and out.text.startswith("ERROR:"), out
+    assert "blank" in out.text.lower()
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_a_real_frame_still_reaches_the_vlm(monkeypatch):
 
     monkeypatch.setattr(srv.vlm, "_vlm", ok)
     out = await srv.vlm._media_response(_varied_png(), "ctx", "what is on screen?")
-    assert out and "toolbar" in out
+    assert out.text and "toolbar" in out.text
 
 
 # --- #113: the same emptiness has to be surfaced on the UNCAPTIONED path too ---

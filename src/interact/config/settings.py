@@ -1,16 +1,17 @@
 import functools
-from dataclasses import dataclass
 import glob
 import json
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode
 
+from interact.agents.providers import MEDIA_PROVIDERS
 from interact.data import PackageData
 from interact.models import CircuitBreaker, Model, ModelChain, ModelRole
 
@@ -82,6 +83,11 @@ _DEFAULT_SOVEREIGN_MODEL = _SOVEREIGN_MODELS[0]  # preferred default (also a bac
 QUALITY_TIERS = ("low", "medium", "high", "critical")
 
 
+def _default_media_provider_order() -> tuple[str, ...]:
+    """Registry order is the one default; adding a real provider makes it configurable at once."""
+    return tuple(MEDIA_PROVIDERS)
+
+
 @dataclass(frozen=True)
 class SkippedModel:
     """A stronger model the walk passed over, and why it could not be used."""
@@ -107,6 +113,20 @@ class Config(BaseSettings):
     video_model: str = ""
     component_model: str = ""
     audio_model: str = ""
+    # Generic media execution. Backend selects the transport; billing decides whether interact may
+    # call a metered API. Vendor CLIs can consume account credits after plan allowance, so session
+    # execution additionally requires an explicit operator attestation that those credits are off.
+    media_backend: Literal["auto", "session", "api"] = "auto"
+    media_billing: Literal["session_only", "api_allowed"] = "session_only"
+    media_session_no_extra_usage_confirmed_for: Annotated[tuple[str, ...], NoDecode] = ()
+    media_provider_order: Annotated[tuple[str, ...], NoDecode] = Field(
+        default_factory=_default_media_provider_order
+    )
+    media_timeout: int = 120
+    media_max_items: int = 16
+    media_max_total_bytes: int = 50 * 1024 * 1024
+    media_max_context_chars: int = 32 * 1024
+    claude_media_model: str = ""
     # Fallback model chains (comma-separated litellm ids) tried, in order, when the primary
     # model errors. Empty → the bundled per-role recommendations are used as the defaults.
     image_fallbacks: str = ""
@@ -189,12 +209,43 @@ class Config(BaseSettings):
         except RuntimeError as exc:  # "~nosuchuser/out" — pydantic only wraps ValueError
             raise ValueError(f"cannot expand '~' in {value}: {exc}") from exc
 
+    @field_validator(
+        "media_provider_order", "media_session_no_extra_usage_confirmed_for", mode="before"
+    )
+    @classmethod
+    def _parse_media_provider_list(cls, value, info) -> tuple[str, ...]:
+        if isinstance(value, str):
+            providers = tuple(part.strip() for part in value.split(",") if part.strip())
+        elif isinstance(value, (tuple, list)):
+            providers = tuple(str(part).strip() for part in value if str(part).strip())
+        else:
+            raise ValueError("media provider order must be a comma-separated list")
+        if not providers and info.field_name == "media_provider_order":
+            raise ValueError("media provider order cannot be empty")
+        if len(set(providers)) != len(providers):
+            raise ValueError(f"{info.field_name} contains a duplicate")
+        unknown = [name for name in providers if name not in MEDIA_PROVIDERS]
+        if unknown:
+            raise ValueError(f"unsupported media provider: {', '.join(unknown)}")
+        return providers
+
+    @field_validator(
+        "media_timeout", "media_max_items", "media_max_total_bytes", "media_max_context_chars"
+    )
+    @classmethod
+    def _positive_media_limit(cls, value: int, info) -> int:
+        if value <= 0:
+            raise ValueError(f"{info.field_name} must be greater than zero")
+        return value
+
     @model_validator(mode="after")
     def _check_dim_bounds(self):
         if self.vlm_min_dim > self.vlm_max_dim:
             raise ValueError(
                 f"vlm_min_dim ({self.vlm_min_dim}) must be <= vlm_max_dim ({self.vlm_max_dim})"
             )
+        if self.media_backend == "api" and self.media_billing == "session_only":
+            raise ValueError("media backend 'api' conflicts with session_only billing")
         return self
 
     @property
@@ -208,6 +259,41 @@ class Config(BaseSettings):
         session's custom-title (e.g. 'Aino'), else the VS Code / project / cwd basename, else 'default'
         — and ``<date>`` is today. Every dump interact writes for a run lands here, dated."""
         return self.debug_dir / "sessions" / caller_session_name() / datetime.now().strftime("%Y-%m-%d")
+
+    def media_workspace_root(self) -> Path:
+        """User-owned root for temporary artifacts shared by every media transport."""
+        return self.session_log_dir()
+
+    def media_model_for(self, provider: str) -> str:
+        """Configured model for one registered subscription CLI, or blank for its default."""
+        try:
+            field = MEDIA_PROVIDERS[provider].media_model_field
+        except KeyError:
+            raise ValueError(f"unknown media provider: {provider}") from None
+        return str(getattr(self, field))
+
+    def media_sessions_enabled(self) -> bool:
+        return self.media_backend != "api"
+
+    def media_api_enabled(self) -> bool:
+        return self.media_backend != "session" and self.media_billing == "api_allowed"
+
+    def require_media_session_confirmation(self, providers: tuple[str, ...]) -> None:
+        """Fail closed for candidate providers lacking a provider-scoped operator confirmation."""
+        confirmed = set(self.media_session_no_extra_usage_confirmed_for)
+        missing = tuple(provider for provider in providers if provider not in confirmed)
+        if not missing:
+            return
+        instructions = "; ".join(
+            f"{provider}: {MEDIA_PROVIDERS[provider].no_extra_usage_guidance}"
+            for provider in missing
+        )
+        raise RuntimeError(
+            f"session media is blocked for unconfirmed provider(s) {', '.join(missing)}. "
+            f"{instructions}; then list only those confirmed providers in "
+            "media.noExtraUsageConfirmedFor. interact cannot inspect these account settings or "
+            "eliminate the race if they change later"
+        )
 
     def model_for(self, role: ModelRole) -> str:
         if role == "video":
@@ -284,9 +370,9 @@ class Config(BaseSettings):
                 absent = [k for k in keys if not os.environ.get(k)]
                 reason = "no " + ", ".join(absent)
             elif keys is not None:
-                # Declares no keys at all: a subscription wrapper. interact never drives somebody's
-                # subscription credentials, and its auth is an interactive flow that blocks.
-                reason = "subscription provider — interact does not drive those credentials"
+                # Declares no API keys: subscription CLI media runs through the separate session
+                # transport, not through this LiteLLM model-selection walk.
+                reason = "subscription provider — available through media.backend=session"
             else:
                 reason = "unknown provider"
             skipped.append(SkippedModel(model=model.id, reason=reason))

@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import shutil
 import sys
 import threading
 from functools import partial
@@ -15,6 +17,13 @@ import pytest
 # `INTERACT_*` var that config.env does not define, and any test whose code path refreshes config
 # (every `@instrumented` MCP tool does) would silently re-enable discovery for the REST of the run.
 os.environ.setdefault("OLLAMA_DISCOVERY", "0")
+# Unit tests retain the historical mocked-LiteLLM default.  Production Config defaults to the
+# subscription session path; the explicit test override prevents an old test that patches only
+# `_vision_completion` from launching the user's real Claude/Codex login by accident.
+os.environ.setdefault("INTERACT_MEDIA_BACKEND", "api")
+os.environ.setdefault("INTERACT_MEDIA_BILLING", "api_allowed")
+
+from interact.agents.providers import AgentProvider, ClaudeCodeProvider
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -23,6 +32,13 @@ def _load_repo_dotenv() -> None:
     from interact.config import load_dotenv_for_cli
 
     load_dotenv_for_cli()
+
+
+@pytest.fixture(autouse=True)
+def _default_unit_media_to_mocked_api(monkeypatch):
+    """Re-apply after every live-config refresh, which intentionally clears file-absent env keys."""
+    monkeypatch.setenv("INTERACT_MEDIA_BACKEND", "api")
+    monkeypatch.setenv("INTERACT_MEDIA_BILLING", "api_allowed")
 
 
 @pytest.fixture(autouse=True)
@@ -48,10 +64,12 @@ def _block_real_vlm_calls(request):
     saved = (
         litellm.acompletion,
         litellm.completion,
+        litellm.acreate_file,
         litellm.atranscription,
         litellm.transcription,
     )
     litellm.acompletion, litellm.completion = _ablocked, _blocked
+    litellm.acreate_file = _ablocked
     litellm.atranscription, litellm.transcription = _ablocked, _blocked
     try:
         yield
@@ -59,9 +77,42 @@ def _block_real_vlm_calls(request):
         (
             litellm.acompletion,
             litellm.completion,
+            litellm.acreate_file,
             litellm.atranscription,
             litellm.transcription,
         ) = saved
+
+
+@pytest.fixture(autouse=True)
+def _block_real_subscription_cli(monkeypatch, request):
+    """A unit test may use a fake executable, but may never spend the user's plan allowance."""
+    if "integration" in request.keywords:
+        return
+    real = {
+        Path(path).resolve()
+        for name in ("claude", "codex")
+        if (path := shutil.which(name)) is not None
+    }
+    original = AgentProvider.subscription_authenticated
+    original_process = ClaudeCodeProvider.run_media_process
+
+    async def guarded(self, env, *, timeout=10):
+        executable = Path(self.executable()).resolve()
+        if executable in real:
+            raise RuntimeError(
+                "real subscription CLI blocked in a unit test — use a fake executable"
+            )
+        return await original(self, env, timeout=timeout)
+
+    async def guarded_process(self, argv, **kwargs):
+        if argv and Path(argv[0]).resolve() in real:
+            raise RuntimeError(
+                "real subscription CLI process blocked in a unit test — use a fake executable"
+            )
+        return await original_process(self, argv, **kwargs)
+
+    monkeypatch.setattr(AgentProvider, "subscription_authenticated", guarded)
+    monkeypatch.setattr(ClaudeCodeProvider, "run_media_process", guarded_process)
 
 
 @pytest.fixture(autouse=True)
@@ -71,12 +122,14 @@ def _isolate_interact_logs(tmp_path):
     set, which review_ui's refresh would reset). A test that needs the real dump path overrides it."""
     from interact.runtime import config
 
-    saved = config.screenshot_dump_dir
+    saved = (config.screenshot_dump_dir, config.media_backend, config.media_billing)
     config.screenshot_dump_dir = tmp_path / "interact-debug"
+    config.media_backend = "api"
+    config.media_billing = "api_allowed"
     try:
         yield
     finally:
-        config.screenshot_dump_dir = saved
+        config.screenshot_dump_dir, config.media_backend, config.media_billing = saved
 
 
 def pytest_collection_modifyitems(config, items):

@@ -14,8 +14,9 @@ from typing import Annotated
 from cyclopts import App, Parameter
 
 from interact import installed_version
+from interact.agents.providers import PROVIDERS
 from interact.cli.clients import ClientTarget, MCPServer, Scope
-from interact.config import UserConfig
+from interact.config import Config, UserConfig
 
 app = App(
     name="interact",
@@ -23,6 +24,44 @@ app = App(
     version_flags=["--version", "-v"],  # `-v` too — the obvious alias users reach for
     help="Browser + desktop automation MCP server, plus tools to install and configure it.",
 )
+
+
+def _print_media_transport(config: Config, indent: str = "  ") -> None:
+    """Print the configured visual transport and registry-backed subscription CLI readiness."""
+    order = tuple(config.media_provider_order)
+    print(
+        f"{indent}media        : backend={config.media_backend} "
+        f"billing={config.media_billing}  order={' → '.join(order) or 'none'}"
+    )
+    confirmed = set(config.media_session_no_extra_usage_confirmed_for)
+    for name in order:
+        provider = PROVIDERS[name]
+        availability = (
+            "installed — subscription login is verified when a visual request runs"
+            if provider.available()
+            else f"not installed — install and log in with the {provider.binary} CLI"
+        )
+        confirmation = (
+            "no-extra-usage confirmed (account state remains unverifiable)"
+            if name in confirmed
+            else (
+                f"SESSION BLOCKED for this provider — {provider.no_extra_usage_guidance}; "
+                f"then add {name} to media.noExtraUsageConfirmedFor"
+            )
+        )
+        print(f"{indent}  · {name:<10} {availability}; {confirmation}")
+    if config.media_billing == "session_only":
+        print(
+            f"{indent}  no metered API fallback by interact; vendor session credit controls "
+            "remain account-side; audio is disabled until media.billing=api_allowed"
+        )
+    elif config.media_backend == "session":
+        print(
+            f"{indent}  visual work stays on sessions; audio may use its configured API/local "
+            "backend"
+        )
+    else:
+        print(f"{indent}  metered API use is explicitly allowed")
 
 
 def _print_resolved_models(indent: str = "  ") -> None:
@@ -216,7 +255,9 @@ def _print_sandboxes(real_display: str | None) -> None:
 def mcp() -> None:
     """Run the MCP server over stdio. Clients launch this; register it with `interact install`."""
     # Keys/settings (config.env + project .env) are loaded centrally in main() before dispatch.
-    from interact.server import main as serve  # deferred: pulls in Playwright + litellm + FastMCP
+    from interact.server import (
+        main as serve,  # deferred: pulls in Playwright + litellm + FastMCP
+    )
 
     serve()
 
@@ -226,7 +267,7 @@ def status(
     project: Annotated[Path, Parameter(name=["--project", "-p"])] = Path("."),
 ) -> None:
     """Show how interact is set up: which clients it's registered with, the configured
-    models and desktop target, which API keys are present, and recent usage. The
+    subscription-media policy, models and desktop target, optional API keys, and recent usage. The
     at-a-glance overview for a normal user (grounding/scenario probes live in the tests).
 
     Parameters
@@ -235,9 +276,9 @@ def status(
         Project root to check for project-scoped client registrations (default: cwd).
     """
     from interact.cli.clients import ClientTarget
+    from interact.cli.usage import UsageReport
     from interact.models import Model, ModelCapability
     from interact.runtime import config
-    from interact.cli.usage import UsageReport
 
     root = project.resolve()
     print("interact status\n")
@@ -253,8 +294,13 @@ def status(
     if not bound:
         print("  (none yet)")
 
-    print("\nModels (what your keys resolve to — pin via `interact config set`):")
+    print("\nMedia analysis:")
+    _print_media_transport(config)
+
+    print("\nModels (API/local roles and fallback models — pin via `interact config set`):")
     _print_resolved_models()
+    if config.media_billing == "session_only":
+        print("  note       API/local role models are inactive while media.billing=session_only")
     from interact.desktop.backend import desktop_supported
 
     if not desktop_supported():
@@ -268,11 +314,22 @@ def status(
     Model.load_registry()
     providers = Model.available_providers()
     grounding = Model.available_by_capability(ModelCapability.GUI_GROUNDING)
-    print(f"\nAPI keys: {', '.join(providers) or 'none — interact config set OPENAI_API_KEY …'}")
+    print(
+        f"\nAPI keys (optional for visual subscriptions; required by configured audio/API paths): "
+        f"{', '.join(providers) or 'none'}"
+    )
     print(f"Grounding models ready: {len(grounding)}")
 
     report = UsageReport.build(since_days=30)
-    print(f"\nUsage (last 30d): {report.entries} calls, ${report.total_cost:.4f}   (details: interact usage)")
+    session_note = (
+        f"; {report.session_usage_calls} session-usage call(s), account impact unknown"
+        if report.session_usage_calls
+        else ""
+    )
+    print(
+        f"\nUsage (last 30d): {report.entries} calls, observed metered API spend "
+        f"${report.total_cost:.4f}{session_note}   (details: interact usage)"
+    )
 
 
 @app.command
@@ -328,12 +385,17 @@ def install(
 
 @app.command
 def providers() -> None:
-    """List providers and grounding models available in the current environment."""
+    """List subscription CLIs plus API/local providers and grounding models."""
     from interact.models import Model, ModelCapability
 
     Model.load_registry()
     available = Model.available_providers()
-    print(f"Available providers ({len(available)}): {', '.join(available) or 'none — no API keys found'}")
+    print("Subscription visual providers:")
+    _print_media_transport(Config())
+    print(
+        f"\nAPI/local providers ({len(available)}): "
+        f"{', '.join(available) or 'none (subscription visual sessions can still run)'}"
+    )
 
     print("\nResolved selection (what each tool uses, given your keys):")
     _print_resolved_models()
@@ -352,8 +414,8 @@ def dashboard() -> None:
     and the VS Code webview — defined once, shown on every surface. No VLM calls.
     """
     from interact.cli.render import CliRenderer
-    from interact.runtime import config
     from interact.cli.view import View
+    from interact.runtime import config
 
     CliRenderer.render(View.dashboard(config))
 
@@ -382,16 +444,40 @@ def usage(
         print(f"interact usage ({window}): {where}\n  log: {log_path}")
         return
 
-    print(f"interact usage ({window}) — {report.entries} calls, ${report.total_cost:.4f}, "
-          f"{report.total_input:,} in / {report.total_output:,} out tokens\n")
+    unknown = (
+        f"; {report.session_usage_calls} session-usage call(s) with unknown account impact"
+        if report.session_usage_calls
+        else ""
+    )
+    print(
+        f"interact usage ({window}) — {report.entries} calls, observed metered API spend "
+        f"${report.total_cost:.4f}{unknown}, {report.total_input:,} in / "
+        f"{report.total_output:,} out tokens\n"
+    )
     print(f"  {'model':<40} {'calls':>6} {'in':>10} {'out':>10} {'cost':>10}")
     for group in report.by_model:
-        print(f"  {group.name:<40} {group.calls:>6} {group.input_tokens:>10,} "
-              f"{group.output_tokens:>10,} ${group.cost:>9.4f}")
+        cost = (
+            f"${group.cost:.4f} + unknown"
+            if group.unknown_cost_calls and group.cost
+            else "unknown"
+            if group.unknown_cost_calls
+            else f"${group.cost:.4f}"
+        )
+        print(
+            f"  {group.name:<40} {group.calls:>6} {group.input_tokens:>10,} "
+            f"{group.output_tokens:>10,} {cost:>10}"
+        )
     if len(report.by_provider) > 1:
         print("\n  by provider:")
         for group in report.by_provider:
-            print(f"  {group.name:<40} {group.calls:>6} {' ':>10} {' ':>10} ${group.cost:>9.4f}")
+            cost = (
+                f"${group.cost:.4f} + unknown"
+                if group.unknown_cost_calls and group.cost
+                else "unknown"
+                if group.unknown_cost_calls
+                else f"${group.cost:.4f}"
+            )
+            print(f"  {group.name:<40} {group.calls:>6} {' ':>10} {' ':>10} {cost:>10}")
 
 
 @app.command
@@ -490,6 +576,8 @@ def doctor(*, fix: bool = False) -> None:
     from interact.desktop.backend import desktop_supported
     from interact.runtime import config
 
+    _print_media_transport(config)
+
     # Desktop diagnostics are Linux/X11-specific (maim, /dev/uinput, Xephyr). On macOS/Windows
     # they'd print misleading "MISSING (apt install …)" / "udev rule" advice, so report cleanly
     # that desktop automation is N/A here and browser automation is the ready path.
@@ -522,7 +610,9 @@ def doctor(*, fix: bool = False) -> None:
     Model.load_registry()
     available = Model.available_providers()
     grounding = Model.available_by_capability(ModelCapability.GUI_GROUNDING)
-    print(f"  providers     : {', '.join(available) or 'none — set a provider API key'}")
+    print(
+        f"  API/local     : {', '.join(available) or 'none (subscription visuals need no API key)'}"
+    )
     print(f"  grounding     : {len(grounding)} model(s) ready")
     _print_ollama()
     print("  selection     : (what each tool resolves to — answers 'why is my default X?')")

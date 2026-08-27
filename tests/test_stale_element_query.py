@@ -54,7 +54,7 @@ async def test_a_stale_ref_loses_its_LABEL_but_still_gets_looked_at(monkeypatch)
 
     async def capture_context(data, context, query=None, *a, **k):
         seen["context"] = context
-        return "a region of colour"
+        return srv.vlm._MediaResponse("a region of colour", None)
 
     monkeypatch.setattr(srv.vlm, "_media_response", capture_context)
 
@@ -90,7 +90,7 @@ async def test_a_fresh_ref_keeps_its_label(monkeypatch):
 
     async def capture_context(data, context, query=None, *a, **k):
         seen["context"] = context
-        return "a button"
+        return srv.vlm._MediaResponse("a button", None)
 
     monkeypatch.setattr(srv.vlm, "_media_response", capture_context)
 

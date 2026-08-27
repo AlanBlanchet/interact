@@ -14,6 +14,7 @@ from interact.launch import (
 )
 from interact.server import core, sandbox, targets, vlm
 from interact.server.core import _DEFAULT_SESSION, _NO_WINDOWS_MSG, _session_response, config, mcp
+from interact.vision.core import supports_native_video_inline
 
 
 def _video_model() -> str:
@@ -25,7 +26,9 @@ def _video_model() -> str:
         return ""
 
 
-def _sampling_caveat(model: str | None = None) -> str:
+def _sampling_caveat(
+    model: str | None = None, result: vlm.VLMResult | None = None
+) -> str:
     """The resolution floor of a video verdict, stated as part of the verdict itself.
 
     A recording judged by a non-native-video model is ffmpeg-sampled at ``video.fps`` and capped at
@@ -34,14 +37,24 @@ def _sampling_caveat(model: str | None = None) -> str:
     own ``document.getAnimations()`` (#86). The model was not wrong about its frames; the answer was
     presented without the floor that produced it. Naming the floor turns a false negative into an
     honest "below what this can resolve"."""
-    from interact.vision.core import supports_native_video_inline
-
-    if model and supports_native_video_inline(model):
+    if result is not None and result.video_sampled is False:
         return ""
-    interval_ms = round(1000 / max(1, config.video_fps))
+    if (
+        result is None
+        and not config.media_sessions_enabled()
+        and model
+        and supports_native_video_inline(model)
+    ):
+        return ""
+    timestamps = result.video_sample_timestamps if result is not None else []
+    interval_ms = (
+        round(max(b - a for a, b in zip(timestamps, timestamps[1:])) * 1000)
+        if len(timestamps) > 1
+        else round(1000 / max(1, config.video_fps))
+    )
     return (
-        f"\n\n[sampling floor: frames taken at {config.video_fps}/s, so anything shorter than "
-        f"~{interval_ms}ms between steps cannot be resolved here and will read as simultaneous. "
+        f"\n\n[sampling floor: the largest gap between analyzed frames is ~{interval_ms}ms, "
+        "so anything shorter between steps may not be resolved and can read as simultaneous. "
         f"For CSS timing (stagger, delay, duration) use evaluate_js with document.getAnimations() "
         f"— deterministic and exact — rather than a recording.]"
     )
@@ -307,16 +320,16 @@ async def record(
     path: save the video here. A relative path lands under ~/.interact/out (interact's output dir),
         never the server's cwd; "~" expands. The reply names the absolute file written.
 
-    SAMPLING LIMIT — read before asking about a FAST animation. Unless the model watches video
-    natively, the clip is sampled into still frames at `video.fps` (default 5/s) and capped at
-    `video.max_frames`, so anything shorter than one sampling interval (~200ms at the default) is
-    invisible to the analysis and comes back as "it happened all at once". That is a limit of the
-    sampling, NOT evidence the animation is missing (#86). For CSS timing claims — a staggered
-    reveal, a transition duration, an animation-delay ladder — do not use record at all: ask the
-    page directly with evaluate_js and `document.getAnimations()`, reading each animation's
-    `effect.getComputedTiming()` (delay/duration) and its keyframes. That is deterministic, free,
-    and exact. Use record for WHAT HAPPENED over time at human speed; use getAnimations for
-    sub-second timing.
+    SAMPLING LIMIT — read before asking about a FAST animation. Session backends always sample the
+    clip into still frames at `video.fps` (default 5/s) and cap it at `video.max_frames`; an API
+    backend may send native video when supported. A sampled result cannot see anything shorter than
+    one interval (~200ms at the default), so it can report "it happened all at once" even when a
+    faster stagger exists. That is a limit of the sampling, NOT evidence the animation is missing
+    (#86). For CSS timing claims — a staggered reveal, a transition duration, an animation-delay
+    ladder — do not use record at all: ask the page directly with evaluate_js and
+    `document.getAnimations()`, reading each animation's `effect.getComputedTiming()`
+    (delay/duration) and its keyframes. That is deterministic, free, and exact. Use record for WHAT
+    HAPPENED over time at human speed; use getAnimations for sub-second timing.
     """
     win, mgr, err = targets._resolve_target(target, session)
     if err:
@@ -379,7 +392,7 @@ async def _record_desktop(
             "between frames. Describe only what you actually observe.\n" + context
         )
     r = await vlm._vlm(video_bytes, context, query, "video", "video/mp4")
-    return vlm._fmt_timing(r) + _sampling_caveat(_video_model()) + saved
+    return vlm._fmt_timing(r) + _sampling_caveat(_video_model(), r) + saved
 
 
 async def _record_browser(
@@ -396,9 +409,17 @@ async def _record_browser(
     video_bytes = await mgr.stop_recording()
     if not video_bytes:
         return _session_response(session, "Recording stopped but no video data captured.")
-    result = await vlm._media_response(video_bytes, "Browser recording", query, path, "video", "video/webm")
+    response = await vlm._media_response(
+        video_bytes,
+        "Browser recording",
+        query,
+        path,
+        "video",
+        "video/webm",
+    )
+    result, analysis = response.text, response.result
     if result:  # analysis, or — path but no query — only the saved-file note (then no caveat)
-        caveat = _sampling_caveat(_video_model()) if query else ""
+        caveat = _sampling_caveat(result=analysis) if query else ""
         return _session_response(session, result + caveat)
     size = len(video_bytes)
     return _session_response(session, f"Recording stopped. Video captured ({size} bytes).")

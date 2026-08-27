@@ -56,6 +56,10 @@ class AgentEvent(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     raw_type: str = ""
+    #: True when a terminal event itself carries the provider's final response (Claude structured
+    #: output), rather than only a stop reason.  Media execution must prefer this over an earlier
+    #: free-form assistant block.
+    final_text: bool = False
     #: When interact FIRST OBSERVED this line, not when the agent produced it — the vendor writes
     #: no timestamp, but we watch the stream, so this is the one clock that is honestly available.
     #: It is what lets a view tell an agent that is working from one that has stopped, order a

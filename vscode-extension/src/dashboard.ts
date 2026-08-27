@@ -29,6 +29,7 @@ import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Cata
 import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import { DIM_FOREGROUND } from "./themeTokens";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
+import { presentMediaStatus } from "./mediaStatus";
 import {
   readUsageLog,
   filterByRange,
@@ -36,6 +37,7 @@ import {
   aggregateStackedByModel,
   aggregateTokensByModel,
   aggregateCallsByModel,
+  summarizeUsage,
   colorFor,
 } from "./usage";
 
@@ -401,12 +403,25 @@ export class DashboardPanel {
 
   private statusCell(): CellUpdate {
     const projectPath = cfg().get<string>("projectPath") || "(auto-detect)";
+    const billing = cfg().get<"session_only" | "api_allowed">("media.billing") ?? "session_only";
+    const backend = cfg().get<"auto" | "session" | "api">("media.backend") ?? "auto";
+    const confirmations = cfg().get<string>("media.noExtraUsageConfirmedFor") ?? "";
     return {
       id: "status",
       title: "System Status",
       content: [
         { kind: "row", label: "Extension Active", dot: "ok" },
         { kind: "row", label: "Project:", value: projectPath },
+        {
+          kind: "row",
+          label: "Media:",
+          value: presentMediaStatus(
+            billing,
+            confirmations.split(",").includes("claude"),
+            backend,
+            billing === "api_allowed" && backend !== "session",
+          ),
+        },
       ],
     };
   }
@@ -724,11 +739,13 @@ export class DashboardPanel {
     const stackedDays =
       this.range === "24h" ? 1 : this.range === "30d" ? 30 : this.range === "all" ? 30 : 14;
 
-    // Spend is recorded in USD; convert to the user's display currency at a live ECB rate.
+    // Only observed/estimated metered API cost is recorded in USD. Session account impact is
+    // unknown because vendor CLIs cannot expose whether a plan allowance or credits were used.
     const currency = cfg().get<string>("display.currency") || "USD";
     const rate = await usdRateTo(currency);
     const sym = currencySymbol(currency);
     const money = (usd: number) => formatMoney(usd, currency, rate);
+    const usageSummary = summarizeUsage(entries);
 
     // a) Spend by provider — horizontal bar
     const provAgg = aggregateByProvider(entries, this.modelsData);
@@ -748,8 +765,8 @@ export class DashboardPanel {
       bars: provBars,
       valuePrefix: sym,
       ariaSummary: topProv
-        ? `${topProv.provider} accounts for ${topPct.toFixed(0)}% of spend over ${rangeLabel}, ${money(topProv.cost)} of ${money(provTotal)} total.`
-        : `No spend recorded over ${rangeLabel}.`,
+        ? `${topProv.provider} accounts for ${topPct.toFixed(0)}% of observed or estimated metered API cost over ${rangeLabel}, ${money(topProv.cost)} of ${money(provTotal)} total.`
+        : `No observed metered API cost over ${rangeLabel}.`,
     };
 
     // b) Spend by model over time — stacked bar
@@ -766,7 +783,7 @@ export class DashboardPanel {
         values: ser.values.map((v) => v * rate),
       })),
       valuePrefix: sym,
-      ariaSummary: `Daily spend across ${stacked.series.length} models over the last ${stackedDays} days, total ${money(stackedTotal)}.`,
+      ariaSummary: `Daily observed or estimated metered API cost across ${stacked.series.length} models over the last ${stackedDays} days, total ${money(stackedTotal)}.`,
     };
 
     // c) Tokens by model (input vs output)
@@ -821,9 +838,28 @@ export class DashboardPanel {
       title: "Consumption",
       content: [
         rangeSelector,
-        { kind: "row", label: "Spend by provider" },
+        {
+          kind: "row",
+          label: "Observed/estimated metered API cost",
+          value: money(usageSummary.observedMeteredApiCost),
+        },
+        ...(usageSummary.sessionUsageCalls
+          ? [{
+              kind: "row" as const,
+              label: "Session usage",
+              value: `${usageSummary.sessionUsageCalls} call(s) · account impact unknown`,
+            }]
+          : []),
+        ...(usageSummary.unknownMeteredApiCostCalls
+          ? [{
+              kind: "row" as const,
+              label: "Metered API attempts with unknown cost",
+              value: `${usageSummary.unknownMeteredApiCostCalls} failed/cancelled or unpriced call(s)`,
+            }]
+          : []),
+        { kind: "row", label: "Observed/estimated API cost by provider" },
         providerCell,
-        { kind: "row", label: `Spend by model — last ${stackedDays}d` },
+        { kind: "row", label: `Observed/estimated API cost by model — last ${stackedDays}d` },
         stackedCell,
         { kind: "row", label: "Tokens by model (input vs output)" },
         tokensCell,

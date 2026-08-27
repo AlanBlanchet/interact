@@ -5,6 +5,7 @@ never read), the bundled JSON the extension consumes stays in lock-step, and the
 widget for every entry."""
 
 import pytest
+from pathlib import Path
 
 from interact.config import Config
 from interact.data import PackageData
@@ -54,6 +55,22 @@ def test_bundled_settings_json_is_in_lockstep_with_the_schema():
     """The extension reads the bundled settings.json; if SETTINGS changed without regenerating
     (`python -m interact.config.schema`), this fails — the same staleness guard as models.json."""
     assert PackageData.settings_data() == to_json_dict()
+
+
+def test_session_media_guidance_is_claude_only() -> None:
+    root = Path(__file__).parent.parent
+    root_section = (root / "README.md").read_text().split("### Models and keys", 1)[1].split("\n## ", 1)[0]
+    extension_section = (root / "vscode-extension" / "README.md").read_text().split(
+        "## Visual sessions, billing, and models", 1
+    )[1].split("\n## ", 1)[0]
+    confirmation = by_key("media.noExtraUsageConfirmedFor")
+    bundled = PackageData.settings_data()["settings"]
+    bundled_confirmation = next(
+        setting for setting in bundled if setting["key"] == confirmation.key
+    )
+    for text in (root_section, extension_section, confirmation.description, bundled_confirmation["description"]):
+        assert "codex" not in text.lower()
+        assert "openai" not in text.lower()
 
 
 def test_groups_cover_every_setting_in_order():

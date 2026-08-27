@@ -85,7 +85,7 @@ def test_written_record_is_visible_to_the_reader(monkeypatch, tmp_path):
     import litellm
 
     from interact import runtime
-    from interact.vision import core
+    from interact.vision.usage import log_api_attempt
 
     base = tmp_path / "out"
     monkeypatch.setenv("INTERACT_DEBUG_DIR", str(base))
@@ -93,7 +93,7 @@ def test_written_record_is_visible_to_the_reader(monkeypatch, tmp_path):
     monkeypatch.setattr(litellm, "completion_cost", lambda **_: 0.0012)
 
     response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20))
-    core._log_usage("gemini/gemini-3.5-flash", response)
+    log_api_attempt("gemini/gemini-3.5-flash", "gemini", response)
 
     written = runtime.config.usage_log
     assert written.exists(), "the writer wrote nothing — test setup is wrong, not the reader"

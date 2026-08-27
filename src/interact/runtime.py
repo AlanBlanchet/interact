@@ -4,11 +4,10 @@ on the next tool call of a running server — no restart/reconnect needed. Previ
 snapshotted once into the environment at startup, so a long-lived MCP server kept stale models.
 """
 
-from interact.config import Config
+from interact.config import Config, UserConfig
 from interact.data import PackageData
 from interact.formats import CoordFormat
 from interact.models import CircuitBreaker, Model
-from interact.config import UserConfig
 
 
 class _LiveConfig:
@@ -25,6 +24,8 @@ class _LiveConfig:
     def __init__(self) -> None:
         object.__setattr__(self, "_overrides", {})
         object.__setattr__(self, "_file_owned", set())  # non-INTERACT_ keys we applied from the file
+        object.__setattr__(self, "_file_interact_owned", set())
+        object.__setattr__(self, "_process_interact_env", UserConfig.process_interact_env())
         object.__setattr__(self, "_inner", Config())
 
     def refresh(self) -> "_LiveConfig":
@@ -33,11 +34,19 @@ class _LiveConfig:
         import os
 
         file_vars = UserConfig.read()
-        # The file is authoritative for INTERACT_* settings: drop any INTERACT_* env var that the
-        # file no longer defines, so clearing a setting in the file (e.g. a model) actually takes
-        # effect on a running server — not left stale in the environment.
-        for name in [k for k in os.environ if k.startswith("INTERACT_") and k not in file_vars]:
-            del os.environ[name]
+        # A launcher (notably VS Code) supplies INTERACT_* settings in the process environment.
+        # config.env may override those live, but removing a file override must reveal the launch
+        # value again. Only keys previously introduced by the file are removed; unrelated spawn
+        # settings are never swept merely because config.env does not mention them.
+        file_interact = {name for name in file_vars if name.startswith("INTERACT_")}
+        previous_interact = object.__getattribute__(self, "_file_interact_owned")
+        process_interact = object.__getattribute__(self, "_process_interact_env")
+        for name in previous_interact - file_interact:
+            if name in process_interact:
+                os.environ[name] = process_interact[name]
+            else:
+                os.environ.pop(name, None)
+        object.__setattr__(self, "_file_interact_owned", file_interact)
         # Provider *_API_KEY vars: the file also OWNS the ones it defines (it overrides them below),
         # so when one is cleared from the file it must be dropped from the environment too — else a
         # long-lived server keeps authenticating with it and it LEAKS into sandbox child processes.

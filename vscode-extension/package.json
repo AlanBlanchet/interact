@@ -57,15 +57,65 @@
           "default": "USD",
           "description": "Currency for displaying spend in the dashboard. Costs are recorded in USD and converted at live ECB rates (frankfurter.app); display-only."
         },
+        "interact.media.backend": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "session", "api"],
+          "description": "Where image and sampled-video analysis runs. Auto follows the billing policy."
+        },
+        "interact.media.billing": {
+          "type": "string",
+          "default": "session_only",
+          "enum": ["session_only", "api_allowed"],
+          "description": "Session only prevents interact's metered API fallback; vendor CLI account credits are separate."
+        },
+        "interact.media.noExtraUsageConfirmedFor": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "claude"],
+          "enumDescriptions": ["No provider confirmed; session dispatch stays blocked.", "Claude only"],
+          "markdownDescription": "Provider-scoped confirmation that extra usage is unavailable. For Claude, check [Settings → Usage](https://claude.ai/settings/usage): Usage credits disabled, zero prepaid balance, auto-reload off. Interact cannot verify these account settings."
+        },
+        "interact.media.providerOrder": {
+          "type": "string",
+          "default": "claude",
+          "enum": ["claude"],
+          "description": "Media-capable subscription CLI, currently Claude."
+        },
+        "interact.media.claudeModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Claude CLI media model; blank uses its subscription default."
+        },
+        "interact.media.timeout": {
+          "type": "number",
+          "default": 120,
+          "description": "Hard timeout in seconds for a subscription media child process."
+        },
+        "interact.media.maxItems": {
+          "type": "number",
+          "default": 16,
+          "description": "Maximum number of image, video, or audio items accepted in one analysis."
+        },
+        "interact.media.maxTotalBytes": {
+          "type": "number",
+          "default": 52428800,
+          "description": "Maximum aggregate decoded media bytes accepted before any provider runs."
+        },
+        "interact.media.maxContextChars": {
+          "type": "number",
+          "default": 32768,
+          "description": "Maximum untrusted page, title, URL, or transcript context characters per request."
+        },
         "interact.image.model": {
           "type": "string",
           "default": "",
-          "description": "Primary vision model for screenshot analysis and media understanding. Use 'Select Model' command for tested recommendations."
+          "description": "API backend/fallback model for screenshots and images. Subscription sessions use interact.media.claudeModel. Use 'Select Model' for API/local recommendations."
         },
         "interact.video.model": {
           "type": "string",
           "default": "",
-          "description": "Vision model for video understanding. Requires native video support. Use 'Select Model' command for tested recommendations."
+          "description": "API backend/fallback model for video. Subscription sessions always receive ordered sampled frames; APIs may use native video when supported. Use 'Select Model' for API/local recommendations."
         },
         "interact.video.fps": {
           "type": "number",
@@ -80,12 +130,12 @@
         "interact.component.model": {
           "type": "string",
           "default": "",
-          "description": "Vision model for UI element detection. Falls back to image model when empty. Use 'Select Model' command for tested recommendations."
+          "description": "API backend/fallback model for UI grounding; falls back to image.model. Subscription sessions use their media session model. Use 'Select Model' for API/local recommendations."
         },
         "interact.audio.model": {
           "type": "string",
           "default": "",
-          "description": "Speech-to-text + audio understanding for the transcribe tool (Whisper / gpt-4o-transcribe / Gemini). Use 'Select Model' command for tested recommendations."
+          "description": "API or local-compatible speech/audio model for transcribe. Claude subscription sessions do not hear audio; interact.media.billing must allow this separate path."
         },
         "interact.browser.headless": {
           "type": "boolean",

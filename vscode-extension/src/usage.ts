@@ -1,14 +1,14 @@
 import * as fs from "fs";
-import { ModelsData, providerOf, RangeId } from "./shared";
+import { ModelsData, RangeId } from "./shared";
 import { DIM_FOREGROUND } from "./themeTokens";
+import {
+  aggregateUsageProviders,
+  observedCost,
+  type UsageEntry,
+} from "./usageSummary";
 
-export interface UsageEntry {
-  timestamp: string;
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cost: number;
-}
+export { summarizeUsage } from "./usageSummary";
+export type { UsageEntry, ProviderUsage } from "./usageSummary";
 
 export interface DailyCost {
   date: string;
@@ -51,7 +51,7 @@ export function aggregateDailyCost(entries: UsageEntry[]): DailyCost[] {
   const byDate = new Map<string, number>();
   for (const e of entries) {
     const date = e.timestamp.slice(0, 10);
-    byDate.set(date, (byDate.get(date) ?? 0) + e.cost);
+    byDate.set(date, (byDate.get(date) ?? 0) + observedCost(e));
   }
   return [...byDate.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -80,16 +80,9 @@ export function filterByRange(
 
 export function aggregateByProvider(
   entries: UsageEntry[],
-  modelsData: ModelsData,
-): { provider: string; cost: number }[] {
-  const byProv = new Map<string, number>();
-  for (const e of entries) {
-    const prov = providerOf(e.model, modelsData) ?? "unknown";
-    byProv.set(prov, (byProv.get(prov) ?? 0) + e.cost);
-  }
-  return [...byProv.entries()]
-    .map(([provider, cost]) => ({ provider, cost }))
-    .sort((a, b) => b.cost - a.cost);
+  _modelsData: ModelsData,
+): ReturnType<typeof aggregateUsageProviders> {
+  return aggregateUsageProviders(entries);
 }
 
 function dayKey(ts: string): string {
@@ -120,7 +113,7 @@ export function aggregateStackedByModel(
 
   const totalByModel = new Map<string, number>();
   for (const e of entries) {
-    totalByModel.set(e.model, (totalByModel.get(e.model) ?? 0) + e.cost);
+    totalByModel.set(e.model, (totalByModel.get(e.model) ?? 0) + observedCost(e));
   }
   const ranked = [...totalByModel.entries()].sort((a, b) => b[1] - a[1]);
   const top = new Set(ranked.slice(0, topN).map(([m]) => m));
@@ -137,7 +130,7 @@ export function aggregateStackedByModel(
     const key = top.has(e.model) ? e.model : "other";
     const row = seriesMap.get(key);
     if (!row) continue;
-    row[idx] += e.cost;
+    row[idx] += observedCost(e);
   }
 
   const series = [...seriesMap.entries()].map(([name, values]) => ({
@@ -157,8 +150,8 @@ export function aggregateTokensByModel(
   const byModel = new Map<string, { input: number; output: number }>();
   for (const e of entries) {
     const cur = byModel.get(e.model) ?? { input: 0, output: 0 };
-    cur.input += e.input_tokens;
-    cur.output += e.output_tokens;
+    cur.input += e.input_tokens ?? 0;
+    cur.output += e.output_tokens ?? 0;
     byModel.set(e.model, cur);
   }
   return [...byModel.entries()]
@@ -184,4 +177,3 @@ export function aggregateCallsByModel(
     .map(([model, calls]) => ({ model, calls }))
     .sort((a, b) => b.calls - a.calls);
 }
-

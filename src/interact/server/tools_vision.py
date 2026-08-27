@@ -3,12 +3,27 @@ measure_ui, transcribe. They resolve the target/quality plan and delegate to the
 helpers; the discover→verify→measure trio share the ``_run_ui_critique`` runner."""
 
 import base64
-import re
 import logging
+import re
+from pathlib import Path
 
 from mcp.server.fastmcp.utilities.types import Image
 
 from interact.config import DEFAULT_LIMIT
+from interact.debug_utils import Debug
+from interact.desktop import DesktopElement
+from interact.models import is_audio_model, is_transcription_only_model
+from interact.server import capture, core, targets, vlm
+from interact.server.core import (
+    _DEFAULT_SESSION,
+    _audio_mime,
+    _session_response,
+    config,
+    instrumented,
+    mcp,
+)
+from interact.state import format_element_list
+from interact.vision import MediaItem, analyze_media, transcribe_audio
 from interact.vision.critique import (
     UIReview,
     VerifyReport,
@@ -19,15 +34,8 @@ from interact.vision.critique import (
     parse_review,
     parse_verify,
 )
-from interact.debug_utils import Debug
-from interact.desktop import DesktopElement
 from interact.vision.detect import _crop_image, _desktop_context, _page_signature
 from interact.vision.measure import blank_frame_reason, format_measure, measure
-from interact.models import is_audio_model, is_transcription_only_model
-from interact.server import capture, core, targets, vlm
-from interact.server.core import _DEFAULT_SESSION, _audio_mime, _session_response, config, instrumented, mcp
-from interact.state import format_element_list
-from interact.vision import analyze_media, transcribe_audio
 
 _log = logging.getLogger("interact")
 
@@ -86,16 +94,21 @@ async def screenshot(
     if file_bytes is not None:
         src = target.strip()[5:]
         label = f"Image file: {src}"
+        media_mime = MediaItem.detect_mime(file_bytes)
+        media_format = media_mime.split("/", 1)[1]
         if query:
-            r = await vlm._vlm(file_bytes, label, query, model_override=model)
+            r = await vlm._vlm(
+                file_bytes, label, query, mime=media_mime, model_override=model
+            )
             text = f"{label}\n{vlm._fmt_timing(r)}"
         else:
             import io as _io
+
             from PIL import Image as _PILImage
             w, h = _PILImage.open(_io.BytesIO(file_bytes)).size
             text = f"{label} ({w}x{h}) — pass query=… to analyze it, or use measure_ui for exact pixels."
-        Debug.save("capture", file_bytes, ext="png", invocation_id=inv)
-        out = [text, Image(data=file_bytes, format="png")] if return_image else text
+        Debug.save("capture", file_bytes, ext=media_format, invocation_id=inv)
+        out = [text, Image(data=file_bytes, format=media_format)] if return_image else text
         return out
     win, mgr, err = targets._resolve_target(target, session)
     if err:
@@ -133,7 +146,7 @@ async def screenshot(
                 "get_interactive_elements if this is not the element you meant)"
                 if stale else ""
             )
-            text = f"{core._desktop_label(win)}\n{result or meta}{note}"
+            text = f"{core._desktop_label(win)}\n{result.text or meta}{note}"
         elif query:
             img_bytes, description = await capture._capture_desktop(win, query, path, model_override=model)
             text = f"{core._desktop_label(win)}\n{description}"
@@ -448,15 +461,22 @@ async def transcribe(path: str, query: str | None = None, model: str | None = No
     Audio understanding is acoustic (it HEARS the clip — tone, speakers, music, sound events) when the
     audio model can take audio in chat (Gemini, gpt-4o-audio); with a transcription-only model
     (Whisper, gpt-4o-transcribe) the query is answered over the transcript. Set the model with the
-    `audio.model` setting / INTERACT_AUDIO_MODEL, or override per-call with `model`.
+    `audio.model` setting / INTERACT_AUDIO_MODEL, or override per-call with `model`. Claude
+    subscription sessions are visual-only: audio requires `media.billing=api_allowed` and uses the
+    configured API or local-compatible audio transport regardless of `media.backend`; transcript
+    Q&A may use a session after a transcription-only model has produced text.
 
     path: local audio/media file to read.
     query: optional question about the audio (omit for a plain transcript).
     model: override the configured audio model for this call.
     """
-    from pathlib import Path
-
     config.refresh()
+    if config.media_billing != "api_allowed":
+        return (
+            "ERROR: subscription sessions cannot transcribe audio. Configure audio.model for an "
+            "API or local-compatible transcription backend and set media.billing=api_allowed; "
+            "transcript Q&A can use a Claude subscription session after that transcription step."
+        )
     try:
         data = Path(path).read_bytes()
     except OSError as e:
@@ -464,7 +484,6 @@ async def transcribe(path: str, query: str | None = None, model: str | None = No
     mime = _audio_mime(path)
     audio_model = config.resolve_model("audio", model or "")
     name = Path(path).name
-
     # Acoustic understanding when the model can hear the clip directly; otherwise fall through to
     # transcript-based answering below (so Whisper-style transcription-only models still serve a query).
     if query and is_audio_model(audio_model) and not is_transcription_only_model(audio_model):
@@ -476,7 +495,7 @@ async def transcribe(path: str, query: str | None = None, model: str | None = No
             return f"ERROR: audio understanding failed on {audio_model} — {e}"
 
     try:
-        r = await transcribe_audio(data, model=audio_model, mime_type=mime)
+        r = await transcribe_audio(data, model=audio_model, mime_type=mime, config=config)
     except Exception as e:
         return f"ERROR: transcription failed on {audio_model} — {e}"
     transcript = r.text
@@ -495,7 +514,7 @@ async def transcribe(path: str, query: str | None = None, model: str | None = No
             f"(PESQ / STOI / ASR-WER vs a reference).\n\n--- transcript ---\n{transcript}"
         )
     answer = await analyze_media(
-        [], f"Transcript of {name}:\n{transcript}", config, query, model=config.resolve_model("image")
+        [], f"Transcript of {name}:\n{transcript}", config, query, role="image"
     )
     return (
         f"(answered from the TRANSCRIPT — {audio_model} is transcription-only and did not hear "

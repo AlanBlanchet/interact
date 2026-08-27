@@ -1,10 +1,106 @@
 {
   "settings": [
     {
+      "key": "media.backend",
+      "field": "media_backend",
+      "label": "Media backend",
+      "description": "Where image and sampled-video analysis runs in an isolated sandbox. Auto follows the billing policy.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Auto",
+          "value": "auto"
+        },
+        {
+          "label": "Subscription session",
+          "value": "session"
+        },
+        {
+          "label": "API",
+          "value": "api"
+        }
+      ],
+      "env": "INTERACT_MEDIA_BACKEND",
+      "default": "auto"
+    },
+    {
+      "key": "media.billing",
+      "field": "media_billing",
+      "label": "Media billing policy",
+      "description": "Session only prevents interact's metered API fallback; vendor CLI account credits are separate and require the explicit attestation below.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Session only",
+          "value": "session_only"
+        },
+        {
+          "label": "API allowed",
+          "value": "api_allowed"
+        }
+      ],
+      "env": "INTERACT_MEDIA_BILLING",
+      "default": "session_only"
+    },
+    {
+      "key": "media.noExtraUsageConfirmedFor",
+      "field": "media_session_no_extra_usage_confirmed_for",
+      "label": "No-extra-usage confirmed providers",
+      "description": "Claude confirmation: Usage credits disabled, zero prepaid balance, and auto-reload off. interact cannot verify this account state.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "None (sessions blocked)",
+          "value": ""
+        },
+        {
+          "label": "Claude",
+          "value": "claude"
+        }
+      ],
+      "env": "INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR",
+      "default": ""
+    },
+    {
+      "key": "media.providerOrder",
+      "field": "media_provider_order",
+      "label": "Subscription provider order",
+      "description": "Media-capable subscription CLI, currently Claude.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Claude",
+          "value": "claude"
+        }
+      ],
+      "env": "INTERACT_MEDIA_PROVIDER_ORDER",
+      "default": "claude"
+    },
+    {
+      "key": "media.claudeModel",
+      "field": "claude_media_model",
+      "label": "Claude session model",
+      "description": "Optional Claude CLI model; blank uses the subscription CLI default.",
+      "group": "Models",
+      "kind": "str",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_CLAUDE_MEDIA_MODEL",
+      "default": ""
+    },
+    {
       "key": "image.model",
       "field": "image_model",
-      "label": "Vision model",
-      "description": "Screenshots & media analysis (the default for most VLM calls).",
+      "label": "Vision API/local model",
+      "description": "API backend or fallback for screenshots and images. Subscription sessions use media.claudeModel instead.",
       "group": "Models",
       "kind": "model",
       "role": "image",
@@ -15,8 +111,8 @@
     {
       "key": "component.model",
       "field": "component_model",
-      "label": "Component model",
-      "description": "UI-element detection / GUI grounding (falls back to the vision model).",
+      "label": "Component API/local model",
+      "description": "API backend or fallback for GUI grounding (falls back to image.model). Subscription sessions use their media session model.",
       "group": "Models",
       "kind": "model",
       "role": "component",
@@ -27,8 +123,8 @@
     {
       "key": "video.model",
       "field": "video_model",
-      "label": "Video model",
-      "description": "Video understanding. A Gemini model gets the clip natively (inline video); other models \u2014 and clips too large to send inline \u2014 fall back to sampled frames, so any listed model works.",
+      "label": "Video API/local model",
+      "description": "API backend or fallback for video. Subscription sessions always receive ordered, timestamped sampled frames; an API model may receive native video when supported.",
       "group": "Models",
       "kind": "model",
       "role": "video",
@@ -39,8 +135,8 @@
     {
       "key": "audio.model",
       "field": "audio_model",
-      "label": "Audio model",
-      "description": "Speech-to-text + audio understanding for the transcribe tool (Whisper / gpt-4o-transcribe / Gemini).",
+      "label": "Audio API/local model",
+      "description": "API or local-compatible speech/audio model for transcribe. Claude subscription sessions do not hear audio; media.billing must allow this separate path.",
       "group": "Models",
       "kind": "model",
       "role": "audio",
@@ -201,6 +297,54 @@
       "options": null,
       "env": "INTERACT_MAX_TOKENS",
       "default": ""
+    },
+    {
+      "key": "media.timeout",
+      "field": "media_timeout",
+      "label": "Subscription media timeout (s)",
+      "description": "Hard limit for a Claude media-analysis child process.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_TIMEOUT",
+      "default": "120"
+    },
+    {
+      "key": "media.maxItems",
+      "field": "media_max_items",
+      "label": "Media items per request",
+      "description": "Maximum number of image, video, or audio items accepted in one analysis.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_MAX_ITEMS",
+      "default": "16"
+    },
+    {
+      "key": "media.maxTotalBytes",
+      "field": "media_max_total_bytes",
+      "label": "Media bytes per request",
+      "description": "Maximum aggregate decoded media bytes accepted before any provider runs.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_MAX_TOTAL_BYTES",
+      "default": "52428800"
+    },
+    {
+      "key": "media.maxContextChars",
+      "field": "media_max_context_chars",
+      "label": "Media context characters",
+      "description": "Maximum untrusted page, title, URL, or transcript context characters per request.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_MAX_CONTEXT_CHARS",
+      "default": "32768"
     },
     {
       "key": "vlm.waitTimeout",

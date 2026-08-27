@@ -73,7 +73,8 @@ class Setting(BaseModel):
         unset"; home is collapsed to ``~`` so the export is portable, not the build machine's path."""
         from pathlib import Path
 
-        value = Config.model_fields[self.field].default
+        field = Config.model_fields[self.field]
+        value = field.default_factory() if field.default_factory is not None else field.default
         if isinstance(value, bool):
             return "true" if value else "false"
         if value is None:
@@ -83,6 +84,8 @@ class Setting(BaseModel):
             # on every OS — otherwise Windows bakes `~\.interact` and drifts from the bundled (Linux-
             # generated) settings.json, failing the lockstep check.
             text, home = value.as_posix(), Path.home().as_posix()
+        elif isinstance(value, tuple):
+            text, home = ",".join(str(part) for part in value), str(Path.home())
         else:
             text, home = str(value), str(Path.home())
         return "~" + text[len(home):] if text.startswith(home) else text
@@ -107,27 +110,69 @@ class Setting(BaseModel):
 SETTINGS: list[Setting] = [
     # ── Models ───────────────────────────────────────────────────────────────
     Setting(
+        key="media.backend", field="media_backend", group="Models", kind="enum",
+        label="Media backend",
+        description="Where image and sampled-video analysis runs in an isolated sandbox. Auto follows the billing policy.",
+        options=[
+            Option(label="Auto", value="auto"),
+            Option(label="Subscription session", value="session"),
+            Option(label="API", value="api"),
+        ],
+    ),
+    Setting(
+        key="media.billing", field="media_billing", group="Models", kind="enum",
+        label="Media billing policy",
+        description="Session only prevents interact's metered API fallback; vendor CLI account "
+        "credits are separate and require the explicit attestation below.",
+        options=[
+            Option(label="Session only", value="session_only"),
+            Option(label="API allowed", value="api_allowed"),
+        ],
+    ),
+    Setting(
+        key="media.noExtraUsageConfirmedFor", field="media_session_no_extra_usage_confirmed_for",
+        group="Models", kind="enum", label="No-extra-usage confirmed providers",
+        description="Claude confirmation: Usage credits disabled, zero prepaid balance, "
+        "and auto-reload off. interact cannot verify this account state.",
+        options=[
+            Option(label="None (sessions blocked)", value=""),
+            Option(label="Claude", value="claude"),
+        ],
+    ),
+    Setting(
+        key="media.providerOrder", field="media_provider_order", group="Models", kind="enum",
+        label="Subscription provider order",
+        description="Media-capable subscription CLI, currently Claude.",
+        options=[Option(label="Claude", value="claude")],
+    ),
+    Setting(
+        key="media.claudeModel", field="claude_media_model", group="Models", kind="str",
+        label="Claude session model",
+        description="Optional Claude CLI model; blank uses the subscription CLI default.",
+    ),
+    Setting(
         key="image.model", field="image_model", group="Models", kind="model", role="image",
-        label="Vision model",
-        description="Screenshots & media analysis (the default for most VLM calls).",
+        label="Vision API/local model",
+        description="API backend or fallback for screenshots and images. Subscription sessions "
+        "use media.claudeModel instead.",
     ),
     Setting(
         key="component.model", field="component_model", group="Models", kind="model", role="component",
-        label="Component model",
-        description="UI-element detection / GUI grounding (falls back to the vision model).",
+        label="Component API/local model",
+        description="API backend or fallback for GUI grounding (falls back to image.model). "
+        "Subscription sessions use their media session model.",
     ),
     Setting(
         key="video.model", field="video_model", group="Models", kind="model", role="video",
-        label="Video model",
-        description="Video understanding. A Gemini model gets the clip natively (inline video); "
-        "other models — and clips too large to send inline — fall back to sampled frames, so any "
-        "listed model works.",
+        label="Video API/local model",
+        description="API backend or fallback for video. Subscription sessions always receive "
+        "ordered, timestamped sampled frames; an API model may receive native video when supported.",
     ),
     Setting(
         key="audio.model", field="audio_model", group="Models", kind="model", role="audio",
-        label="Audio model",
-        description="Speech-to-text + audio understanding for the transcribe tool "
-        "(Whisper / gpt-4o-transcribe / Gemini).",
+        label="Audio API/local model",
+        description="API or local-compatible speech/audio model for transcribe. Claude "
+        "subscription sessions do not hear audio; media.billing must allow this separate path.",
     ),
     # ── Desktop ──────────────────────────────────────────────────────────────
     Setting(
@@ -196,6 +241,26 @@ SETTINGS: list[Setting] = [
         key="vlm.maxTokens", field="max_tokens", group="Advanced", kind="int",
         label="VLM max tokens",
         description="Cap on VLM output tokens per call (blank = the model's default).",
+    ),
+    Setting(
+        key="media.timeout", field="media_timeout", group="Advanced", kind="int",
+        label="Subscription media timeout (s)",
+        description="Hard limit for a Claude media-analysis child process.",
+    ),
+    Setting(
+        key="media.maxItems", field="media_max_items", group="Advanced", kind="int",
+        label="Media items per request",
+        description="Maximum number of image, video, or audio items accepted in one analysis.",
+    ),
+    Setting(
+        key="media.maxTotalBytes", field="media_max_total_bytes", group="Advanced", kind="int",
+        label="Media bytes per request",
+        description="Maximum aggregate decoded media bytes accepted before any provider runs.",
+    ),
+    Setting(
+        key="media.maxContextChars", field="media_max_context_chars", group="Advanced", kind="int",
+        label="Media context characters",
+        description="Maximum untrusted page, title, URL, or transcript context characters per request.",
     ),
     Setting(
         key="vlm.waitTimeout", field="wait_timeout", group="Advanced", kind="int",

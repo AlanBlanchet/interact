@@ -51,6 +51,7 @@ def test_cost_and_tokens_come_off_the_result_event():
     # per-agent cost real rather than a guess.
     assert done.cost_usd is not None and done.cost_usd > 0
     assert done.output_tokens is not None
+    assert done.input_tokens == 106591, "terminal accounting includes cached prompt tokens"
 
 
 def test_every_event_carries_the_session_id():

@@ -103,6 +103,53 @@ async def test_review_ui_quality_low_picks_the_sovereign_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["review_ui", "verify_ui"])
+async def test_session_quality_tier_does_not_send_a_sovereign_api_model_to_the_cli(
+    monkeypatch, tool_name: str
+) -> None:
+    _stub_browser_capture(monkeypatch, [])
+    monkeypatch.setenv("INTERACT_MEDIA_BACKEND", "session")
+    monkeypatch.setenv("INTERACT_MEDIA_BILLING", "session_only")
+    monkeypatch.setenv(
+        "INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR", "claude"
+    )
+    srv.config.media_backend = "session"
+    srv.config.media_billing = "session_only"
+    monkeypatch.setattr("interact.models.Model.is_available", _avail(True))
+    captured: dict = {}
+
+    async def fake_vlm(data, context, prompt, *, model_override=None, **kwargs):
+        captured["model_override"] = model_override
+        captured["api_model_override"] = kwargs.get("_api_model_override")
+        text = (
+            UIReview(screen="X", looks_ok=True, findings=[]).model_dump_json()
+            if tool_name == "review_ui"
+            else VerifyReport(
+                screen="X",
+                all_pass=True,
+                checks=[RequirementCheck(
+                    requirement="x", verdict="pass", element="x", evidence="visible"
+                )],
+            ).model_dump_json()
+        )
+        return VLMResult(
+            text=text,
+            elapsed=0,
+            model="claude-session-model",
+            backend="session",
+            provider="claude",
+        )
+
+    monkeypatch.setattr(srv.vlm, "_vlm", fake_vlm)
+    if tool_name == "review_ui":
+        await srv.review_ui(quality="low")
+    else:
+        await srv.verify_ui(["x"], quality="low")
+
+    assert captured == {"model_override": None, "api_model_override": None}
+
+
+@pytest.mark.asyncio
 async def test_review_ui_rejects_a_bad_quality_value(monkeypatch):
     _stub_browser_capture(monkeypatch, [])
     out = await srv.review_ui(quality="ultra")

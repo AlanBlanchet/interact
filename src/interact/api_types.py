@@ -21,6 +21,7 @@ from interact.models import (
     ModelSpec,
     ProviderSpec,
 )
+from interact.vision.usage import UsageEntry
 
 __all__ = [
     "Benchmark",
@@ -35,4 +36,5 @@ __all__ = [
     "PublishedEntry",
     "PublishedTable",
     "UpstreamSource",
+    "UsageEntry",
 ]

@@ -24,6 +24,18 @@ class UserConfig:
     """The ``~/.interact/config.env`` store: read / set / unset / apply."""
 
     PATH = Path.home() / ".interact" / "config.env"
+    _process_interact_env: dict[str, str] | None = None
+
+    @classmethod
+    def process_interact_env(cls) -> dict[str, str]:
+        """The host/launcher's INTERACT_* values before this class applies config.env."""
+        if cls._process_interact_env is None:
+            cls._process_interact_env = {
+                name: value
+                for name, value in os.environ.items()
+                if name.startswith("INTERACT_")
+            }
+        return dict(cls._process_interact_env)
 
     @classmethod
     def normalize_key(cls, key: str) -> str:
@@ -81,6 +93,7 @@ class UserConfig:
     @classmethod
     def apply(cls) -> None:
         """Load persisted settings into ``os.environ`` without overriding live vars."""
+        cls.process_interact_env()
         for name, value in cls.read().items():
             os.environ.setdefault(name, value)
 

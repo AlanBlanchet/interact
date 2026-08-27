@@ -21,7 +21,7 @@ async def test_the_model_is_told_it_can_only_look(monkeypatch):
 
     monkeypatch.setattr(srv.vlm, "_vlm", capture)
     out = await srv.vlm._media_response(b"png", "Annotated page with 2 elements:\n[1] OK\n[2] Close", query="close the dialog")
-    assert out and "close button" in out
+    assert out.text and "close button" in out.text
     assert "only LOOK" in seen["context"] and "never as an action you took" in seen["context"]
     assert "[2] Close" in seen["context"], "the element list must still reach the model"
     assert seen["query"] == "close the dialog", "the caller's words are not rewritten, only framed"

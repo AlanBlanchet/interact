@@ -22,7 +22,7 @@ def _resp(content: str):
 
 @pytest.fixture(autouse=True)
 def _no_usage_log(monkeypatch):
-    monkeypatch.setattr(v, "_log_usage", lambda *a, **k: None)
+    monkeypatch.setattr(v, "log_api_attempt", lambda *a, **k: None)
 
 
 @pytest.mark.asyncio

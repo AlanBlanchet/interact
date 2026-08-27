@@ -87,7 +87,7 @@ async def _annotate_and_describe(
     element_list = format_element_list(elements)
     context = f"Annotated page with {len(elements)} interactive elements:\n{element_list}"
     result = await vlm._media_response(annotated_bytes, context, query)
-    return result or context
+    return result.text or context
 
 
 async def _capture_desktop(
@@ -101,7 +101,7 @@ async def _capture_desktop(
     result = await vlm._media_response(
         screenshot_bytes, context, query, path, model_override=model_override
     )
-    return screenshot_bytes, result or context
+    return screenshot_bytes, result.text or context
 
 
 async def _annotate_desktop(
@@ -152,7 +152,7 @@ async def _annotate_desktop(
     element_list = DesktopElement.format_list(elements)
     context = f"Annotated desktop window with {len(elements)} elements:\n{element_list}"
     result = await vlm._media_response(annotated, context, query, model_override=model_override)
-    return elements, f"{result or context}\n{timing}"
+    return elements, f"{result.text or context}\n{timing}"
 
 
 async def _element_screenshot(
@@ -193,7 +193,7 @@ async def _element_screenshot(
     except Exception as e:
         return f"Cannot screenshot element: {e}"
     result = await vlm._media_response(png_bytes, meta, query, path)
-    return result or meta
+    return result.text or meta
 
 
 _DURATION_UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0, "": 1.0}
@@ -333,13 +333,17 @@ async def _run_ui_critique(
         return err
     grounding = format_grounding(elements) if elements else None  # anchor findings to real elements
     valid_refs = {e.ref for e in elements if getattr(e, "ref", None)} or None
+    session_model = eff_model if model or not config.media_sessions_enabled() else None
+    api_model = eff_model if config.media_api_enabled() else None
     try:
         if ref_bytes is not None:  # reference first, build second — matches the compare rubric
             r = await vlm._vlm(ref_bytes, context, build_prompt(True, grounding),
-                               response_format=schema, model_override=eff_model, extra_images=[img])
+                               response_format=schema, model_override=session_model,
+                               _api_model_override=api_model, extra_images=[img])
         else:
             r = await vlm._vlm(img, context, build_prompt(False, grounding),
-                               response_format=schema, model_override=eff_model)
+                               response_format=schema, model_override=session_model,
+                               _api_model_override=api_model)
     except Exception as e:  # never crash the agent's flow on a vision hiccup
         return f"ERROR: {tool} vision call failed — {e}"
     parsed = parse(r.text)

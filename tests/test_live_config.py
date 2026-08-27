@@ -3,9 +3,12 @@ edits on the next tool call (config.refresh()), and clearing a setting in the fi
 no stale environment snapshot. This is the bug where a TUI/file model change didn't reach the
 already-running MCP server."""
 
+import os
+
 import pytest
 
 from interact.config import UserConfig
+from interact.runtime import _LiveConfig, config
 
 
 @pytest.fixture
@@ -14,10 +17,46 @@ def live_config(tmp_path, monkeypatch):
     # Start from a clean environment for the settings under test.
     for name in ("INTERACT_COMPONENT_MODEL", "INTERACT_IMAGE_MODEL"):
         monkeypatch.delenv(name, raising=False)
-    from interact.runtime import config
-
     config.clear_overrides()  # isolate from any override leaked by an earlier test
     return config
+
+
+def test_spawned_interact_env_survives_file_overlay_and_removal(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """VS settings arrive in the child environment, then config.env temporarily overrides them."""
+    monkeypatch.setattr(UserConfig, "PATH", tmp_path / "config.env")
+    monkeypatch.setenv("INTERACT_MEDIA_BACKEND", "session")
+    monkeypatch.delenv(
+        "INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR", raising=False
+    )
+    monkeypatch.delenv("INTERACT_CLAUDE_MEDIA_MODEL", raising=False)
+    monkeypatch.setattr(UserConfig, "_process_interact_env", None, raising=False)
+
+    UserConfig.apply()
+    live = _LiveConfig()
+    assert live.refresh().media_backend == "session"
+    assert live.media_session_no_extra_usage_confirmed_for == ()
+
+    try:
+        UserConfig.set("media.backend", "auto")
+        UserConfig.set(
+            "INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR", "claude"
+        )
+        UserConfig.set("INTERACT_CLAUDE_MEDIA_MODEL", "must-not-appear-in-logs")
+        assert live.refresh().media_backend == "auto"
+        assert live.media_session_no_extra_usage_confirmed_for == ("claude",)
+        assert live.claude_media_model == "must-not-appear-in-logs"
+    finally:
+        UserConfig.unset("media.backend")
+        UserConfig.unset("INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR")
+        UserConfig.unset("INTERACT_CLAUDE_MEDIA_MODEL")
+
+    assert live.refresh().media_backend == "session"
+    assert live.media_session_no_extra_usage_confirmed_for == ()
+    assert live.claude_media_model == ""
+    assert "INTERACT_CLAUDE_MEDIA_MODEL" not in os.environ
+    assert "must-not-appear-in-logs" not in caplog.text
 
 
 def test_file_edit_is_picked_up_and_clearing_reverts(live_config):

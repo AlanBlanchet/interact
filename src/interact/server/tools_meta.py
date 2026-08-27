@@ -7,7 +7,42 @@ import os
 
 import litellm as _litellm
 
+from interact.agents.providers import PROVIDERS, AgentProvider
 from interact.server.core import mcp
+
+
+async def _subscription_provider_state(provider: AgentProvider) -> dict:
+    """Credential-free readiness for one registered subscription CLI."""
+    if not provider.available():
+        return {
+            "provider": provider.name,
+            "cli": provider.binary,
+            "installed": False,
+            "authenticated": None,
+            "action": f"Install and log in with the {provider.binary} CLI",
+        }
+    try:
+        authenticated = await provider.subscription_authenticated(
+            provider.subscription_env(), timeout=3
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        authenticated = None
+    action = (
+        "Ready"
+        if authenticated is True
+        else f"Log in with the {provider.binary} CLI"
+        if authenticated is False
+        else f"Check the {provider.binary} CLI login; authentication status was unavailable"
+    )
+    return {
+        "provider": provider.name,
+        "cli": provider.binary,
+        "installed": True,
+        "authenticated": authenticated,
+        "action": action,
+    }
 
 
 @mcp.tool()
@@ -28,12 +63,13 @@ async def report_issue(title: str, body: str, kind: str = "bug") -> str:
 
 @mcp.tool()
 async def list_providers() -> str:
-    """Return available VLM providers, models, and current configuration.
+    """Return subscription visual CLIs, API/local providers, and current configuration.
 
     Use this to discover what models can be passed as the 'model' override
     to get_interactive_elements and screenshot tools.
     """
     from interact.server.core import config
+    config.refresh()
 
     # Extension declaratively passes which providers have keys configured
     declared = os.environ.get("INTERACT_CONFIGURED_PROVIDERS", "")
@@ -83,6 +119,33 @@ async def list_providers() -> str:
             "video_model": config.video_model or None,
         },
         "available_providers": sorted(available),
+        "media": {
+            "backend": config.media_backend,
+            "billing": config.media_billing,
+            "no_extra_usage_confirmed_for": list(
+                config.media_session_no_extra_usage_confirmed_for
+            ),
+            "provider_order": list(config.media_provider_order),
+            "timeout_seconds": config.media_timeout,
+            "models": {
+                name: config.media_model_for(name) or None
+                for name in config.media_provider_order
+            },
+            "subscription_providers": await asyncio.gather(*(
+                _subscription_provider_state(PROVIDERS[name])
+                for name in config.media_provider_order
+            )),
+            "audio_boundary": (
+                "Audio uses its configured API/local-compatible backend only when billing is "
+                "api_allowed; Claude subscription sessions handle visual media, not "
+                "transcription."
+            ),
+            "session_credit_limit": (
+                "Each installed provider is skipped until its name is listed in "
+                "media.noExtraUsageConfirmedFor after its account-side extra-usage controls are "
+                "disabled. interact cannot inspect those account settings atomically."
+            ),
+        },
     }
 
     # An agent picking a model over MCP cannot see the user's daemon, so name what it actually

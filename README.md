@@ -100,10 +100,50 @@ One tool per job. The generic ones take a `target` — unset for the browser, a 
 
 ### Models and keys
 
-Run `interact` with no arguments for a terminal UI to set models and API keys. Models default to
-**auto** — a capable, cheaper-first pick per job from the providers you have keys for, falling back if
-one errors. `interact status` prints what each role resolves to and what you've spent; settings live
-in `~/.interact/config.env`.
+Visual jobs select your installed, authenticated **Claude Code session transport by
+default**—including screenshot descriptions, element grounding, `review_ui` / `verify_ui`, and
+sampled video/interaction analysis. Session dispatch is blocked until the explicit operator
+attestation below. No API key is needed, and `session_only` prevents interact from falling through
+to a metered API, but vendor CLIs can consume account-side credits after included plan usage.
+
+Before enabling sessions, open Claude **Settings → Usage**, keep Usage credits disabled, ensure the
+prepaid balance is zero, and turn auto-reload off ([Anthropic's usage-credit controls](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans)). Anthropic's announced Agent SDK /
+`claude -p` monthly-credit change was paused on June 16; `claude -p` continues to draw plan
+usage limits ([Anthropic's paused-change notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)), but the account-side Usage-credit controls still require this guard. CLI authentication cannot verify these account settings, and a later change is a residual race interact cannot detect.
+Video sessions receive ordered, timestamped frames (up to the configured frame cap; 12 by default),
+rather than uploading the original clip.
+
+The transport and spending policy are separate, explicit settings:
+
+```bash
+# Session transport, with no metered API fallback by interact.
+interact config set media.backend auto               # auto | session | api
+interact config set media.billing session_only       # session_only | api_allowed
+interact config set media.providerOrder claude
+
+# Only after disabling each named provider's account-side credits as described above:
+interact config set media.noExtraUsageConfirmedFor claude
+
+# Optional session model pins and process timeout.
+interact config set media.claudeModel <claude-model>
+interact config set media.timeout 120
+```
+
+Without that attestation, `session` is blocked; `auto+api_allowed` skips sessions and uses the
+explicitly permitted API instead. To opt into metered visual fallback, set
+`media.billing=api_allowed` and keep `media.backend=auto`; set `media.backend=api` to use only
+the API. An explicit model override must belong to the selected provider—it is never silently
+ignored.
+
+Audio is the deliberate boundary: Claude visual sessions do not transcribe or hear audio.
+With `session_only`, `transcribe` fails before any API call. With
+`media.billing=api_allowed`, audio always uses the configured `audio.model` API or local-compatible
+transport, even when `media.backend=session`; after a transcription-only model produces text, a
+Claude session may answer questions over that transcript.
+
+Run `interact status` to see the media backend, billing policy, ordered CLI availability, API/local
+models, and usage. Run `interact` with no arguments for the terminal configuration UI. Settings live
+in `~/.interact/config.env` and are also exposed by the VS Code extension.
 
 ## Platform support
 

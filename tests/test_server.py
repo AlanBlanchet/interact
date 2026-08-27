@@ -1,14 +1,16 @@
 import io
+import json
 import time
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from PIL import Image as PILImage
 
 import interact.vision.detect as det
-from interact.vision import VisionError, VLMResult
+from interact.config import Config
+from interact.vision import MediaItem, _UNSET, analyze_media, VisionError, VLMResult
 
 _DESKTOP_CTX = "Desktop window: Test (800x600)"
 
@@ -25,6 +27,16 @@ _PNG = _buf.getvalue()
 _VLM_JSON = '[{"role":"button","name":"Save","x":100,"y":200,"w":150,"h":30}]'
 
 
+def _jpeg_bytes() -> bytes:
+    image = PILImage.new("RGB", (24, 16))
+    for x in range(24):
+        for y in range(16):
+            image.putpixel((x, y), (x * 10, y * 14, (x + y) * 6))
+    out = io.BytesIO()
+    image.save(out, format="JPEG")
+    return out.getvalue()
+
+
 @pytest.fixture
 def srv():
     import interact.server as _srv
@@ -36,6 +48,68 @@ def srv():
         yield _srv
     _srv.config.clear_overrides()  # drop the transient override so it can't leak into later tests
     breaker.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "with_reference"),
+    [("screenshot", False), ("review_ui", False), ("verify_ui", False), ("review_ui", True)],
+)
+async def test_file_image_callers_preserve_jpeg_mime(
+    srv, tmp_path: Path, monkeypatch, tool_name: str, with_reference: bool
+) -> None:
+    jpeg = _jpeg_bytes()
+    target = tmp_path / "build image.jpg"
+    target.write_bytes(jpeg)
+    captured: list[MediaItem] = []
+
+    async def analyze(media, *args, **kwargs):
+        captured.extend(media)
+        return VLMResult(text="{}", elapsed=0, backend="api")
+
+    monkeypatch.setattr(srv.vlm, "analyze_media", analyze)
+    if tool_name == "screenshot":
+        fn = getattr(srv.screenshot, "fn", srv.screenshot)
+        await fn(target=f"file:{target}", query="describe")
+    else:
+        monkeypatch.setattr(
+            srv.capture,
+            "_resolve_capture",
+            AsyncMock(
+                return_value=(
+                    jpeg,
+                    "Image file",
+                    jpeg if with_reference else None,
+                    [],
+                    None,
+                    None,
+                )
+            ),
+        )
+        if tool_name == "review_ui":
+            await srv.review_ui(reference=str(target) if with_reference else None)
+        else:
+            await srv.verify_ui(["matches"], target=f"file:{target}")
+
+    assert captured[0].mime_type == "image/jpeg"
+    if with_reference:
+        assert [item.mime_type for item in captured] == ["image/jpeg", "image/jpeg"]
+
+
+@pytest.mark.asyncio
+async def test_public_file_screenshot_returns_and_debugs_jpeg_as_jpeg(
+    srv, tmp_path: Path, monkeypatch
+) -> None:
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(_jpeg_bytes())
+    saved: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        srv.Debug, "save", lambda name, data, *, ext="txt", **kwargs: saved.append((name, ext))
+    )
+    fn = getattr(srv.screenshot, "fn", srv.screenshot)
+    result = await fn(target=f"file:{target}", return_image=True)
+    assert result[1]._format == "jpeg"
+    assert ("capture", "jpeg") in saved
 
 
 @pytest.mark.asyncio
@@ -133,7 +207,8 @@ async def test_vlm_detect_elements_fallback_uses_generic_prompt(srv):
 
     # Gemini component model gets box_2d format prompt
     first_prompt = fail.call_args_list[0].args[2]
-    assert "box_2d" in first_prompt
+    assert "pixel coordinates" in first_prompt
+    assert "box_2d" not in first_prompt
     CoordFormat.load_from_config({})
 
 
@@ -204,11 +279,8 @@ def test_parse_vlm_elements_no_transform():
 @pytest.mark.asyncio
 async def test_unset_sentinel_uses_config_max_tokens():
     """When max_tokens=_UNSET (default), analyze_media uses config.max_tokens."""
-    from interact.config import Config
-    from interact.vision import MediaItem, _UNSET, analyze_media
-
     cfg = Config()
-    media_item = [MediaItem(data="dGVzdA==", media_type="image", mime_type="image/png")]
+    media_item = [MediaItem.from_bytes(_PNG)]
     mock_completion = AsyncMock(return_value=VLMResult(text="ok", elapsed=0.1))
     # model is now resolved at the boundary and passed in; analyze_media no longer reads
     # config.model_for. It still validates the key, so patch that True.
@@ -567,6 +639,53 @@ async def test_vlm_detect_elements_model_override_bypasses_component(srv):
 
 
 @pytest.mark.asyncio
+async def test_session_detection_uses_provider_neutral_schema_and_actual_result_identity(
+    srv, monkeypatch
+) -> None:
+    srv.config.media_backend = "session"
+    srv.config.media_billing = "session_only"
+    srv.config.component_model = "gemini/api-component-model"
+    srv.config.image_model = "gemini/api-image-model"
+    captured: dict = {}
+    debug: dict = {}
+
+    def forbidden_api_capability_probe(model: str) -> bool:
+        raise AssertionError("session detection consulted API model capabilities")
+
+    async def session_vlm(data, context, prompt, **kwargs):
+        captured.update(kwargs)
+        payload = det._DetectionResult(elements=[
+            det._DetectedElement(name="Save", role="button", x=10, y=20, w=30, h=12)
+        ])
+        return VLMResult(
+            text=payload.model_dump_json(),
+            elapsed=0.2,
+            model="claude-session-model",
+            backend="session",
+            provider="claude",
+        )
+
+    def save_debug(name, value, **kwargs):
+        if name == "vlm_meta":
+            debug.update(json.loads(value))
+
+    monkeypatch.setattr(det, "_model_supports_structured", forbidden_api_capability_probe)
+    monkeypatch.setattr(srv.vlm, "_vlm", session_vlm)
+    monkeypatch.setattr(det.Debug, "save", save_debug)
+
+    elements, _, _, label = await det._vlm_detect_elements(
+        _PNG, _DESKTOP_CTX, 800, 600
+    )
+
+    assert elements and elements[0].name == "Save"
+    assert captured["response_format"] is det._DetectionResult
+    assert captured["model_override"] is None
+    assert label == "claude-session-model"
+    assert debug["model"] == "claude-session-model"
+    assert debug["provider"] == "claude" and debug["backend"] == "session"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("raw_matches_win,expect_crop", [(True, True), (False, False)])
 async def test_shadow_crop_applied_when_dimensions_match(
     srv, raw_matches_win, expect_crop
@@ -624,7 +743,7 @@ async def test_vlm_rate_limit_triggers_fallback(srv):
 
     call_count = 0
 
-    async def _mock_analyze(media, context, cfg, query=None, **kwargs):
+    async def _mock_analyze(media, context, cfg, query, max_tokens, response_format, model):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -642,7 +761,7 @@ async def test_vlm_rate_limit_triggers_fallback(srv):
     chain = ModelChain(role="image", preferences=[primary, fallback])
 
     with (
-        patch("interact.server.vlm.analyze_media", _mock_analyze),
+        patch("interact.vision.core._api_media_completion", _mock_analyze),
         patch.object(Config, "chain_for", return_value=chain),
         patch.object(Model, "is_available", return_value=True),
     ):
@@ -675,7 +794,7 @@ async def test_vlm_falls_back_on_error(srv, make_error):
 
     call_count = 0
 
-    async def _mock(media, context, cfg, query=None, **kwargs):
+    async def _mock(media, context, cfg, query, max_tokens, response_format, model):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -691,7 +810,7 @@ async def test_vlm_falls_back_on_error(srv, make_error):
     chain = ModelChain(role="image", preferences=[primary, fallback])
 
     with (
-        patch("interact.server.vlm.analyze_media", _mock),
+        patch("interact.vision.core._api_media_completion", _mock),
         patch.object(Config, "chain_for", return_value=chain),
         patch.object(Model, "is_available", return_value=True),
     ):
@@ -745,6 +864,62 @@ async def test_record_desktop_stop_analyzes_the_session_clip(srv, monkeypatch):
     out = await srv._record_desktop(win, query="what animates?", start=False, duration=None, fps=None, path=None)
     win.stop_video.assert_called_once()
     assert "slides in" in out
+
+
+def test_record_sampling_caveat_remains_for_gemini_on_a_session_backend(srv):
+    srv.config.media_backend = "session"
+    srv.config.video_model = "gemini/gemini-example-video"
+    result = VLMResult(
+        text="sequence",
+        elapsed=0,
+        model="gemini/gemini-example-video",
+        backend="session",
+        video_sampled=True,
+    )
+
+    caveat = srv.tools_desktop._sampling_caveat(srv.config.video_model, result)
+
+    assert "sampling floor" in caveat
+
+
+def test_record_sampling_caveat_reports_the_actual_largest_frame_gap(srv):
+    result = VLMResult(
+        text="sequence",
+        elapsed=0,
+        backend="session",
+        provider="claude",
+        video_sampled=True,
+        video_sample_timestamps=[0.0, 1.0, 4.0],
+    )
+
+    caveat = srv.tools_desktop._sampling_caveat(result=result)
+
+    assert "~3000ms" in caveat
+
+
+@pytest.mark.asyncio
+async def test_browser_record_caveat_uses_the_actual_native_api_result(srv, monkeypatch):
+    mgr = MagicMock()
+    mgr.stop_recording = AsyncMock(return_value=b"WEBM")
+    srv.config.media_backend = "session"
+
+    async def native_result(*args, **kwargs):
+        return VLMResult(
+            text="native sequence",
+            elapsed=0,
+            model="gemini/example-native-video",
+            backend="api",
+            provider="gemini",
+            video_sampled=False,
+        )
+
+    monkeypatch.setattr(srv.vlm, "_vlm", native_result)
+
+    out = await srv.tools_desktop._record_browser(
+        mgr, start=False, query="what changes?", path=None, session="default"
+    )
+
+    assert "native sequence" in out and "sampling floor" not in out
 
 
 @pytest.mark.asyncio
@@ -908,7 +1083,7 @@ async def test_vlm_exhausted_chain_is_an_ERROR_line_that_says_why(srv, make_erro
     from interact.config import Config
     from interact.models import Model, ModelCapability, ModelChain
 
-    async def _mock(media, context, cfg, query=None, *, model, **kwargs):
+    async def _mock(media, context, cfg, query, max_tokens, response_format, model):
         raise make_error(model)
 
     primary = Model(id="primary/model", provider="test", capabilities={ModelCapability.VLM})
@@ -916,7 +1091,7 @@ async def test_vlm_exhausted_chain_is_an_ERROR_line_that_says_why(srv, make_erro
     chain = ModelChain(role="image", preferences=[primary, fallback])
 
     with (
-        patch("interact.server.vlm.analyze_media", _mock),
+        patch("interact.vision.core._api_media_completion", _mock),
         patch.object(Config, "chain_for", return_value=chain),
         patch.object(Model, "is_available", return_value=True),
     ):

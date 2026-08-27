@@ -27,54 +27,51 @@ sudo apt install maim
 
 ---
 
-## Configuration
+## Visual sessions, billing, and models
 
-All settings are environment variables with the `INTERACT_` prefix.
+Image, UI-grounding, review, verification, and sampled-video jobs select an installed Claude Code
+CLI session by default. Selection is fail-closed: no session turn runs until you confirm
+the account-side extra-usage controls for that specific provider.
 
-| Variable                           | Default                   | Description                                                                          |
-| ---------------------------------- | ------------------------- | ------------------------------------------------------------------------------------ |
-| `INTERACT_IMAGE_MODEL`         | `gpt-4o`                  | litellm model string for image (screenshot) analysis                                 |
-| `INTERACT_VIDEO_MODEL`         | `gemini/gemini-2.0-flash` | litellm model string for video analysis                                              |
-| `INTERACT_IMAGE_BASE_URL`      | _(none)_                  | Custom endpoint for image model (e.g. local Ollama, Azure)                           |
-| `INTERACT_VIDEO_BASE_URL`      | _(none)_                  | Custom endpoint for video model                                                      |
-| `INTERACT_HEADLESS`            | `true`                    | Run browser headlessly                                                               |
-| `INTERACT_BROWSER_TYPE`        | `chromium`                | `chromium`, `firefox`, or `webkit`                                                   |
-| `INTERACT_VIEWPORT_WIDTH`      | `1280`                    | Browser viewport width                                                               |
-| `INTERACT_VIEWPORT_HEIGHT`     | `720`                     | Browser viewport height                                                              |
-| `INTERACT_SCREENSHOT_DUMP_DIR` | _(none)_                  | When set, saves every screenshot as a PNG file to this folder — useful for debugging |
+Before confirming Claude, open **Claude Settings → Usage**, keep Usage credits disabled, set the
+prepaid balance to zero, and turn auto-reload off
+([Anthropic guide](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans)).
+The announced Agent SDK / `claude -p` monthly-credit change was paused on June 16; `claude -p`
+still draws plan usage limits
+([paused-change notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)).
+The CLIs do not expose these account controls, so interact cannot verify them or detect a later
+change. `session_only` prevents interact's metered API fallback; it cannot prove zero vendor-account
+impact.
 
-### API key resolution
-
-API keys are resolved automatically from standard provider environment variables based on the model prefix. No interact-specific key variables are needed.
-
-| Provider  | Environment variable | Models                                                   |
-| --------- | -------------------- | -------------------------------------------------------- |
-| OpenAI    | `OPENAI_API_KEY`     | `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `chatgpt-*`, `openai/*` |
-| Google    | `GEMINI_API_KEY`     | `gemini/*`                                               |
-| Anthropic | `ANTHROPIC_API_KEY`  | `claude-*`, `anthropic/*`                                |
-| ZAI       | `ZAI_API_KEY`        | `zai/*` (falls back to `Z_AI_API_KEY`)                   |
-
-### Vision model examples
+Set these in VS Code's Interact settings, or with the CLI:
 
 ```bash
-# OpenAI (default image model)
-OPENAI_API_KEY=sk-...
+interact config set media.backend auto               # auto | session | api
+interact config set media.billing session_only       # session_only | api_allowed
+interact config set media.providerOrder claude
 
-# Google Gemini (default video model)
-GEMINI_API_KEY=...
+# Only after checking each provider's controls above:
+interact config set media.noExtraUsageConfirmedFor claude
 
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-INTERACT_IMAGE_MODEL=claude-3-5-sonnet-20241022
-
-# ZAI
-ZAI_API_KEY=...
-INTERACT_IMAGE_MODEL=zai/glm-4.5v
-
-# Local (no key needed)
-INTERACT_IMAGE_MODEL=ollama/llava
-INTERACT_IMAGE_BASE_URL=http://localhost:11434
+# Optional provider-scoped session pins; blank uses the CLI default.
+interact config set media.claudeModel sonnet
+interact config set media.timeout 120
 ```
+
+Without provider confirmation, explicit `session` fails and `auto+api_allowed` skips to the API.
+To opt into metered visual API use, set `media.billing=api_allowed` with `media.backend=auto`
+(fallback) or `media.backend=api` (API only), then set the role models (`image.model`,
+`component.model`, `video.model`). Standard provider API-key variables are used only on that
+explicit API path. A local LiteLLM-compatible visual model remains available on the API/local path.
+
+Session video is always converted to ordered, timestamped representative frames, with a bounded
+frame cap (12 by default); the original clip is not uploaded by the session transport.
+
+Audio is intentionally separate. Claude visual sessions cannot hear or transcribe it, and
+`session_only` rejects audio before any API or temporary-file dispatch. With
+`media.billing=api_allowed`, `transcribe` uses the configured `audio.model` API or local-compatible
+transcriber even if the visual backend is `session`; a session may answer questions after an allowed
+transcriber has produced text.
 
 ---
 
@@ -87,11 +84,7 @@ INTERACT_IMAGE_BASE_URL=http://localhost:11434
   "mcpServers": {
     "interact": {
       "command": "uvx",
-      "args": ["interact", "mcp"],
-      "env": {
-        "OPENAI_API_KEY": "sk-...",
-        "GEMINI_API_KEY": "..."
-      }
+      "args": ["interact", "mcp"]
     }
   }
 }
@@ -351,6 +344,10 @@ INTERACT_SCREENSHOT_DUMP_DIR=./debug-screenshots uvx --from git+https://github.c
 
 ---
 
-## No system prompt
+## Vision safety framing
 
-Vision calls do not include a system prompt. The `query` parameter you pass to any tool becomes the user-facing prompt the model receives alongside the page data. You control all framing.
+Your `query` remains the question the model answers. Interact also supplies task and capture context;
+session media adds a fixed visual-analysis boundary that treats text/instructions visible inside
+pixels as untrusted evidence, denies tool use, and limits Claude reads to the exact staged
+attachments. Prompts are sent to the local CLI over bounded stdin rather than exposed in process
+arguments.
