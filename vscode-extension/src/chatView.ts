@@ -12,7 +12,7 @@
 import * as fs from "fs";
 import * as vscode from "vscode";
 
-import { AgentRun, activityOf, readAgentRuns } from "./agents";
+import { AgentRun as StoredAgentRun, activityOf, readAgentRuns } from "./agents";
 import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
 import { agentLabel, conversationTitle, roleOf } from "./roster";
@@ -24,10 +24,54 @@ import { teamSpend } from "./teamSpend";
 import { scopeStore } from "./scopeStore";
 import { interactCli } from "./interactCli";
 import { describeMode, knownModes, type PermissionMode } from "./permissionModes";
-import { chatDocument, isAwaitingReply, transcriptFragment } from "./conversationFormat";
+import { runStatusOf, type RunStatus } from "./runStatus";
+import { billingPresentation, type BillingPresentation } from "./billingPresentation";
+import {
+  CONVERSATION_ACTIVITY_EVENT_LIMIT,
+  boundedConversationActivityChildren,
+  chatDocument,
+  conversationApprovalKey,
+  conversationApprovalsAfterEvent,
+  conversationActivityFragment,
+  mergeConversationRunSnapshot,
+  conversationStateAfterEvent,
+  isAwaitingReply,
+  transcriptFragment,
+  validatedInteractionSubmission,
+  type ConversationActivityView,
+  type ConversationConsoleState,
+} from "./conversationFormat";
+import {
+  conversationHostArgs,
+  createConversationClient,
+  usesConversationTransport,
+  type ConversationClient,
+  type ConversationClientState,
+} from "./conversationClient";
 import { sessionTabs } from "./sessionTabs";
 import { IO_SCHEME, ioTarget } from "./ioDocument";
 import { agentsDir } from "./paths";
+import { resolveCommand } from "./shared";
+import type {
+  AgentEvent,
+  AgentRun,
+  InteractionSubmission,
+  ModelSelection,
+} from "./generated/types";
+
+type ConversationRun = Omit<AgentRun, "status"> & {
+  status: Exclude<RunStatus, "declared">;
+};
+
+function currentConversationRuns(views: readonly ConversationActivityView[]): AgentRun[] {
+  return views.flatMap((view) => [view.run, ...currentConversationRuns(view.children)]);
+}
+
+function conversationRun(run: AgentRun | StoredAgentRun): ConversationRun | undefined {
+  const status = runStatusOf(run.status);
+  if (status === "declared") return undefined;
+  return { ...run, status };
+}
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "interactAgents.chat";
@@ -71,8 +115,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private runId: string | undefined;
   private watcher: fs.FSWatcher | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private conversationProjection: ReturnType<typeof setTimeout> | undefined;
+  private conversationClient: ConversationClient | undefined;
+  private consoleState: ConversationConsoleState = { phase: "loading" };
+  private readonly liveRuns = new Map<string, ConversationRun>();
+  private readonly approvals = new Map<string, { run_id: string; event: AgentEvent }>();
 
-  constructor(private readonly log: vscode.OutputChannel) {}
+  private readonly disposeOnProcessExit = (): void => this.dispose();
+
+  constructor(private readonly log: vscode.OutputChannel) {
+    process.once("exit", this.disposeOnProcessExit);
+  }
+
+  /** The host belongs to the extension window, not to the visibility lifetime of one webview. */
+  public dispose(): void {
+    process.off("exit", this.disposeOnProcessExit);
+    this.stopWatching();
+    this.conversationClient?.dispose();
+    this.conversationClient = undefined;
+  }
 
   /** Point the panel at an agent — what clicking a row in the list, or a body in the workplace,
    *  does.
@@ -157,7 +218,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // silently drops the command: href, which looks exactly like a dead button.
     view.webview.options = { enableScripts: true, enableCommandUris: true };
     view.webview.onDidReceiveMessage((msg) => {
+      if (msg?.type === "ready") this.replayConversationView();
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
+      if (msg?.type === "start" && typeof msg.text === "string"
+          && typeof msg.routeId === "string"
+          && (msg.selectionKind === "model" || msg.selectionKind === "criterion")
+          && typeof msg.selection === "string") {
+        void this.start(msg.text, msg.routeId, msg.selectionKind, msg.selection);
+      }
+      if (msg?.type === "cancel" && typeof msg.runId === "string") void this.cancel(msg.runId);
+      if (msg?.type === "interaction" && typeof msg.runId === "string"
+          && msg.submission !== null && typeof msg.submission === "object"
+          && typeof msg.submission.interaction_id === "string") {
+        const key = conversationApprovalKey(msg.runId, msg.submission.interaction_id);
+        const waiting = this.approvals.get(key);
+        const interaction = waiting?.event.interaction;
+        const submission = interaction
+          ? validatedInteractionSubmission(interaction, msg.submission)
+          : undefined;
+        if (waiting?.run_id === msg.runId && submission) {
+          void this.submitInteraction(msg.runId, submission);
+        }
+      }
       if (msg?.type === "back") { this.agentId = null; void ChatViewProvider.leaveConversation(); }
       // The empty state's door: an empty panel must lead somewhere, not describe a missing list.
       if (msg?.type === "openTeam") void vscode.commands.executeCommand("interact.agents.team");
@@ -202,19 +284,253 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.onDidDispose(() => this.stopWatching());
     this.watch();
     this.render();
+    void this.loadConversationConsole();
   }
 
-  private run(): AgentRun | undefined {
+  private run(): StoredAgentRun | undefined {
     // The registry first, then the scope store's merged view — which is where your OWN
     // discovered sessions live. Without the fallback a "your session" row opened onto the
     // empty hint: the id was real, the lookup just never asked the list that holds it.
     return readAgentRuns().find((r) => r.run_id === this.runId)
-      ?? scopeStore()?.runs().find((r) => r.run_id === this.runId);
+      ?? scopeStore()?.runs().find((r) => r.run_id === this.runId)
+      ?? this.liveRuns.get(this.runId ?? "");
+  }
+
+  private canContinue(run: Pick<StoredAgentRun, "kind" | "capabilities">): boolean {
+    return !usesConversationTransport(run) || Boolean(run.capabilities?.includes("resume"));
+  }
+
+  private console(): ConversationConsoleState {
+    return { ...this.consoleState, approvals: [...this.approvals.values()] };
+  }
+
+  /** Only an existing local workspace is permitted to scope provider processes and prompts. */
+  private workspaceRoot(): string {
+    const folder = vscode.workspace.workspaceFolders?.find(({ uri }) => uri.scheme === "file");
+    if (!folder) throw new Error("Open a local workspace before starting a conversation.");
+    try {
+      const root = fs.realpathSync(folder.uri.fsPath);
+      if (!fs.statSync(root).isDirectory()) throw new Error("not a directory");
+      return root;
+    } catch {
+      throw new Error("The local workspace is unavailable.");
+    }
+  }
+
+  /** Start one local host through the same executable resolver as the MCP server.  Replacing the
+   * final `mcp` subcommand keeps dev checkout, uvx version pinning and release behavior aligned. */
+  private async loadConversationConsole(): Promise<void> {
+    if (this.conversationClient) return;
+    try {
+      const [command, resolvedArgs] = resolveCommand(this.log);
+      const workspaceRoot = this.workspaceRoot();
+      this.conversationClient = createConversationClient({
+        command,
+        args: conversationHostArgs(resolvedArgs, workspaceRoot),
+        cwd: workspaceRoot,
+      }, {
+        onEvent: (run, event) => this.onConversationEvent(run, event),
+        onError: (message) => this.conversationBridgeFailed(message),
+        onState: (state) => this.conversationClientStateChanged(state),
+      });
+      const catalog = await this.conversationClient.catalog();
+      this.consoleState = {
+        phase: catalog.routes.some((route) => route.availability === "available") ? "ready" : "empty",
+        catalog,
+      };
+      this.rendered = undefined;
+      this.render();
+    } catch (error) {
+      this.conversationBridgeFailed(
+        error instanceof Error ? error.message : "The local conversation bridge could not start.",
+      );
+    }
+  }
+
+  private conversationClientStateChanged(state: ConversationClientState): void {
+    if (state !== "connecting" || this.consoleState.catalog) return;
+    this.consoleState = { phase: "loading" };
+  }
+
+  private conversationBridgeFailed(message: string): void {
+    const visible = message || "The local conversation bridge stopped unexpectedly.";
+    this.consoleState = {
+      ...this.consoleState,
+      phase: "error",
+      active_run_id: undefined,
+      error: visible,
+    };
+    this.postConsoleState(visible, true, false);
+    this.postConversationActivity();
+    if (this.rendered === undefined) this.render();
+  }
+
+  private postConsoleState(message: string, error: boolean, canSend: boolean): void {
+    const run = this.run();
+    void this.view?.webview.postMessage({
+      type: "console-state",
+      message,
+      error,
+      canSend: canSend && (!run || this.canContinue(run)),
+      activeRunId: this.consoleState.active_run_id ?? null,
+    });
+  }
+
+  /** A newly assigned webview document cannot receive messages until its script has installed
+   * listeners. Replay state on its explicit readiness handshake so a first-and-only approval or
+   * terminal event is not lost between `webview.html = ...` and script startup. */
+  private replayConversationView(): void {
+    const run = this.run();
+    if (!run || usesConversationTransport(run)) {
+      const phase = this.consoleState.phase;
+      const message = this.consoleState.error
+        ?? (phase === "starting"
+          ? "Starting the conversation…"
+          : phase === "pending" ? "Waiting for the current turn" : "");
+      this.postConsoleState(message, Boolean(this.consoleState.error), phase === "ready");
+    }
+    const displayed = run ? conversationRun(run) : undefined;
+    if (displayed) this.postRunStatus(displayed);
+    this.postConversationActivity();
+  }
+
+  /** Status is independently patchable: provider activity must not unlock the composer or remove
+   * its cancel button merely because the run changed from running to waiting (or back again). */
+  private postRunStatus(run: Pick<AgentRun, "run_id" | "status">): void {
+    if (run.run_id !== this.runId) return;
+    void this.view?.webview.postMessage({ type: "console-state", runStatus: run.status });
+  }
+
+  private rememberConversationRun(run: ConversationRun): ConversationRun {
+    const merged = conversationRun(mergeConversationRunSnapshot(this.liveRuns.get(run.run_id), run));
+    if (!merged) return run;
+    this.liveRuns.set(merged.run_id, merged);
+    return merged;
+  }
+
+  private onConversationEvent(run: AgentRun, event: AgentEvent): void {
+    const incoming = conversationRun(run);
+    if (!incoming) return;
+    const displayed = this.rememberConversationRun(incoming);
+    this.postRunStatus(displayed);
+    if (event.kind === "interaction" && event.interaction) {
+      this.approvals.set(
+        conversationApprovalKey(displayed.run_id, event.interaction.id),
+        { run_id: displayed.run_id, event },
+      );
+    }
+    const retainedApprovals = conversationApprovalsAfterEvent(
+      [...this.approvals.values()], displayed, event,
+    );
+    if (retainedApprovals.length !== this.approvals.size) {
+      this.approvals.clear();
+      for (const approval of retainedApprovals) {
+        const approvalId = approval.event.interaction?.id;
+        if (approvalId) {
+          this.approvals.set(
+            conversationApprovalKey(approval.run_id, approvalId),
+            approval,
+          );
+        }
+      }
+    }
+    const nextState = conversationStateAfterEvent(this.consoleState, displayed, event);
+    if (nextState !== this.consoleState) {
+      this.consoleState = nextState;
+      this.postConsoleState(nextState.error ?? "", Boolean(nextState.error), true);
+    }
+    this.scheduleConversationProjection();
+  }
+
+  private scheduleConversationProjection(): void {
+    if (this.conversationProjection !== undefined) return;
+    this.conversationProjection = setTimeout(() => {
+      this.conversationProjection = undefined;
+      this.postConversationActivity();
+      this.render();
+    }, 0);
+  }
+
+  private conversationRuns(): ConversationRun[] {
+    const runs = new Map<string, ConversationRun>();
+    for (const run of readAgentRuns()) {
+      const displayed = conversationRun(run);
+      if (displayed) runs.set(displayed.run_id, displayed);
+    }
+    for (const run of this.liveRuns.values()) {
+      const merged = conversationRun(mergeConversationRunSnapshot(runs.get(run.run_id), run));
+      if (merged) runs.set(run.run_id, merged);
+    }
+    return [...runs.values()];
+  }
+
+  private conversationActivity(): {
+    activity: ConversationActivityView[];
+    billing: BillingPresentation;
+    spend: ReturnType<typeof teamSpend>;
+  } {
+    const selected = this.runId ? this.conversationRuns().find((run) => run.run_id === this.runId) : undefined;
+    if (!selected) return {
+      activity: [], billing: billingPresentation([]), spend: teamSpend([], undefined),
+    };
+    const byId = new Map(this.conversationRuns().map((run) => [run.run_id, run]));
+    let root = selected;
+    const ancestry = new Set<string>([root.run_id]);
+    while (root.parent_run_id && byId.has(root.parent_run_id) && !ancestry.has(root.parent_run_id)) {
+      ancestry.add(root.parent_run_id);
+      root = byId.get(root.parent_run_id)!;
+    }
+    const rootId = selected.root_run_id ?? root.run_id;
+    const family = this.conversationRuns()
+      .filter((run) => (run.root_run_id ?? run.run_id) === rootId || run.run_id === rootId)
+      .sort((left, right) => (left.started_at ?? 0) - (right.started_at ?? 0));
+    const children = new Map<string, ConversationRun[]>();
+    for (const run of family) {
+      if (!run.parent_run_id) continue;
+      children.set(run.parent_run_id, [...(children.get(run.parent_run_id) ?? []), run]);
+    }
+    const project = (run: ConversationRun, seen: ReadonlySet<string>): ConversationActivityView => {
+      const nextSeen = new Set(seen).add(run.run_id);
+      const turns = activityOf(run, CONVERSATION_ACTIVITY_EVENT_LIMIT);
+      const currentTool = [...turns].reverse().find((turn) => turn.kind === "tool")?.tool ?? null;
+      const boundedChildren = boundedConversationActivityChildren(children.get(run.run_id) ?? []);
+      return {
+        run,
+        current_tool: currentTool,
+        transcript: run.run_id === selected.run_id ? [] : turns,
+        children: boundedChildren.items
+          .filter((child) => !nextSeen.has(child.run_id))
+          .map((child) => project(child, nextSeen)),
+        omitted_children: boundedChildren.omitted,
+      };
+    };
+    const rootRun = family.find((run) => run.run_id === rootId) ?? root;
+    return {
+      activity: [project(rootRun, new Set())],
+      billing: billingPresentation(family.map((run) => ({
+        chargePath: run.charge_path ?? "unknown",
+        costCertainty: run.cost_certainty ?? "unknown",
+        costUsd: run.cost_usd ?? null,
+      }))),
+      spend: teamSpend(family, selected.run_id),
+    };
+  }
+
+  private postConversationActivity(): void {
+    if (!this.view || !this.runId) return;
+    const projection = this.conversationActivity();
+    void this.view.webview.postMessage({
+      type: "activity",
+      html: conversationActivityFragment(
+        projection.activity, this.console(), projection.billing, projection.spend,
+      ),
+    });
   }
 
   /** Which run the live document was built for. A different agent needs a new document; the SAME
    *  agent going on working needs only its transcript swapped. */
-  private rendered: string | undefined;
+  /** undefined means no document; null means the cold composer document is already live. */
+  private rendered: string | null | undefined;
   /** When set, the panel is at the AGENT depth: who this is, and the tasks it was given. The
    *  conversation is one level deeper. */
   private agentId: string | null = null;
@@ -270,9 +586,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           awaitingReply: isAwaitingReply(turns),
         }),
       });
+      this.postConversationActivity();
       return;
     }
-    this.rendered = current?.run_id;
+    this.rendered = current?.run_id ?? null;
     const run = this.run();
     const turns = run ? activityOf(run, 300) : [];
     // Who sent this one on its errand. Resolved here (the renderer stays import-free) and named by
@@ -280,6 +597,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const all = readAgentRuns();
     const mine = all.find((r) => r.run_id === this.runId);
     const parentRun = mine?.parent_run_id ? all.find((r) => r.run_id === mine.parent_run_id) : undefined;
+    const projection = this.conversationActivity();
     this.view.webview.html = chatDocument({
       parent: parentRun ? { runId: parentRun.run_id, title: conversationTitle(parentRun as never) } : null,
       // A fresh nonce per render: the CSP admits only scripts carrying it, so nothing that
@@ -294,7 +612,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       status: run?.status,
       // One of your own sessions: shown in full, steered in its own window — the composer
       // says so instead of offering a Send the CLI would refuse.
-      readOnly: run?.status === "foreign",
+      readOnly: run?.status === "foreign" || run?.kind === "provider_child",
       // Everyone on this errand: the entry agent first (the way back), then whoever it put to
       // work, then their own helpers. Live dots say who is still going while you read someone
       // else's transcript.
@@ -309,11 +627,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // What the whole TEAM is costing, not only the agent being read. Imported and then never
       // called for a whole commit: the row rendered in the preview fixture, which passes its own
       // spend, so every screenshot of it was real and meant nothing about the panel.
-      spend: teamSpend(scopeStore()?.runs() ?? readAgentRuns(), run?.run_id),
+      spend: teamSpend(
+        scopeStore()?.runs() ?? readAgentRuns(),
+        run?.run_id,
+        currentConversationRuns(projection.activity),
+      ),
       files: run ? chatFiles(run, agentsDir(), fs.existsSync) : [],
       sentBy: run?.parent_run_id
         ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null
         : null,
+      console: this.console(),
+      activity: projection.activity,
+      billing: projection.billing,
     });
   }
 
@@ -363,21 +688,159 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async send(text: string): Promise<void> {
-    const run = this.run();
-    if (!run) return;
-    const { error, stdout } = await interactCli(["agents", "send", run.run_id, text]);
-    const failed = Boolean(error) || stdout.trim().startsWith("ERROR");
-    // Told either way. The webview empties the box optimistically and keeps the text until this
-    // arrives — without the answer it would hold a message forever, and a failed send used to
-    // destroy what you wrote.
-    void this.view?.webview.postMessage({ type: "sent", ok: !failed });
-    if (failed) {
-      void vscode.window.showErrorMessage(
-        `Could not reach ${run.name} — ${error || stdout.trim()}`);
+  private async start(
+    text: string,
+    routeId: string,
+    selectionKind: "model" | "criterion",
+    selected: string,
+  ): Promise<void> {
+    const catalog = this.consoleState.catalog;
+    const route = catalog?.routes.find((candidate) => candidate.id === routeId);
+    if (!this.conversationClient || !catalog || route?.availability !== "available") {
+      void this.view?.webview.postMessage({ type: "started", ok: false });
       return;
     }
-    this.render(); // recorded on both sides, so it is already in the transcript
+    const value = selected.trim();
+    const selection: ModelSelection = value
+      ? selectionKind === "model" ? { model: value } : { criterion: value }
+      : {};
+    this.consoleState = {
+      ...this.consoleState,
+      phase: "starting",
+      error: undefined,
+    };
+    this.postConsoleState("Starting the conversation…", false, false);
+    try {
+      const workspaceRoot = this.workspaceRoot();
+      const started = await this.conversationClient.start({
+        route_id: routeId,
+        prompt: text,
+        selection,
+        workspace_root: workspaceRoot,
+      });
+      const incoming = conversationRun(started);
+      if (!incoming) throw new Error("The conversation host returned an invalid run status.");
+      const displayed = this.rememberConversationRun(incoming);
+      this.runId = started.run_id;
+      this.consoleState = {
+        ...this.consoleState,
+        phase: "pending",
+        active_run_id: displayed.run_id,
+        error: undefined,
+      };
+      void this.view?.webview.postMessage({ type: "started", ok: true });
+      await vscode.commands.executeCommand("setContext", ChatViewProvider.IN_CONVERSATION, true);
+      this.rendered = undefined;
+      this.render();
+    } catch {
+      const crashed = this.conversationClient.state() === "crashed";
+      const message = crashed
+        ? "The local conversation bridge stopped unexpectedly. The turn was not retried."
+        : "The selected route could not start this conversation. Nothing else was tried.";
+      this.consoleState = {
+        ...this.consoleState,
+        phase: crashed ? "error" : "ready",
+        error: message,
+      };
+      this.log.appendLine(`conversation start failed (${crashed ? "bridge stopped" : "route rejected"})`);
+      void this.view?.webview.postMessage({ type: "started", ok: false });
+      this.postConsoleState(message, true, !crashed);
+    }
+  }
+
+  private async send(text: string): Promise<void> {
+    const run = this.run();
+    if (!run) {
+      void this.view?.webview.postMessage({ type: "sent", ok: false });
+      return;
+    }
+    if (!this.canContinue(run)) {
+      void this.view?.webview.postMessage({ type: "sent", ok: false });
+      return;
+    }
+    if (!usesConversationTransport(run)) {
+      const { error, stdout } = await interactCli(["agents", "send", run.run_id, text]);
+      const failed = Boolean(error) || stdout.trim().startsWith("ERROR");
+      void this.view?.webview.postMessage({ type: "sent", ok: !failed });
+      if (failed) {
+        this.log.appendLine("process continuation failed (CLI rejected the request)");
+        void vscode.window.showErrorMessage(`Could not reach ${run.name}. Your message was restored.`);
+      } else {
+        this.render();
+      }
+      return;
+    }
+    if (!this.conversationClient) {
+      void this.view?.webview.postMessage({ type: "sent", ok: false });
+      return;
+    }
+    this.consoleState = {
+      ...this.consoleState,
+      phase: "pending",
+      active_run_id: run.run_id,
+      error: undefined,
+    };
+    this.postConsoleState(`${run.name} is answering…`, false, false);
+    try {
+      const resumed = await this.conversationClient.send(run.run_id, text);
+      const incoming = conversationRun(resumed);
+      if (!incoming) throw new Error("The conversation host returned an invalid run status.");
+      const displayed = this.rememberConversationRun(incoming);
+      this.postRunStatus(displayed);
+      void this.view?.webview.postMessage({ type: "sent", ok: true });
+      this.render();
+    } catch {
+      const crashed = this.conversationClient.state() === "crashed";
+      const message = crashed
+        ? "The local conversation bridge stopped unexpectedly. The message was not retried."
+        : `Could not reach ${run.name}. No fallback route was used.`;
+      this.consoleState = {
+        ...this.consoleState,
+        phase: crashed ? "error" : "ready",
+        active_run_id: undefined,
+        error: message,
+      };
+      this.log.appendLine(`conversation continuation failed (${crashed ? "bridge stopped" : "route rejected"})`);
+      void this.view?.webview.postMessage({ type: "sent", ok: false });
+      this.postConsoleState(message, true, !crashed);
+      this.postConversationActivity();
+    }
+  }
+
+  private async cancel(runId: string): Promise<void> {
+    if (!this.conversationClient || runId !== this.consoleState.active_run_id) return;
+    try {
+      const cancelled = await this.conversationClient.cancel(runId);
+      const incoming = conversationRun(cancelled);
+      if (!incoming) throw new Error("The conversation host returned an invalid run status.");
+      const displayed = this.rememberConversationRun(incoming);
+      this.postRunStatus(displayed);
+      this.consoleState = { ...this.consoleState, phase: "ready", active_run_id: undefined };
+      this.postConsoleState("", false, true);
+      this.postConversationActivity();
+      this.render();
+    } catch {
+      this.conversationBridgeFailed("The local conversation bridge could not confirm cancellation.");
+    }
+  }
+
+  private async submitInteraction(
+    runId: string,
+    submission: InteractionSubmission,
+  ): Promise<void> {
+    const key = conversationApprovalKey(runId, submission.interaction_id);
+    if (!this.conversationClient || !this.approvals.has(key)) return;
+    try {
+      const run = await this.conversationClient.interact(runId, submission);
+      const incoming = conversationRun(run);
+      if (!incoming) throw new Error("The conversation host returned an invalid run status.");
+      const displayed = this.rememberConversationRun(incoming);
+      this.postRunStatus(displayed);
+      this.approvals.delete(key);
+      this.postConversationActivity();
+    } catch {
+      this.conversationBridgeFailed("The local conversation bridge could not forward that decision.");
+    }
   }
 
   /** Follow the registry so an agent opened mid-flight keeps updating as it works. */

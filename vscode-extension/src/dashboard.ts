@@ -30,6 +30,7 @@ import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import { DIM_FOREGROUND } from "./themeTokens";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 import { presentMediaStatus } from "./mediaStatus";
+import { billingPresentation } from "./billingPresentation";
 import {
   readUsageLog,
   filterByRange,
@@ -570,11 +571,11 @@ export class DashboardPanel {
     };
   }
 
-  /** The agent team: what is running, what each is doing, and what it has cost.
+  /** The agent team: what is running, what each is doing, and its reported billing path.
    *
-   *  Costs are labelled API-EQUIVALENT because a subscription run is already paid for by the
-   *  plan — showing a bare currency figure would read as fresh spend. A run with no reported
-   *  cost shows "—", never "$0.00", because unknown is not free.
+   *  A run with no reported cost shows "—", never "$0.00", because unknown is not free. The
+   *  shared billing presenter keeps API charges, subscription quota, credits and local compute
+   *  separate rather than turning one API-equivalent total into a claim about the user's bill.
    *
    *  Runs interact did NOT spawn (the user's own editor windows) are marked, so the panel is an
    *  honest view of the machine rather than only of our own children.
@@ -624,11 +625,14 @@ export class DashboardPanel {
         // unknown end. Substituting `now` here would invent a duration nothing ever recorded.
         endedAt: run.finished_at != null ? run.finished_at * 1000 : null,
         costUsd: run.cost_usd ?? null,
+        chargePath: run.charge_path ?? "unknown",
+        costCertainty: run.cost_certainty ?? "unknown",
         last: run.last || undefined,
       };
     });
 
-    const { live, cost } = summarise(runs);
+    const { live } = summarise(runs);
+    const billing = billingPresentation(lanes);
     // At least a minute of window, so a team that all started seconds ago still gets an axis.
     const windowStart = Math.min(...lanes.map((l) => l.startedAt), now - 60_000);
     return {
@@ -641,9 +645,8 @@ export class DashboardPanel {
           lanes,
           windowStart,
           now,
-          ariaSummary:
-            `${live} of ${lanes.length} agents running; ~$${cost.toFixed(4)} API-equivalent ` +
-            "value consumed, already covered by the plan.",
+          billing,
+          ariaSummary: `${live} of ${lanes.length} agents running. ${billing.ariaSummary}`,
         },
       ],
     };

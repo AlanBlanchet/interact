@@ -61,7 +61,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/interact"]
-artifacts = ["src/interact/js/*.js", "src/interact/data/*.json"]
+artifacts = [
+    "src/interact/js/*.js",
+    "src/interact/data/*.json",
+    "src/interact/agents/codex_app_server_schema/*.json",
+]
 
 [project.scripts]
 interact = "interact.cli:main"

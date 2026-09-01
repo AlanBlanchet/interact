@@ -18,7 +18,15 @@ import * as fs from "fs";
 import * as vscode from "vscode";
 
 import { AgentRun, readAgentActivity, readAgentRuns } from "./agents";
-import { GroupBy, formatCost, groupKeyFor, orderGroups, rowDescription, statusIcon } from "./agentsFormat";
+import {
+  GroupBy,
+  formatCost,
+  groupKeyFor,
+  orderGroups,
+  rowDescription,
+  statusIcon,
+} from "./agentsFormat";
+import { runTooltip } from "./billingPresentation";
 import { agentsDir } from "./paths";
 import { orgTree, readOrg } from "./org";
 import type { ScopeStore } from "./scopeStore";
@@ -259,17 +267,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
     // The last thing that happened gets the row's whole width; elapsed and cost live on the hover
     // and on the dashboard, and competing for a narrow side bar clipped the interesting half.
     node.description = rowDescription(run);
-    node.tooltip = new vscode.MarkdownString(
-      [
-        `**${run.name}** — ${run.status}`,
-        run.task ? `\n${run.task}\n` : "",
-        `- provider: \`${run.provider}\`${run.model ? ` · model: \`${run.model}\`` : ""}`,
-        `- project: \`${run.cwd || "—"}\``,
-        `- cost: ${formatCost(run.cost_usd)} — API-equivalent; a subscription run already paid for it`,
-        `- id: \`${run.run_id}\``,
-        run.foreign ? "\n_Not started by interact — one of your own sessions._" : "",
-      ].join("\n"),
-    );
+    node.tooltip = new vscode.MarkdownString(runTooltip(run));
     // Only OUR runs can be stopped; a foreign session belongs to the user's own editor window.
     node.contextValue = run.foreign
       ? "interactForeignRun"

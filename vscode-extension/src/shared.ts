@@ -20,7 +20,13 @@ export type {
   PublishedTable,
 } from "./generated/types";
 
-import type { ModelSpec, ProviderSpec, ModelsConfig } from "./generated/types";
+import type {
+  AgentRun as GeneratedAgentRun,
+  ModelSpec,
+  ProviderSpec,
+  ModelsConfig,
+} from "./generated/types";
+import type { BillingPresentation, ChargePath, CostCertainty } from "./billingPresentation";
 
 export interface Action {
   type: string;
@@ -35,16 +41,8 @@ export type RangeId = "24h" | "7d" | "30d" | "all";
  *  which vendor is burning the quota, which model is doing the work. */
 export type AgentGroupBy = "project" | "provider" | "model" | "none";
 
-export type AgentStatus =
-  | "running"
-  | "done"
-  | "failed"
-  | "crashed"
-  | "stopped"
-  | "foreign"
-  /** Declared in the company file, never asked. Only the Team panel synthesizes these today; the
-   *  board never receives one, but the type is one vocabulary across surfaces on purpose. */
-  | "declared";
+/** Generated persisted vocabulary plus the one roster-only status synthesized by the Team UI. */
+export type AgentStatus = NonNullable<GeneratedAgentRun["status"]> | "declared";
 
 /**
  * One agent as the board draws it: an identity plus an interval on a shared clock.
@@ -72,8 +70,10 @@ export interface AgentLane {
   startedAt: number;
   /** Epoch milliseconds; `null` = still open (running) or never recorded (see above). */
   endedAt?: number | null;
-  /** API-EQUIVALENT value, already paid for by the plan. `null` = unknown, which is not zero. */
-  costUsd?: number | null;
+  /** Reported or estimated USD value. Its meaning is defined by chargePath, never by this number. */
+  costUsd: number | null;
+  chargePath: ChargePath;
+  costCertainty: CostCertainty;
   last?: string;
 }
 
@@ -131,6 +131,7 @@ export type CellContent =
       /** Epoch ms bounds of the shared clock every lane and the ribbon are drawn against. */
       windowStart: number;
       now: number;
+      billing: BillingPresentation;
       ariaSummary: string;
     }
   | { kind: "heading"; text: string }

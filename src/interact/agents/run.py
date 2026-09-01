@@ -7,16 +7,17 @@ those orphaned. Same reason the sandbox does it (#92).
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass, field
 import json
 import os
 import shutil
 import sys
 import uuid
 from pathlib import Path
-from dataclasses import dataclass, field
 
-from interact.agents.profiles import overlay_for, profiles_from
 from interact.agents import registry as reg
+from interact.agents.policy import Policy, policy_path
+from interact.agents.profiles import overlay_for, profiles_from
 from interact.agents.providers import AgentProvider
 from interact.criteria import Criteria, CriteriaError, Variables
 
@@ -49,11 +50,9 @@ def resolve_model(
     return overlay, overlay.get("ANTHROPIC_MODEL", model)
 
 
-def load_policy():
+def load_policy() -> Policy:
     """The policy file, read fresh. Not cached: the whole point of a criterion is that it
     re-resolves, and a policy edited in the panel must bite on the very next spawn."""
-    from interact.agents.policy import Policy
-
     return Policy.load()
 
 
@@ -85,8 +84,6 @@ def check_provider_active(provider: str) -> None:
     "we should be able to, from interact, chose if we activate the agents or not for a provider" —
     off means OFF at the one place every spawn passes through, not merely hidden in a picker.
     """
-    from interact.agents.policy import policy_path
-
     try:
         active = load_policy().provider_active(provider)
     except Exception:
@@ -365,9 +362,7 @@ async def run_agent(
     # events to the caller's event loop: a caller that spawned and returned lost every event, and
     # the run then looked HEALTHY — status done, exit 0, no cost, no activity — which is worse
     # than looking crashed. At the OS level the stream survives the caller, and interact dying.
-    raw_path = reg.raw_events_path(run_id)
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    sink = raw_path.open("wb")
+    sink = reg.open_raw_events(run_id, append=False)
     try:
         process = await asyncio.create_subprocess_exec(
             *argv, cwd=cwd, env=env,

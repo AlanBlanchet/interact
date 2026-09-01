@@ -12,7 +12,136 @@ export type ModelCapability = "llm" | "vlm" | "gui_grounding" | "computer_use" |
  * How bounding box values are sequenced in model output.
  */
 export type BoxOrder = "xyxy" | "yxyx" | "xywh";
+/**
+ * One finite input envelope; its method selects exactly one parameter shape.
+ */
+export type ConversationCommand =
+  | InitializeCommand
+  | CatalogCommand
+  | StartCommand
+  | SendCommand
+  | CancelCommand
+  | InteractionCommand;
+/**
+ * A finite response envelope: success payload or bounded typed error, never both.
+ */
+export type ConversationResponse = InitializeResponse | CatalogResponse | RunResponse | ErrorResponse;
 
+/**
+ * A single thing that happened inside an agent run, provider-agnostic.
+ */
+export interface AgentEvent {
+  kind:
+    | "started"
+    | "text"
+    | "thinking"
+    | "tool"
+    | "tool_result"
+    | "message"
+    | "rate_limit"
+    | "done"
+    | "error"
+    | "prompt"
+    | "spawn"
+    | "interaction"
+    | "interaction_resolved"
+    | "cancelled"
+    | "other";
+  event_id?: string;
+  sequence?: number | null;
+  provider_cursor?: string;
+  parent_event_id?: string | null;
+  turn_id?: string | null;
+  agent_run_id?: string | null;
+  text?: string;
+  session_id?: string | null;
+  tool?: string | null;
+  tool_input?: string;
+  tool_id?: string;
+  from_run?: string | null;
+  to_run?: string | null;
+  raw_index?: number | null;
+  cost_usd?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  raw_type?: string;
+  interaction?: ConversationInteraction | null;
+  status?:
+    | (
+        | "starting"
+        | "running"
+        | "waiting"
+        | "completed"
+        | "failed"
+        | "cancelled"
+        | "provider_failed"
+        | "interaction_required"
+        | "unknown"
+      )
+    | null;
+  final_text?: boolean;
+  at?: number | null;
+}
+export interface ConversationInteraction {
+  id: string;
+  kind: "command_approval" | "file_change_approval" | "user_input" | "permission_approval";
+  title: string;
+  /**
+   * @minItems 1
+   */
+  fields: [InteractionField, ...InteractionField[]];
+  disclosure?: string[];
+}
+export interface InteractionField {
+  key: string;
+  kind: "choice" | "text" | "boolean";
+  label: string;
+  required?: boolean;
+  options?: string[];
+}
+/**
+ * One supervised run. ``run_id`` is the vendor's own session id where the CLI lets us set it
+ * (Claude Code's ``--session-id``), so `claude --resume <run_id>` and this record agree with no
+ * mapping table to fall out of date.
+ */
+export interface AgentRun {
+  run_id: string;
+  kind?: "process" | "conversation" | "provider_child";
+  provider: string;
+  name: string;
+  task?: string;
+  cwd?: string;
+  project?: string;
+  pid?: number | null;
+  model?: string | null;
+  agent?: string | null;
+  definition_path?: string | null;
+  permission_mode?: string | null;
+  parent_run_id?: string | null;
+  root_run_id?: string | null;
+  spawned_by_event_id?: string | null;
+  provider_session_id?: string | null;
+  provider_turn_id?: string | null;
+  connection?: ("local_session" | "api") | null;
+  requested_model?: string | null;
+  requested_criterion?: string | null;
+  cataloged_at?: number | null;
+  charge_path?: "subscription_quota" | "usage_credit" | "metered_api" | "local_compute" | "unknown";
+  cost_certainty?: "known" | "unknown";
+  capabilities?: ("streaming" | "resume" | "cancel" | "approvals" | "collaboration")[];
+  tools?: string[];
+  started_at?: number;
+  finished_at?: number | null;
+  exit_code?: number | null;
+  foreign?: boolean;
+  status?: "starting" | "running" | "waiting" | "done" | "failed" | "cancelled" | "crashed" | "stopped" | "foreign";
+  cost_usd?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  last?: string;
+}
 /**
  * A benchmark for evaluating VLM capability.
  *
@@ -89,6 +218,141 @@ export interface CoordFormat {
   divisor?: number;
   prompt_template?: string;
 }
+export interface CancelCommand {
+  version: 1;
+  request_id: string;
+  method: "cancel";
+  run_id: string;
+}
+export interface CatalogCommand {
+  version: 1;
+  request_id: string;
+  method: "catalog";
+}
+export interface CatalogResponse {
+  version: 1;
+  type: "response";
+  method: "catalog";
+  request_id: string;
+  ok: true;
+  catalog: ConversationCatalog;
+}
+/**
+ * The account-scoped routes, models, and criterion vocabulary available right now.
+ */
+export interface ConversationCatalog {
+  version?: 1;
+  routes: ConversationRoute[];
+  criteria: string[];
+  cataloged_at: number;
+}
+/**
+ * One live provider + connection pairing and the models it can run now.
+ */
+export interface ConversationRoute {
+  id: string;
+  provider: string;
+  connection: "local_session" | "api";
+  label: string;
+  availability: "available" | "unavailable" | "unauthenticated" | "incompatible" | "policy_blocked";
+  reason?: string;
+  charge_path: "subscription_quota" | "usage_credit" | "metered_api" | "local_compute" | "unknown";
+  cost_certainty: "known" | "unknown";
+  billing_note: string;
+  authenticated?: boolean | null;
+  capabilities?: ("streaming" | "resume" | "cancel" | "approvals" | "collaboration")[];
+  models?: Model[];
+  default_model?: string | null;
+  cataloged_at: number;
+}
+export interface InitializeCommand {
+  version: 1;
+  request_id: string;
+  method: "initialize";
+}
+export interface StartCommand {
+  version: 1;
+  request_id: string;
+  method: "start";
+  request: ConversationRequest;
+}
+/**
+ * A validated first turn; continuation inherits its persisted route and model.
+ */
+export interface ConversationRequest {
+  route_id: string;
+  prompt: string;
+  selection?: ModelSelection;
+  workspace_root?: string | null;
+}
+/**
+ * Unresolved user intent: one exact model, one criterion, or the route default.
+ */
+export interface ModelSelection {
+  model?: string | null;
+  criterion?: string | null;
+}
+export interface SendCommand {
+  version: 1;
+  request_id: string;
+  method: "send";
+  run_id: string;
+  prompt: string;
+}
+export interface InteractionCommand {
+  version: 1;
+  request_id: string;
+  method: "interaction";
+  run_id: string;
+  submission: InteractionSubmission;
+}
+export interface InteractionSubmission {
+  interaction_id: string;
+  values: {
+    [k: string]: string | boolean;
+  };
+}
+export interface InitializeResponse {
+  version: 1;
+  type: "response";
+  method: "initialize";
+  request_id: string;
+  ok: true;
+  methods: ("initialize" | "catalog" | "start" | "send" | "cancel" | "interaction")[];
+}
+export interface RunResponse {
+  version: 1;
+  type: "response";
+  method: "start" | "send" | "cancel" | "interaction";
+  request_id: string;
+  ok: true;
+  run: AgentRun;
+}
+export interface ErrorResponse {
+  version: 1;
+  type: "response";
+  method?: ("initialize" | "catalog" | "start" | "send" | "cancel" | "interaction") | null;
+  request_id: string;
+  ok: false;
+  error_code:
+    | "invalid_request"
+    | "unsupported_version"
+    | "unavailable"
+    | "unauthenticated"
+    | "incompatible"
+    | "not_found"
+    | "conflict"
+    | "provider_failed"
+    | "cancelled"
+    | "internal_error";
+  error: string;
+}
+export interface ConversationStreamEvent {
+  version: 1;
+  type: "event";
+  run: AgentRun;
+  event: AgentEvent;
+}
 export interface ModelSpec {
   input_cost_per_million?: number | null;
   output_cost_per_million?: number | null;
@@ -152,4 +416,112 @@ export interface UsageEntry {
   incremental_cost_usd?: number | null;
   api_equivalent_cost_usd?: number | null;
   cost?: number | null;
+}
+
+type WireSchema = {
+  $defs?: Record<string, WireSchema>;
+  $ref?: string;
+  anyOf?: WireSchema[];
+  oneOf?: WireSchema[];
+  const?: unknown;
+  enum?: unknown[];
+  type?: string;
+  required?: string[];
+  properties?: Record<string, WireSchema>;
+  items?: WireSchema;
+  additionalProperties?: boolean | WireSchema;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  minProperties?: number;
+  maxProperties?: number;
+};
+
+const conversationSchemas = {"AgentEvent":{"$defs":{"ConversationInteraction":{"additionalProperties":false,"properties":{"disclosure":{"items":{"type":"string"},"title":"Disclosure","type":"array"},"fields":{"items":{"$ref":"#/$defs/InteractionField"},"minItems":1,"title":"Fields","type":"array"},"id":{"maxLength":160,"minLength":1,"title":"Id","type":"string"},"kind":{"enum":["command_approval","file_change_approval","user_input","permission_approval"],"title":"Kind","type":"string"},"title":{"maxLength":500,"minLength":1,"title":"Title","type":"string"}},"required":["id","kind","title","fields"],"title":"ConversationInteraction","type":"object"},"InteractionField":{"additionalProperties":false,"properties":{"key":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Key","type":"string"},"kind":{"enum":["choice","text","boolean"],"title":"Kind","type":"string"},"label":{"maxLength":500,"minLength":1,"title":"Label","type":"string"},"options":{"items":{"type":"string"},"title":"Options","type":"array"},"required":{"default":true,"title":"Required","type":"boolean"}},"required":["key","kind","label"],"title":"InteractionField","type":"object"}},"description":"A single thing that happened inside an agent run, provider-agnostic.","properties":{"agent_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Agent Run Id"},"at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"At"},"cached_input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cached Input Tokens"},"cost_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cost Usd"},"event_id":{"default":"","title":"Event Id","type":"string"},"final_text":{"default":false,"title":"Final Text","type":"boolean"},"from_run":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"From Run"},"input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Input Tokens"},"interaction":{"anyOf":[{"$ref":"#/$defs/ConversationInteraction"},{"type":"null"}],"default":null},"kind":{"enum":["started","text","thinking","tool","tool_result","message","rate_limit","done","error","prompt","spawn","interaction","interaction_resolved","cancelled","other"],"title":"Kind","type":"string"},"output_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Output Tokens"},"parent_event_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Parent Event Id"},"provider_cursor":{"default":"","title":"Provider Cursor","type":"string"},"raw_index":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Raw Index"},"raw_type":{"default":"","title":"Raw Type","type":"string"},"sequence":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Sequence"},"session_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Session Id"},"status":{"anyOf":[{"enum":["starting","running","waiting","completed","failed","cancelled","provider_failed","interaction_required","unknown"],"type":"string"},{"type":"null"}],"default":null,"title":"Status"},"text":{"default":"","title":"Text","type":"string"},"to_run":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"To Run"},"tool":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Tool"},"tool_id":{"default":"","title":"Tool Id","type":"string"},"tool_input":{"default":"","title":"Tool Input","type":"string"},"turn_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Turn Id"}},"required":["kind"],"title":"AgentEvent","type":"object"},"AgentRun":{"description":"One supervised run. ``run_id`` is the vendor's own session id where the CLI lets us set it\n(Claude Code's ``--session-id``), so `claude --resume <run_id>` and this record agree with no\nmapping table to fall out of date.","properties":{"agent":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Agent"},"cached_input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cached Input Tokens"},"capabilities":{"items":{"enum":["streaming","resume","cancel","approvals","collaboration"],"type":"string"},"title":"Capabilities","type":"array"},"cataloged_at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cataloged At"},"charge_path":{"default":"unknown","enum":["subscription_quota","usage_credit","metered_api","local_compute","unknown"],"title":"Charge Path","type":"string"},"connection":{"anyOf":[{"enum":["local_session","api"],"type":"string"},{"type":"null"}],"default":null,"title":"Connection"},"cost_certainty":{"default":"unknown","enum":["known","unknown"],"title":"Cost Certainty","type":"string"},"cost_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cost Usd"},"cwd":{"default":"","title":"Cwd","type":"string"},"definition_path":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Definition Path"},"exit_code":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Exit Code"},"finished_at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Finished At"},"foreign":{"default":false,"title":"Foreign","type":"boolean"},"input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Input Tokens"},"kind":{"default":"process","enum":["process","conversation","provider_child"],"title":"Kind","type":"string"},"last":{"default":"","title":"Last","type":"string"},"model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Model"},"name":{"title":"Name","type":"string"},"output_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Output Tokens"},"parent_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Parent Run Id"},"permission_mode":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Permission Mode"},"pid":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Pid"},"project":{"default":"","title":"Project","type":"string"},"provider":{"title":"Provider","type":"string"},"provider_session_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Provider Session Id"},"provider_turn_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Provider Turn Id"},"requested_criterion":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Requested Criterion"},"requested_model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Requested Model"},"root_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Root Run Id"},"run_id":{"title":"Run Id","type":"string"},"spawned_by_event_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Spawned By Event Id"},"started_at":{"default":0.0,"title":"Started At","type":"number"},"status":{"default":"running","enum":["starting","running","waiting","done","failed","cancelled","crashed","stopped","foreign"],"title":"Status","type":"string"},"task":{"default":"","title":"Task","type":"string"},"tools":{"items":{"type":"string"},"title":"Tools","type":"array"}},"required":["run_id","provider","name"],"title":"AgentRun","type":"object"},"ConversationCommand":{"$defs":{"CancelCommand":{"additionalProperties":false,"properties":{"method":{"const":"cancel","title":"Method","type":"string"},"request_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9._:-]+$","title":"Request Id","type":"string"},"run_id":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Run Id","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","request_id","method","run_id"],"title":"CancelCommand","type":"object"},"CatalogCommand":{"additionalProperties":false,"properties":{"method":{"const":"catalog","title":"Method","type":"string"},"request_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9._:-]+$","title":"Request Id","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","request_id","method"],"title":"CatalogCommand","type":"object"},"ConversationRequest":{"additionalProperties":false,"description":"A validated first turn; continuation inherits its persisted route and model.","properties":{"prompt":{"maxLength":32768,"minLength":1,"title":"Prompt","type":"string"},"route_id":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Route Id","type":"string"},"selection":{"$ref":"#/$defs/ModelSelection"},"workspace_root":{"anyOf":[{"maxLength":4096,"type":"string"},{"type":"null"}],"default":null,"title":"Workspace Root"}},"required":["route_id","prompt"],"title":"ConversationRequest","type":"object"},"InitializeCommand":{"additionalProperties":false,"properties":{"method":{"const":"initialize","title":"Method","type":"string"},"request_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9._:-]+$","title":"Request Id","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","request_id","method"],"title":"InitializeCommand","type":"object"},"InteractionCommand":{"additionalProperties":false,"properties":{"method":{"const":"interaction","title":"Method","type":"string"},"request_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9._:-]+$","title":"Request Id","type":"string"},"run_id":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Run Id","type":"string"},"submission":{"$ref":"#/$defs/InteractionSubmission"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","request_id","method","run_id","submission"],"title":"InteractionCommand","type":"object"},"InteractionSubmission":{"additionalProperties":false,"properties":{"interaction_id":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Interaction Id","type":"string"},"values":{"additionalProperties":{"anyOf":[{"type":"string"},{"type":"boolean"}]},"title":"Values","type":"object"}},"required":["interaction_id","values"],"title":"InteractionSubmission","type":"object"},"ModelSelection":{"additionalProperties":false,"description":"Unresolved user intent: one exact model, one criterion, or the route default.","properties":{"criterion":{"anyOf":[{"maxLength":512,"type":"string"},{"type":"null"}],"default":null,"title":"Criterion"},"model":{"anyOf":[{"maxLength":256,"pattern":"^[A-Za-z0-9._:/@+-]+$","type":"string"},{"type":"null"}],"default":null,"title":"Model"}},"title":"ModelSelection","type":"object"},"SendCommand":{"additionalProperties":false,"properties":{"method":{"const":"send","title":"Method","type":"string"},"prompt":{"maxLength":32768,"minLength":1,"title":"Prompt","type":"string"},"request_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9._:-]+$","title":"Request Id","type":"string"},"run_id":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Run Id","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","request_id","method","run_id","prompt"],"title":"SendCommand","type":"object"},"StartCommand":{"additionalProperties":false,"properties":{"method":{"const":"start","title":"Method","type":"string"},"request":{"$ref":"#/$defs/ConversationRequest"},"request_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9._:-]+$","title":"Request Id","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","request_id","method","request"],"title":"StartCommand","type":"object"}},"description":"One finite input envelope; its method selects exactly one parameter shape.","discriminator":{"mapping":{"cancel":"#/$defs/CancelCommand","catalog":"#/$defs/CatalogCommand","initialize":"#/$defs/InitializeCommand","interaction":"#/$defs/InteractionCommand","send":"#/$defs/SendCommand","start":"#/$defs/StartCommand"},"propertyName":"method"},"oneOf":[{"$ref":"#/$defs/InitializeCommand"},{"$ref":"#/$defs/CatalogCommand"},{"$ref":"#/$defs/StartCommand"},{"$ref":"#/$defs/SendCommand"},{"$ref":"#/$defs/CancelCommand"},{"$ref":"#/$defs/InteractionCommand"}],"title":"ConversationCommand"},"ConversationResponse":{"$defs":{"AgentRun":{"description":"One supervised run. ``run_id`` is the vendor's own session id where the CLI lets us set it\n(Claude Code's ``--session-id``), so `claude --resume <run_id>` and this record agree with no\nmapping table to fall out of date.","properties":{"agent":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Agent"},"cached_input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cached Input Tokens"},"capabilities":{"items":{"enum":["streaming","resume","cancel","approvals","collaboration"],"type":"string"},"title":"Capabilities","type":"array"},"cataloged_at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cataloged At"},"charge_path":{"default":"unknown","enum":["subscription_quota","usage_credit","metered_api","local_compute","unknown"],"title":"Charge Path","type":"string"},"connection":{"anyOf":[{"enum":["local_session","api"],"type":"string"},{"type":"null"}],"default":null,"title":"Connection"},"cost_certainty":{"default":"unknown","enum":["known","unknown"],"title":"Cost Certainty","type":"string"},"cost_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cost Usd"},"cwd":{"default":"","title":"Cwd","type":"string"},"definition_path":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Definition Path"},"exit_code":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Exit Code"},"finished_at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Finished At"},"foreign":{"default":false,"title":"Foreign","type":"boolean"},"input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Input Tokens"},"kind":{"default":"process","enum":["process","conversation","provider_child"],"title":"Kind","type":"string"},"last":{"default":"","title":"Last","type":"string"},"model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Model"},"name":{"title":"Name","type":"string"},"output_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Output Tokens"},"parent_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Parent Run Id"},"permission_mode":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Permission Mode"},"pid":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Pid"},"project":{"default":"","title":"Project","type":"string"},"provider":{"title":"Provider","type":"string"},"provider_session_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Provider Session Id"},"provider_turn_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Provider Turn Id"},"requested_criterion":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Requested Criterion"},"requested_model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Requested Model"},"root_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Root Run Id"},"run_id":{"title":"Run Id","type":"string"},"spawned_by_event_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Spawned By Event Id"},"started_at":{"default":0.0,"title":"Started At","type":"number"},"status":{"default":"running","enum":["starting","running","waiting","done","failed","cancelled","crashed","stopped","foreign"],"title":"Status","type":"string"},"task":{"default":"","title":"Task","type":"string"},"tools":{"items":{"type":"string"},"title":"Tools","type":"array"}},"required":["run_id","provider","name"],"title":"AgentRun","type":"object"},"BoxOrder":{"description":"How bounding box values are sequenced in model output.","enum":["xyxy","yxyx","xywh"],"title":"BoxOrder","type":"string"},"CatalogResponse":{"properties":{"catalog":{"$ref":"#/$defs/ConversationCatalog"},"method":{"const":"catalog","title":"Method","type":"string"},"ok":{"const":true,"title":"Ok","type":"boolean"},"request_id":{"title":"Request Id","type":"string"},"type":{"const":"response","title":"Type","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","type","method","request_id","ok","catalog"],"title":"CatalogResponse","type":"object"},"ConversationCatalog":{"description":"The account-scoped routes, models, and criterion vocabulary available right now.","properties":{"cataloged_at":{"title":"Cataloged At","type":"number"},"criteria":{"items":{"type":"string"},"title":"Criteria","type":"array"},"routes":{"items":{"$ref":"#/$defs/ConversationRoute"},"title":"Routes","type":"array"},"version":{"const":1,"default":1,"title":"Version","type":"integer"}},"required":["routes","criteria","cataloged_at"],"title":"ConversationCatalog","type":"object"},"ConversationRoute":{"description":"One live provider + connection pairing and the models it can run now.","properties":{"authenticated":{"anyOf":[{"type":"boolean"},{"type":"null"}],"default":null,"title":"Authenticated"},"availability":{"enum":["available","unavailable","unauthenticated","incompatible","policy_blocked"],"title":"Availability","type":"string"},"billing_note":{"maxLength":500,"title":"Billing Note","type":"string"},"capabilities":{"items":{"enum":["streaming","resume","cancel","approvals","collaboration"],"type":"string"},"title":"Capabilities","type":"array"},"cataloged_at":{"title":"Cataloged At","type":"number"},"charge_path":{"enum":["subscription_quota","usage_credit","metered_api","local_compute","unknown"],"title":"Charge Path","type":"string"},"connection":{"enum":["local_session","api"],"title":"Connection","type":"string"},"cost_certainty":{"enum":["known","unknown"],"title":"Cost Certainty","type":"string"},"default_model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Default Model"},"id":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Id","type":"string"},"label":{"maxLength":160,"minLength":1,"title":"Label","type":"string"},"models":{"items":{"$ref":"#/$defs/Model"},"title":"Models","type":"array"},"provider":{"maxLength":80,"minLength":1,"title":"Provider","type":"string"},"reason":{"default":"","maxLength":500,"title":"Reason","type":"string"}},"required":["id","provider","connection","label","availability","charge_path","cost_certainty","billing_note","cataloged_at"],"title":"ConversationRoute","type":"object"},"CoordFormat":{"description":"Typed coordinate format spec for a VLM model's grounding output.\n\nA ``prefix`` of ``\"\"`` denotes the implicit default (pixel coords).\nLookup uses :meth:`for_model`; registry is populated by\n:meth:`load_from_config` from the extension's ``coordFormats`` block.","properties":{"box_key":{"default":"","title":"Box Key","type":"string"},"box_order":{"$ref":"#/$defs/BoxOrder","default":"xywh"},"divisor":{"default":1000,"title":"Divisor","type":"integer"},"normalized":{"default":false,"title":"Normalized","type":"boolean"},"prefix":{"default":"","title":"Prefix","type":"string"},"prompt_template":{"default":"","title":"Prompt Template","type":"string"}},"title":"CoordFormat","type":"object"},"ErrorResponse":{"properties":{"error":{"maxLength":500,"title":"Error","type":"string"},"error_code":{"enum":["invalid_request","unsupported_version","unavailable","unauthenticated","incompatible","not_found","conflict","provider_failed","cancelled","internal_error"],"title":"Error Code","type":"string"},"method":{"anyOf":[{"enum":["initialize","catalog","start","send","cancel","interaction"],"type":"string"},{"type":"null"}],"default":null,"title":"Method"},"ok":{"const":false,"title":"Ok","type":"boolean"},"request_id":{"title":"Request Id","type":"string"},"type":{"const":"response","title":"Type","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","type","request_id","ok","error_code","error"],"title":"ErrorResponse","type":"object"},"InitializeResponse":{"properties":{"method":{"const":"initialize","title":"Method","type":"string"},"methods":{"items":{"enum":["initialize","catalog","start","send","cancel","interaction"],"type":"string"},"title":"Methods","type":"array"},"ok":{"const":true,"title":"Ok","type":"boolean"},"request_id":{"title":"Request Id","type":"string"},"type":{"const":"response","title":"Type","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","type","method","request_id","ok","methods"],"title":"InitializeResponse","type":"object"},"Model":{"properties":{"capabilities":{"items":{"$ref":"#/$defs/ModelCapability"},"title":"Capabilities","type":"array","uniqueItems":true},"coord_format":{"anyOf":[{"$ref":"#/$defs/CoordFormat"},{"type":"null"}],"default":null},"id":{"title":"Id","type":"string"},"input_cost_per_million":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Input Cost Per Million"},"intelligence_score":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Intelligence Score"},"output_cost_per_million":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Output Cost Per Million"},"provider":{"title":"Provider","type":"string"},"supports_structured_output":{"default":false,"title":"Supports Structured Output","type":"boolean"}},"required":["id","provider","capabilities"],"title":"Model","type":"object"},"ModelCapability":{"enum":["llm","vlm","gui_grounding","computer_use","video","audio"],"title":"ModelCapability","type":"string"},"RunResponse":{"properties":{"method":{"enum":["start","send","cancel","interaction"],"title":"Method","type":"string"},"ok":{"const":true,"title":"Ok","type":"boolean"},"request_id":{"title":"Request Id","type":"string"},"run":{"$ref":"#/$defs/AgentRun"},"type":{"const":"response","title":"Type","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","type","method","request_id","ok","run"],"title":"RunResponse","type":"object"}},"anyOf":[{"$ref":"#/$defs/InitializeResponse"},{"$ref":"#/$defs/CatalogResponse"},{"$ref":"#/$defs/RunResponse"},{"$ref":"#/$defs/ErrorResponse"}],"description":"A finite response envelope: success payload or bounded typed error, never both.","title":"ConversationResponse"},"ConversationStreamEvent":{"$defs":{"AgentEvent":{"description":"A single thing that happened inside an agent run, provider-agnostic.","properties":{"agent_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Agent Run Id"},"at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"At"},"cached_input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cached Input Tokens"},"cost_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cost Usd"},"event_id":{"default":"","title":"Event Id","type":"string"},"final_text":{"default":false,"title":"Final Text","type":"boolean"},"from_run":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"From Run"},"input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Input Tokens"},"interaction":{"anyOf":[{"$ref":"#/$defs/ConversationInteraction"},{"type":"null"}],"default":null},"kind":{"enum":["started","text","thinking","tool","tool_result","message","rate_limit","done","error","prompt","spawn","interaction","interaction_resolved","cancelled","other"],"title":"Kind","type":"string"},"output_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Output Tokens"},"parent_event_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Parent Event Id"},"provider_cursor":{"default":"","title":"Provider Cursor","type":"string"},"raw_index":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Raw Index"},"raw_type":{"default":"","title":"Raw Type","type":"string"},"sequence":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Sequence"},"session_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Session Id"},"status":{"anyOf":[{"enum":["starting","running","waiting","completed","failed","cancelled","provider_failed","interaction_required","unknown"],"type":"string"},{"type":"null"}],"default":null,"title":"Status"},"text":{"default":"","title":"Text","type":"string"},"to_run":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"To Run"},"tool":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Tool"},"tool_id":{"default":"","title":"Tool Id","type":"string"},"tool_input":{"default":"","title":"Tool Input","type":"string"},"turn_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Turn Id"}},"required":["kind"],"title":"AgentEvent","type":"object"},"AgentRun":{"description":"One supervised run. ``run_id`` is the vendor's own session id where the CLI lets us set it\n(Claude Code's ``--session-id``), so `claude --resume <run_id>` and this record agree with no\nmapping table to fall out of date.","properties":{"agent":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Agent"},"cached_input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cached Input Tokens"},"capabilities":{"items":{"enum":["streaming","resume","cancel","approvals","collaboration"],"type":"string"},"title":"Capabilities","type":"array"},"cataloged_at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cataloged At"},"charge_path":{"default":"unknown","enum":["subscription_quota","usage_credit","metered_api","local_compute","unknown"],"title":"Charge Path","type":"string"},"connection":{"anyOf":[{"enum":["local_session","api"],"type":"string"},{"type":"null"}],"default":null,"title":"Connection"},"cost_certainty":{"default":"unknown","enum":["known","unknown"],"title":"Cost Certainty","type":"string"},"cost_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Cost Usd"},"cwd":{"default":"","title":"Cwd","type":"string"},"definition_path":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Definition Path"},"exit_code":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Exit Code"},"finished_at":{"anyOf":[{"type":"number"},{"type":"null"}],"default":null,"title":"Finished At"},"foreign":{"default":false,"title":"Foreign","type":"boolean"},"input_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Input Tokens"},"kind":{"default":"process","enum":["process","conversation","provider_child"],"title":"Kind","type":"string"},"last":{"default":"","title":"Last","type":"string"},"model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Model"},"name":{"title":"Name","type":"string"},"output_tokens":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Output Tokens"},"parent_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Parent Run Id"},"permission_mode":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Permission Mode"},"pid":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Pid"},"project":{"default":"","title":"Project","type":"string"},"provider":{"title":"Provider","type":"string"},"provider_session_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Provider Session Id"},"provider_turn_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Provider Turn Id"},"requested_criterion":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Requested Criterion"},"requested_model":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Requested Model"},"root_run_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Root Run Id"},"run_id":{"title":"Run Id","type":"string"},"spawned_by_event_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Spawned By Event Id"},"started_at":{"default":0.0,"title":"Started At","type":"number"},"status":{"default":"running","enum":["starting","running","waiting","done","failed","cancelled","crashed","stopped","foreign"],"title":"Status","type":"string"},"task":{"default":"","title":"Task","type":"string"},"tools":{"items":{"type":"string"},"title":"Tools","type":"array"}},"required":["run_id","provider","name"],"title":"AgentRun","type":"object"},"ConversationInteraction":{"additionalProperties":false,"properties":{"disclosure":{"items":{"type":"string"},"title":"Disclosure","type":"array"},"fields":{"items":{"$ref":"#/$defs/InteractionField"},"minItems":1,"title":"Fields","type":"array"},"id":{"maxLength":160,"minLength":1,"title":"Id","type":"string"},"kind":{"enum":["command_approval","file_change_approval","user_input","permission_approval"],"title":"Kind","type":"string"},"title":{"maxLength":500,"minLength":1,"title":"Title","type":"string"}},"required":["id","kind","title","fields"],"title":"ConversationInteraction","type":"object"},"InteractionField":{"additionalProperties":false,"properties":{"key":{"maxLength":160,"minLength":1,"pattern":"^[A-Za-z0-9._:@+-]+$","title":"Key","type":"string"},"kind":{"enum":["choice","text","boolean"],"title":"Kind","type":"string"},"label":{"maxLength":500,"minLength":1,"title":"Label","type":"string"},"options":{"items":{"type":"string"},"title":"Options","type":"array"},"required":{"default":true,"title":"Required","type":"boolean"}},"required":["key","kind","label"],"title":"InteractionField","type":"object"}},"properties":{"event":{"$ref":"#/$defs/AgentEvent"},"run":{"$ref":"#/$defs/AgentRun"},"type":{"const":"event","title":"Type","type":"string"},"version":{"const":1,"title":"Version","type":"integer"}},"required":["version","type","run","event"],"title":"ConversationStreamEvent","type":"object"}} as Record<string, WireSchema>;
+
+function wireRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function schemaValue(schema: WireSchema, value: unknown, root: WireSchema): boolean {
+  if (schema.$ref) {
+    const name = schema.$ref.split("/").at(-1);
+    return Boolean(name && root.$defs?.[name] && schemaValue(root.$defs[name], value, root));
+  }
+  if (schema.anyOf && !schema.anyOf.some((choice) => schemaValue(choice, value, root))) return false;
+  if (schema.oneOf && schema.oneOf.filter((choice) => schemaValue(choice, value, root)).length !== 1) return false;
+  if ("const" in schema && value !== schema.const) return false;
+  if (schema.enum && !schema.enum.some((choice) => choice === value)) return false;
+  if (schema.type === "null") return value === null;
+  if (schema.type === "string" && typeof value !== "string") return false;
+  if (typeof value === "string") {
+    if (schema.minLength !== undefined && value.length < schema.minLength) return false;
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) return false;
+    if (schema.pattern && !new RegExp(schema.pattern, "u").test(value)) return false;
+  }
+  if ((schema.type === "number" || schema.type === "integer") && typeof value !== "number") return false;
+  if (schema.type === "integer" && typeof value === "number" && !Number.isInteger(value)) return false;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return false;
+    if (schema.minimum !== undefined && value < schema.minimum) return false;
+    if (schema.maximum !== undefined && value > schema.maximum) return false;
+    if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) return false;
+    if (schema.exclusiveMaximum !== undefined && value >= schema.exclusiveMaximum) return false;
+  }
+  if (schema.type === "boolean" && typeof value !== "boolean") return false;
+  if (schema.type === "array") {
+    if (!Array.isArray(value)) return false;
+    if (schema.minItems !== undefined && value.length < schema.minItems) return false;
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) return false;
+    return !schema.items || value.every((item) => schemaValue(schema.items!, item, root));
+  }
+  if (schema.type === "object" || schema.properties || schema.required) {
+    if (!wireRecord(value)) return false;
+    if (schema.minProperties !== undefined && Object.keys(value).length < schema.minProperties) return false;
+    if (schema.maxProperties !== undefined && Object.keys(value).length > schema.maxProperties) return false;
+    if (schema.required?.some((key) => !(key in value))) return false;
+    for (const [key, item] of Object.entries(value)) {
+      const property = schema.properties?.[key];
+      if (property) {
+        if (!schemaValue(property, item, root)) return false;
+      } else if (schema.additionalProperties === false) return false;
+      else if (wireRecord(schema.additionalProperties)
+          && !schemaValue(schema.additionalProperties, item, root)) return false;
+    }
+  }
+  return true;
+}
+
+function decodeWire<Type>(name: string, value: unknown): Type {
+  const schema = conversationSchemas[name];
+  if (!schema || !schemaValue(schema, value, schema)) {
+    throw new TypeError(`${name} does not match the generated Python wire contract`);
+  }
+  return value as Type;
+}
+
+export function decodeConversationCommand(value: unknown): ConversationCommand {
+  return decodeWire<ConversationCommand>("ConversationCommand", value);
+}
+
+export function decodeConversationResponse(value: unknown): ConversationResponse {
+  return decodeWire<ConversationResponse>("ConversationResponse", value);
+}
+
+export function decodeConversationStreamEvent(value: unknown): ConversationStreamEvent {
+  return decodeWire<ConversationStreamEvent>("ConversationStreamEvent", value);
+}
+
+export function decodeAgentRun(value: unknown): AgentRun {
+  return decodeWire<AgentRun>("AgentRun", value);
+}
+
+export function decodeAgentEvent(value: unknown): AgentEvent {
+  return decodeWire<AgentEvent>("AgentEvent", value);
 }

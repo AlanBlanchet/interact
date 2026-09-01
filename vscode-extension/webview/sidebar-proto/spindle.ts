@@ -58,9 +58,9 @@ function elapsedOf(d: Docket, at: number): string {
   return shortDuration(Math.max(0, end - d.started_at));
 }
 
-/** API-EQUIVALENT value: a subscription run already paid for it. `null` is UNKNOWN and renders an
- *  em dash — "$0.00" would claim the run was free, which is a different and wrong fact. One fixed
- *  precision all the way down the column, or the figures sit ragged against each other. */
+/** API-equivalent usage value, separate from provider charge and account impact. `null` is unknown
+ *  and renders an em dash rather than inventing zero. One fixed precision all the way down the
+ *  column keeps the figures aligned. */
 function costOf(cost: number | null | undefined): string {
   return cost == null ? "—" : `~$${cost.toFixed(4)}`;
 }

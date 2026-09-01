@@ -12,56 +12,31 @@ import * as path from "path";
 
 import { agentsDir } from "./paths";
 import { readForeignActivity } from "./foreignSession";
-import { livenessOf } from "./runStatus";
+import { livenessOf, runStatusOf, type RunStatus } from "./runStatus";
+import type {
+  AgentEvent as GeneratedAgentEvent,
+  AgentRun as GeneratedAgentRun,
+} from "./generated/types";
+import { decodeAgentEvent, decodeAgentRun } from "./generated/types";
 
-/** One supervised run. Mirrors Python's `AgentRun`; unknown fields are ignored so a newer
- *  writer never breaks an older reader. */
-export interface AgentRun {
-  run_id: string;
-  provider: string;
-  name: string;
-  task?: string;
-  cwd?: string;
-  /** The repo/package this run belongs to, derived by Python from the repo root — NOT the working
-   *  directory's own name, which splits one project across several groups. */
-  project?: string;
-  status: "running" | "done" | "failed" | "crashed" | "stopped" | "foreign"
-    /** Declared in the company file, never yet asked for anything — a synthetic entry the panel
-     *  makes so the whole roster stands in the world ("some other agents exist but aren't used"). */
-    | "declared";
-  pid?: number | null;
-  /** The DEFINITION this run is — resolves to the file holding its system prompt. */
-  agent?: string | null;
-  /** Where that definition's system prompt actually lives, resolved by Python THROUGH the
-   *  provider at registration — so the link works for a CLI that does not keep its definitions
-   *  where Claude Code does. Absent on runs registered before it was tracked. */
-  definition_path?: string | null;
-  /** The autonomy this run was started under, when somebody chose one. Absent means nobody did,
-   *  so the CLI's own configured default applied — which is not the same as unrestricted. */
-  permission_mode?: string | null;
-  /** Cumulative token use: how much CONTEXT it has consumed, which a cost figure alone hides. */
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  /** The model the run was launched with, when the spawner knew it (Python records it). */
-  model?: string | null;
-  parent_run_id?: string | null;
-  started_at?: number;
-  /** Epoch seconds the run ended. Absent for a run still going — and ALSO for one that died
-   *  before the registry could stamp it, which is why the board draws an unknown end rather
-   *  than assuming "now". */
-  finished_at?: number | null;
-  exit_code?: number | null;
-  /** API-EQUIVALENT cost. On a subscription run this value is already paid for by the plan — it
-   *  must never be presented as fresh spend. `null`/absent means unknown, which is NOT zero. */
-  cost_usd?: number | null;
-  last?: string;
-  foreign?: boolean;
+/** Python owns every persisted field. The panel adds only the required display status, including
+ * its synthetic declared roster row; no second wire contract lives here. */
+export type AgentRun = Omit<GeneratedAgentRun, "status"> & { status: RunStatus };
+
+const SAFE_RUN_ID = /^[A-Za-z0-9._:@+-]{1,160}$/;
+
+/** Mirrors Python registry `_safe_run_id`; no persisted/provider id may become a path segment. */
+function agentFile(runId: string, suffix: string): string | null {
+  if (runId === "." || runId === ".." || !SAFE_RUN_ID.test(runId)) return null;
+  return path.join(agentsDir(), `${runId}${suffix}`);
 }
 
 /** Did this run's own stream reach an end? Read from the normalised mirror, so it costs one small
  *  read and needs no knowledge of any vendor's dialect. */
 function streamEnded(runId: string): boolean {
-  return readAgentActivity(runId, 4).some((a) => a.kind === "done" || a.kind === "error");
+  if (!agentFile(runId, ".jsonl")) return false;
+  return panelActivity.read(runId).events.slice(-4)
+    .some((a) => a.kind === "done" || a.kind === "error");
 }
 
 /** Is that pid still there?
@@ -93,9 +68,15 @@ export function readAgentRuns(): AgentRun[] {
   const runs: AgentRun[] = [];
   for (const name of names) {
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
-      if (!raw || typeof raw.run_id !== "string") continue;
-      const run = raw as AgentRun;
+      const raw = decodeAgentRun(JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")));
+      if (!agentFile(raw.run_id, ".json")) continue;
+      const run: AgentRun = {
+        ...raw,
+        run_id: raw.run_id,
+        provider: raw.provider,
+        name: raw.name,
+        status: runStatusOf(raw.status),
+      };
       // Liveness is the one field the file cannot vouch for. The agent's own stream is consulted
       // too: a detached run's exit code is written by nobody, so the probe alone called every
       // finished agent a crash at the moment it succeeded.
@@ -141,38 +122,24 @@ export function withDepth(runs: AgentRun[]): { run: AgentRun; depth: number }[] 
   });
 }
 
-/** One thing an agent did, as the panel needs it: when, and what.
- *
- *  The vendor's raw stream is a provider-specific dialect, so this reads the NORMALISED events
- *  the Python side writes. Anything it cannot parse is skipped rather than throwing — a
- *  half-written line during a crash must not blank a run's history.
- */
-export interface AgentActivity {
-  kind: string;
-  text: string;
-  tool?: string | null;
-  /** The tool's arguments, already summarised by Python. "used Bash" without the command is a
-   *  status line; with it, it is a transcript. */
-  tool_input?: string;
-  /** The vendor's tool_use id, on the call AND its result — the stable key that opens the FULL
-   *  input/output for one call out of the raw stream (the summary above is clipped by design). */
-  tool_id?: string;
-  /** For a message: who sent it and who received it. "operator" is a person; anything else is
-   *  another agent — which is the difference between you talking to it and a TEAM talking. */
-  from_run?: string | null;
-  to_run?: string | null;
-  /** When interact FIRST OBSERVED this line — the vendor writes no timestamp, but interact
-   *  watches the stream, so this is the honest clock. It is what tells a view that an agent is
-   *  working rather than stopped, and what lets a message fire once at the right moment. Absent
-   *  on records written before stamping existed. */
-  at?: number | null;
+/** The generated normalized event, with the display body default Python has always written. */
+export type AgentActivity = GeneratedAgentEvent & Required<Pick<GeneratedAgentEvent, "text">>;
+
+function decodeActivity(line: string): AgentActivity | null {
+  try {
+    const event = decodeAgentEvent(JSON.parse(line));
+    return { ...event, text: event.text ?? "" };
+  } catch {
+    return null;
+  }
 }
 
 /** A run's recent activity, oldest last. Bounded by `limit` because a long run's transcript is
  *  unbounded and the panel only ever shows a tail — reading it all to display ten lines would
  *  make every refresh scale with the longest-running agent. */
 export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
-  const file = path.join(agentsDir(), `${runId}.jsonl`);
+  const file = agentFile(runId, ".jsonl");
+  if (!file) return [];
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
@@ -183,26 +150,8 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const raw = JSON.parse(line);
-      if (raw && typeof raw.kind === "string") {
-        out.push({
-          kind: raw.kind,
-          text: String(raw.text ?? ""),
-          tool: raw.tool ?? null,
-          tool_input: String(raw.tool_input ?? ""),
-          tool_id: typeof raw.tool_id === "string" ? raw.tool_id : "",
-          // Who a message is from — without it every message reads as yours, so an agent
-          // talking to another agent looked exactly like you talking to it.
-          from_run: raw.from_run ?? null,
-          to_run: raw.to_run ?? null,
-          // WHEN interact observed this line. Declared and documented on AgentActivity from the
-          // start, and never copied out here — so `lastObservedAt` always returned null, every
-          // run's idle time computed as 0, and HELD became a state that exists, is styled, is in
-          // the shared vocabulary, and could not once be reached. A field the type promises and
-          // the reader drops is invisible to the compiler and to every UI test.
-          at: typeof raw.at === "number" ? raw.at : null,
-        });
-      }
+      const event = decodeActivity(line);
+      if (event) out.push(event);
     } catch {
       continue;
     }
@@ -210,18 +159,107 @@ export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
   return out.slice(-Math.max(1, limit));
 }
 
+interface ActivityRead {
+  events: AgentActivity[];
+  bytesRead: number;
+  parseInvocations: number;
+}
+
+class AgentActivityReader {
+  private readonly states = new Map<string, {
+    offset: number;
+    device: bigint;
+    inode: bigint;
+    anchor: Buffer;
+    events: AgentActivity[];
+  }>();
+
+  constructor(private readonly eventLimit: number, private readonly transcriptLimit: number) {}
+
+  public read(runId: string): ActivityRead {
+    const file = agentFile(runId, ".jsonl");
+    if (!file) return { events: [], bytesRead: 0, parseInvocations: 0 };
+    let descriptor: number;
+    try { descriptor = fs.openSync(file, "r"); } catch { return { events: [], bytesRead: 0, parseInvocations: 0 }; }
+    try {
+      const stat = fs.fstatSync(descriptor, { bigint: true });
+      const size = Number(stat.size);
+      const prior = this.states.get(runId);
+      let continued = false;
+      let anchorBytes = 0;
+      if (prior !== undefined && prior.device === stat.dev && prior.inode === stat.ino
+          && size >= prior.offset) {
+        continued = true;
+        if (prior.anchor.length) {
+          const anchor = Buffer.alloc(prior.anchor.length);
+          anchorBytes = fs.readSync(
+            descriptor, anchor, 0, anchor.length, prior.offset - prior.anchor.length,
+          );
+          continued = anchorBytes === prior.anchor.length && anchor.equals(prior.anchor);
+        }
+      }
+      const start = continued ? prior!.offset : Math.max(0, size - 127_000);
+      const buffer = Buffer.alloc(size - start);
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, start);
+      const text = buffer.subarray(0, bytesRead).toString("utf8");
+      const lastNewline = text.lastIndexOf("\n");
+      const complete = lastNewline < 0 ? "" : text.slice(0, lastNewline);
+      let rawLines = complete.split("\n");
+      if (start > 0 && !continued) rawLines = rawLines.slice(1);
+      const lines = rawLines.filter((line) => line.trim()).slice(-this.eventLimit);
+      const parsed: AgentActivity[] = [];
+      for (const line of lines) {
+        const event = decodeActivity(line);
+        if (event) parsed.push(event);
+      }
+      const base = continued ? prior!.events : [];
+      const seen = new Set(base.map((event) => event.event_id).filter(Boolean));
+      const fresh = parsed.filter((event) => !event.event_id || !seen.has(event.event_id));
+      const retained = [...base, ...fresh].slice(-this.transcriptLimit);
+      const offset = start + (lastNewline < 0 ? 0 : Buffer.byteLength(text.slice(0, lastNewline + 1)));
+      const anchorLength = Math.min(64, offset);
+      const anchor = Buffer.alloc(anchorLength);
+      const anchorRead = anchorLength
+        ? fs.readSync(descriptor, anchor, 0, anchorLength, offset - anchorLength)
+        : 0;
+      this.states.set(runId, {
+        offset,
+        device: stat.dev,
+        inode: stat.ino,
+        anchor: anchor.subarray(0, anchorRead),
+        events: retained,
+      });
+      return {
+        events: retained.slice(-this.eventLimit),
+        bytesRead: bytesRead + anchorBytes + anchorRead,
+        parseInvocations: lines.length,
+      };
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+export function createAgentActivityReader(
+  limits: { eventLimit: number; transcriptLimit: number },
+): AgentActivityReader {
+  return new AgentActivityReader(limits.eventLimit, limits.transcriptLimit);
+}
+
+const panelActivity = createAgentActivityReader({ eventLimit: 40, transcriptLimit: 300 });
+
 /** A run's activity, whichever kind of run it is: interact's own normalised stream, or — for a
  *  session interact did not start — the provider's transcript, mapped. One call site, one rule. */
 export function activityOf(run: AgentRun, limit = 40): AgentActivity[] {
   return run.status === "foreign"
     ? readForeignActivity(run, limit)
-    : readAgentActivity(run.run_id, limit);
+    : panelActivity.read(run.run_id).events.slice(-Math.max(1, limit));
 }
 
 /** Where the child wrote its OWN stream, verbatim — full tool inputs and outputs live here.
  *  Mirrors Python's `raw_events_path`. */
-export function rawEventsPath(runId: string): string {
-  return path.join(agentsDir(), `${runId}.raw.jsonl`);
+export function rawEventsPath(runId: string): string | null {
+  return agentFile(runId, ".raw.jsonl");
 }
 
 /** One agent addressing another. Written by Python to `<run_id>.messages.jsonl` on BOTH sides,

@@ -7,9 +7,10 @@ not a special case; it is one of these calls, and the parent id travels automati
 tree stays connected.
 """
 
+import asyncio
 import os
 
-from interact.agents import registry as reg
+from interact.agents import messaging, registry as reg
 from interact.agents.providers import PROVIDERS, available_providers, provider_for
 from interact.agents.run import run_agent
 from interact.server.core import instrumented, mcp
@@ -122,8 +123,8 @@ async def agent_list(include_foreign: bool = True) -> str:
     With include_foreign (default), also lists agent sessions interact did NOT start — the user's
     own editor windows — so this reflects the machine's real state rather than only our children.
 
-    Costs are API-EQUIVALENT: on a subscription plan that value is already paid for, it is not
-    fresh spend.
+    API-equivalent cost is an estimate, not proof of billed spend. Charge path and account impact
+    are unknown here: subscription usage may be included, limited, credited, or separately charged.
     """
     runs = reg.list_runs(include_foreign=include_foreign)
     if not runs:
@@ -199,11 +200,6 @@ async def agent_send(run_id: str, message: str, wait: bool = False) -> str:
     message: what to say — write it as a complete request; it cannot ask you a follow-up.
     wait: block until it has replied, instead of returning as soon as the message is delivered.
     """
-    import asyncio
-    import os
-
-    from interact.agents import messaging
-
     # Shared with `interact agents send`, so the tool and the CLI refuse the same things.
     run, error = messaging.check_deliverable(run_id)
     if error:
@@ -214,9 +210,7 @@ async def agent_send(run_id: str, message: str, wait: bool = False) -> str:
 
     # The reply continues the recipient's OWN transcript, so it is appended to that run's stream.
     argv = prov.resume_command(run_id, message)
-    raw = reg.raw_events_path(run_id)
-    raw.parent.mkdir(parents=True, exist_ok=True)
-    sink = raw.open("ab")  # append: this is another turn of the same conversation
+    sink = reg.open_raw_events(run_id, append=True)
     try:
         process = await asyncio.create_subprocess_exec(
             *argv, cwd=run.cwd or os.getcwd(), stdout=sink,

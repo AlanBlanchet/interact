@@ -5,9 +5,13 @@ uninstalled provider says which ones ARE installed, an unknown run id says how t
 ones. These tests pin that, because an error an agent can't act on stalls a whole team.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 
 import interact.server as srv
+import interact.server.tools_agents as tools_agents
 from interact.agents import registry as reg
 from interact.agents.events import AgentEvent
 
@@ -17,6 +21,24 @@ def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     yield
+
+
+def test_agent_tool_functions_have_no_local_imports() -> None:
+    module_path = tools_agents.__file__
+    assert module_path is not None
+    tree = ast.parse(Path(module_path).read_text())
+    functions = (
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+    )
+    local_imports = [
+        (function.name, imported.lineno)
+        for function in functions
+        for imported in ast.walk(function)
+        if isinstance(imported, (ast.Import, ast.ImportFrom))
+    ]
+
+    assert local_imports == []
 
 
 @pytest.mark.asyncio
@@ -54,6 +76,18 @@ async def test_the_listing_shows_status_cost_and_the_tree(monkeypatch):
     assert "0.1250" in out          # per-agent cost is real, not a placeholder
     assert "Team tree" in out and "spawned by" in out
     assert "API-equivalent" in out  # never presented as fresh spend
+
+
+@pytest.mark.asyncio
+async def test_agent_list_schema_does_not_invent_subscription_billing():
+    tools = await srv.mcp.list_tools()
+    description = next(tool.description for tool in tools if tool.name == "agent_list")
+
+    assert "already paid" not in description.lower()
+    assert "not fresh spend" not in description.lower()
+    assert "charge path" in description.lower()
+    assert "account impact" in description.lower()
+    assert "unknown" in description.lower()
 
 
 @pytest.mark.asyncio

@@ -13,9 +13,12 @@ and another didn't they would look in different places — exactly the metering 
 reintroduced at the feature level. `server_registry._runtime_dir` is pinned for the same reason.
 """
 
+import errno
+import hashlib
 import json
-
 import os
+import stat
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -40,6 +43,440 @@ def test_the_registry_ignores_the_debug_dir_override(tmp_path):
     # It must be findable by a process that never saw INTERACT_DEBUG_DIR.
     assert "somewhere-else" not in str(reg.agents_dir())
     assert reg.agents_dir() == tmp_path / ".interact" / "out" / "agents"
+
+
+def test_registry_storage_is_private_despite_a_permissive_umask():
+    registry = reg.agents_dir()
+    parents = (registry.parents[1], registry.parent, registry)
+    for directory in parents:
+        directory.mkdir(exist_ok=True)
+        directory.chmod(0o775)
+
+    existing = (
+        registry / "r1.json",
+        reg.events_path("r1"),
+        reg.messages_path("r1"),
+        reg.raw_events_path("r1"),
+    )
+    for path in existing:
+        path.write_text("")
+        path.chmod(0o664)
+
+    previous_umask = os.umask(0o002)
+    try:
+        _record()
+        _record(run_id="r2")
+        reg.append_event("r1", AgentEvent(kind="text", text="private event"))
+        assert reg.record_message(from_run="r1", to_run="r2", text="private message")
+        with reg.open_raw_events("r2", append=False) as stream:
+            stream.write(b"private provider frame\n")
+    finally:
+        os.umask(previous_umask)
+
+    assert [stat.S_IMODE(path.stat().st_mode) for path in parents] == [0o700] * len(parents)
+    registry_files = [path for path in registry.iterdir() if path.is_file()]
+    assert registry_files
+    assert {stat.S_IMODE(path.stat().st_mode) for path in registry_files} == {0o600}
+    assert not list(registry.glob("*.new")), "an atomic replacement escaped its write boundary"
+
+
+@pytest.mark.parametrize("attack", ["directory-component", "append-target"])
+def test_registry_symlinks_cannot_redirect_private_bytes(attack: str, tmp_path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external = outside / "unchanged.bin"
+    external.write_bytes(b"unchanged external bytes")
+    original_digest = hashlib.sha256(external.read_bytes()).digest()
+
+    if attack == "directory-component":
+        (tmp_path / ".interact").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(OSError):
+            _record(run_id="symlinked-directory")
+        assert not (outside / "out").exists()
+    else:
+        _record(run_id="symlinked-file")
+        reg.events_path("symlinked-file").symlink_to(external)
+        with pytest.raises(OSError):
+            reg.append_event(
+                "symlinked-file",
+                AgentEvent(kind="prompt", text="private fixture payload"),
+            )
+
+    assert hashlib.sha256(external.read_bytes()).digest() == original_digest
+
+
+@pytest.mark.parametrize("no_follow", ["missing", "zero"])
+@pytest.mark.parametrize("append", [False, True], ids=["truncate", "append"])
+def test_registry_refuses_hostile_writes_without_effective_o_nofollow(
+    no_follow: str, append: bool, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    _record(run_id="hostile-write")
+    external = tmp_path / "external-sentinel.bin"
+    external.write_bytes(b"unchanged external sentinel")
+    original_digest = hashlib.sha256(external.read_bytes()).digest()
+    reg.raw_events_path("hostile-write").symlink_to(external)
+    if no_follow == "missing":
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    else:
+        monkeypatch.setattr(os, "O_NOFOLLOW", 0, raising=False)
+
+    failure: OSError | None = None
+    try:
+        with reg.open_raw_events("hostile-write", append=append) as stream:
+            stream.write(b"private registry payload")
+    except OSError as error:
+        failure = error
+    current_digest = hashlib.sha256(external.read_bytes()).digest()
+    actionable = failure is not None and (
+        "O_NOFOLLOW" in str(failure) or "no-follow" in str(failure).lower()
+    )
+
+    assert (actionable, current_digest) == (True, original_digest), (
+        "a platform without effective O_NOFOLLOW must fail explicitly before opening a hostile "
+        f"{('append' if append else 'truncate')} leaf; failure={failure!r}"
+    )
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["cleanup-ok", "cleanup-error"])
+def test_private_replace_closes_directory_handle_when_replacement_open_fails(
+    cleanup_fails: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _record(run_id="failed-replacement")
+    real_open = os.open
+    failure = OSError("replacement creation failed")
+    directory_descriptor = real_open(
+        reg.agents_dir(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+
+    def fail_replacement_open(path, flags, *args, **kwargs):
+        if isinstance(path, str) and path.endswith(".new"):
+            raise failure
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", fail_replacement_open)
+    monkeypatch.setattr(reg, "_no_follow_flags", lambda: os.O_NOFOLLOW)
+    monkeypatch.setattr(
+        reg, "_registry_directory_descriptor", lambda: directory_descriptor,
+    )
+    if cleanup_fails:
+        def fail_cleanup(*_args, **_kwargs):
+            raise OSError("replacement cleanup failed")
+        monkeypatch.setattr(os, "unlink", fail_cleanup)
+
+    try:
+        with pytest.raises(OSError) as caught:
+            reg._replace_private(reg.agents_dir() / "failed-replacement.json", b"payload")
+        assert caught.value is failure
+        with pytest.raises(OSError) as closed:
+            os.fstat(directory_descriptor)
+        assert closed.value.errno == errno.EBADF
+    finally:
+        try:
+            os.close(directory_descriptor)
+        except OSError:
+            pass
+    assert not list(reg.agents_dir().glob("*.new"))
+
+
+def test_private_replace_does_not_unlink_an_exclusive_create_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _record(run_id="collision")
+    target = reg.agents_dir() / "collision.json"
+    original_target = target.read_bytes()
+    original_target_mode = stat.S_IMODE(target.stat().st_mode)
+    token = "fixedcollision"
+    replacement = reg.agents_dir() / f".{target.name}.{token}.new"
+    sentinel = b"pre-existing unowned replacement"
+    replacement.write_bytes(sentinel)
+    replacement.chmod(0o640)
+    original_mode = stat.S_IMODE(replacement.stat().st_mode)
+    directory_descriptor = os.open(
+        reg.agents_dir(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    monkeypatch.setattr(reg.secrets, "token_hex", lambda _size: token)
+    monkeypatch.setattr(
+        reg, "_registry_directory_descriptor", lambda: directory_descriptor,
+    )
+
+    try:
+        with pytest.raises(FileExistsError) as caught:
+            reg._replace_private(target, b"new payload")
+        assert caught.value.errno == errno.EEXIST
+        assert caught.value.filename == replacement.name
+        with pytest.raises(OSError) as closed:
+            os.fstat(directory_descriptor)
+        assert closed.value.errno == errno.EBADF
+        assert replacement.exists(), "collision cleanup deleted an unowned pre-existing leaf"
+        assert target.read_bytes() == original_target
+        assert stat.S_IMODE(target.stat().st_mode) == original_target_mode
+        assert replacement.read_bytes() == sentinel
+        assert stat.S_IMODE(replacement.stat().st_mode) == original_mode
+    finally:
+        try:
+            os.close(directory_descriptor)
+        except OSError:
+            pass
+        replacement.unlink(missing_ok=True)
+
+
+def test_private_replace_rejects_candidate_substitution_observed_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detect a substitution already present before publication; this does not claim that the
+    later validation-to-rename window is atomic against a malicious same-UID process."""
+    _record(run_id="publication")
+    target = reg.agents_dir() / "publication.json"
+    original_target = target.read_bytes()
+    original_target_mode = stat.S_IMODE(target.stat().st_mode)
+    token = "fixedpublication"
+    candidate = reg.agents_dir() / f".{target.name}.{token}.new"
+    displaced = reg.agents_dir() / f".{target.name}.{token}.owned"
+    forged = b"forged unowned publication"
+    forged_mode = 0o640
+    real_fsync = os.fsync
+    owned_descriptor: int | None = None
+    owned_identity: tuple[int, int] | None = None
+    directory_descriptor = os.open(
+        reg.agents_dir(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+
+    def substitute_after_fsync(descriptor: int) -> None:
+        nonlocal owned_descriptor, owned_identity
+        real_fsync(descriptor)
+        if owned_descriptor is not None:
+            return
+        owned_descriptor = descriptor
+        opened = os.fstat(descriptor)
+        owned_identity = (opened.st_dev, opened.st_ino)
+        os.rename(
+            candidate.name, displaced.name,
+            src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+        )
+        attacker = os.open(
+            candidate.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            forged_mode,
+            dir_fd=directory_descriptor,
+        )
+        try:
+            assert os.write(attacker, forged) == len(forged)
+            os.fchmod(attacker, forged_mode)
+        finally:
+            os.close(attacker)
+
+    monkeypatch.setattr(reg.secrets, "token_hex", lambda _size: token)
+    monkeypatch.setattr(os, "fsync", substitute_after_fsync)
+    monkeypatch.setattr(
+        reg, "_registry_directory_descriptor", lambda: directory_descriptor,
+    )
+
+    failure: OSError | None = None
+    try:
+        try:
+            reg._replace_private(target, b"owned payload")
+        except OSError as error:
+            failure = error
+        target_bytes = target.read_bytes()
+        target_mode = stat.S_IMODE(target.stat().st_mode)
+        candidate_bytes = candidate.read_bytes() if candidate.exists() else None
+        candidate_mode = stat.S_IMODE(candidate.stat().st_mode) if candidate.exists() else None
+        owned_closed = owned_descriptor is not None
+        if owned_descriptor is not None:
+            try:
+                os.fstat(owned_descriptor)
+            except OSError as error:
+                owned_closed = error.errno == errno.EBADF
+            else:
+                owned_closed = False
+        try:
+            os.fstat(directory_descriptor)
+        except OSError as error:
+            directory_closed = error.errno == errno.EBADF
+        else:
+            directory_closed = False
+        actionable = failure is not None and "identity" in str(failure).lower()
+        displaced_stat = displaced.stat()
+        displaced_identity = (displaced_stat.st_dev, displaced_stat.st_ino)
+        assert (
+            actionable,
+            target_bytes,
+            target_mode,
+            candidate_bytes,
+            candidate_mode,
+            owned_closed,
+            directory_closed,
+            displaced_identity,
+        ) == (
+            True,
+            original_target,
+            original_target_mode,
+            forged,
+            forged_mode,
+            True,
+            True,
+            owned_identity,
+        ), "candidate substitution observed before publication must fail without publishing it"
+    finally:
+        try:
+            os.close(directory_descriptor)
+        except OSError:
+            pass
+        target.write_bytes(original_target)
+        target.chmod(original_target_mode)
+        candidate.unlink(missing_ok=True)
+        displaced.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("failure_point", ["read", "fdopen"])
+def test_private_read_preserves_primary_failure_and_closes_descriptor_once(
+    failure_point: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _record(run_id="failed-read")
+    path = reg.agents_dir() / "failed-read.json"
+    original = path.read_bytes()
+    original_mode = stat.S_IMODE(path.stat().st_mode)
+    descriptor_count = len(os.listdir("/proc/self/fd"))
+    real_close = os.close
+    failure = OSError(errno.EIO, "primary read failure")
+    descriptor: int | None = None
+    close_attempts = 0
+
+    def failing_fdopen(raw_descriptor: int, *_args, **_kwargs):
+        nonlocal close_attempts, descriptor
+        descriptor = raw_descriptor
+        if failure_point == "fdopen":
+            raise failure
+        stream = MagicMock()
+        stream.__enter__.return_value = stream
+        stream.read.side_effect = failure
+
+        def close_stream(*_args) -> None:
+            nonlocal close_attempts
+            close_attempts += 1
+            real_close(raw_descriptor)
+
+        stream.__exit__.side_effect = close_stream
+        return stream
+
+    def close_raw(raw_descriptor: int) -> None:
+        nonlocal close_attempts
+        if raw_descriptor == descriptor:
+            close_attempts += 1
+        real_close(raw_descriptor)
+
+    monkeypatch.setattr(os, "fdopen", failing_fdopen)
+    monkeypatch.setattr(os, "close", close_raw)
+
+    with pytest.raises(OSError) as caught:
+        reg._read_private(path)
+
+    assert caught.value is failure
+    assert close_attempts == 1
+    assert descriptor is not None
+    with pytest.raises(OSError) as closed:
+        os.fstat(descriptor)
+    assert closed.value.errno == errno.EBADF
+    assert len(os.listdir("/proc/self/fd")) == descriptor_count
+    assert path.read_bytes() == original
+    assert stat.S_IMODE(path.stat().st_mode) == original_mode
+    assert not list(reg.agents_dir().glob("*.new"))
+
+
+@pytest.mark.parametrize("reader", ["get_run", "list_runs"])
+@pytest.mark.parametrize("no_follow", ["missing", "zero"])
+def test_registry_record_reads_require_effective_no_follow_before_open(
+    reader: str, no_follow: str, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    _record(run_id="race")
+    canonical = reg.agents_dir() / "race.json"
+    external = tmp_path / "same-inode-record.json"
+    original = canonical.read_bytes()
+    os.link(canonical, external)
+    real_open = os.open
+    open_calls = 0
+
+    def race_open(path, flags, *args, **kwargs):
+        nonlocal open_calls
+        open_calls += 1
+        canonical.unlink()
+        canonical.symlink_to(external)
+        return real_open(path, flags, *args, **kwargs)
+
+    if no_follow == "missing":
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    else:
+        monkeypatch.setattr(os, "O_NOFOLLOW", 0, raising=False)
+    monkeypatch.setattr(os, "open", race_open)
+
+    with pytest.raises(OSError, match="O_NOFOLLOW|no-follow"):
+        reg.get_run("race") if reader == "get_run" else reg.list_runs()
+
+    assert open_calls == 0, "unsupported no-follow reads must fail before the open callback"
+    assert external.read_bytes() == original
+    assert canonical.read_bytes() == original
+
+
+@pytest.mark.parametrize("no_follow", ["effective", "missing", "zero"])
+@pytest.mark.parametrize(
+    "seam", ["raw-transcript", "fallback-mirror", "messages", "raw-line-count", "carry-observed-at"],
+)
+def test_public_registry_reads_never_follow_hostile_private_leaves(
+    seam: str, no_follow: str, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    _record(run_id="r1")
+    _record(run_id="r2")
+    stored = reg.get_run("r1")
+    assert stored is not None
+    external = tmp_path / f"external-{seam}.jsonl"
+    hostile_text = "forged external transcript"
+    if seam == "raw-transcript":
+        target = reg.raw_events_path("r1")
+        payload = json.dumps({
+            "type": "assistant", "session_id": "s",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": hostile_text}]},
+        }) + "\n"
+    elif seam == "fallback-mirror":
+        target = reg.events_path("r1")
+        payload = AgentEvent(kind="text", text=hostile_text).model_dump_json() + "\n"
+    elif seam == "messages":
+        target = reg.messages_path("r1")
+        payload = AgentEvent(kind="message", text=hostile_text, from_run="r2", to_run="r1").model_dump_json() + "\n"
+    elif seam == "raw-line-count":
+        target = reg.raw_events_path("r1")
+        payload = "hostile\n" * 7
+    else:
+        reg.raw_events_path("r1").write_text(
+            '{"type":"system","subtype":"init","cwd":"/work","tools":[],"session_id":"s"}\n'
+        )
+        target = reg.events_path("r1")
+        payload = AgentEvent(kind="started", text="", at=123.0).model_dump_json() + "\n"
+    external.write_text(payload)
+    digest = hashlib.sha256(external.read_bytes()).digest()
+    target.symlink_to(external)
+    if no_follow != "effective":
+        monkeypatch.setattr(reg, "_read_record", lambda _run_id: stored)
+        if no_follow == "missing":
+            monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+        else:
+            monkeypatch.setattr(os, "O_NOFOLLOW", 0, raising=False)
+
+    if no_follow == "effective":
+        if seam == "raw-line-count":
+            assert reg.record_message(from_run="r1", to_run="r2", text="safe")
+            recorded = [event for event in reg.read_events("r1") if event.kind == "message"]
+            assert recorded and recorded[-1].raw_index != 7
+        else:
+            observed = reg.read_events("r1")
+            assert hostile_text not in [event.text for event in observed]
+            assert 123.0 not in [event.at for event in observed]
+    else:
+        with pytest.raises(OSError, match="O_NOFOLLOW|no-follow"):
+            if seam == "raw-line-count":
+                reg.record_message(from_run="r1", to_run="r2", text="safe")
+            else:
+                reg.read_events("r1")
+    assert hashlib.sha256(external.read_bytes()).digest() == digest
 
 
 def test_a_registered_run_is_listed():
@@ -175,6 +612,27 @@ def test_a_corrupt_record_does_not_break_the_listing():
     _record()
     (reg.agents_dir() / "broken.json").write_text("{ not json")
     assert [r.run_id for r in reg.list_runs()] == ["r1"]
+
+
+@pytest.mark.parametrize("alias", ["mismatched-bytes", "leaf-symlink"])
+def test_registry_readers_reject_a_record_that_does_not_bind_its_filename(alias: str) -> None:
+    _record(run_id="run-b")
+    genuine_path = reg.agents_dir() / "run-b.json"
+    requested_path = reg.agents_dir() / "run-a.json"
+    if alias == "mismatched-bytes":
+        requested_path.write_bytes(genuine_path.read_bytes())
+    else:
+        requested_path.symlink_to(genuine_path.name)
+
+    requested = reg.get_run("run-a")
+    genuine = reg.get_run("run-b")
+    listed = reg.list_runs()
+
+    assert requested is None
+    assert genuine is not None and genuine.run_id == "run-b"
+    assert [run.run_id for run in listed] == ["run-b"], (
+        "listing must use the same canonical no-follow, filename-bound reader as get_run"
+    )
 
 
 def test_the_record_round_trips_through_json():

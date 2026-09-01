@@ -8,9 +8,10 @@ An unrecognised line becomes ``kind="other"`` rather than being dropped — a ve
 event type must never make a run look idle.
 """
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Literal, Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 EventKind = Literal[
     "started",     # the session is up (its id, cwd and tools are known)
@@ -24,14 +25,113 @@ EventKind = Literal[
     "error",       # terminal: it failed
     "prompt",      # what was asked OF the agent — the other half of the conversation
     "spawn",       # this agent started a subagent — the team growing a branch
+    "interaction", # a provider needs typed human input
+    "interaction_resolved", # typed human input was returned to the provider
+    "cancelled",   # a turn was interrupted and acknowledged
     "other",       # recognised as valid, not specially handled — never silently dropped
 ]
+InteractionKind = Literal[
+    "command_approval", "file_change_approval", "user_input", "permission_approval"
+]
+InteractionFieldKind = Literal["choice", "text", "boolean"]
+EventStatus = Literal[
+    "starting",
+    "running",
+    "waiting",
+    "completed",
+    "failed",
+    "cancelled",
+    "provider_failed",
+    "interaction_required",
+    "unknown",
+]
+_INTERACTION_KEY = r"^[A-Za-z0-9._:@+-]+$"
+_UNSAFE_INTERACTION_KEYS = frozenset({".", "..", "__proto__", "prototype", "constructor"})
+
+
+class InteractionField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=160, pattern=_INTERACTION_KEY)
+    kind: InteractionFieldKind
+    label: str = Field(min_length=1, max_length=500)
+    required: bool = True
+    options: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> Self:
+        if self.key in _UNSAFE_INTERACTION_KEYS:
+            raise ValueError("interaction field key is unsafe")
+        if self.kind == "choice":
+            if (
+                not self.options
+                or len(self.options) != len(set(self.options))
+                or any(not option.strip() for option in self.options)
+            ):
+                raise ValueError("choice fields require unique nonblank options")
+        elif self.options:
+            raise ValueError("only choice fields may declare options")
+        return self
+
+
+class ConversationInteraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=160)
+    kind: InteractionKind
+    title: str = Field(min_length=1, max_length=500)
+    fields: list[InteractionField] = Field(min_length=1)
+    disclosure: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_fields(self) -> Self:
+        keys = [field.key for field in self.fields]
+        if len(keys) != len(set(keys)):
+            raise ValueError("interaction field keys must be unique")
+        return self
+
+    def validate_submission(
+        self, values: Mapping[str, object]
+    ) -> dict[str, str | bool]:
+        fields = {field.key: field for field in self.fields}
+        if set(values).difference(fields):
+            raise ValueError("interaction submission has unknown fields")
+        if any(field.required and field.key not in values for field in self.fields):
+            raise ValueError("interaction submission is missing required fields")
+        validated: dict[str, str | bool] = {}
+        for key, value in values.items():
+            field = fields[key]
+            if field.kind == "boolean":
+                if type(value) is not bool:
+                    raise ValueError("interaction boolean field has the wrong value kind")
+                validated[key] = value
+                continue
+            if not isinstance(value, str):
+                raise ValueError("interaction string field has the wrong value kind")
+            if field.kind == "choice" and value not in field.options:
+                raise ValueError("interaction choice is outside its advertised options")
+            if field.kind == "text" and not value.strip():
+                if field.required:
+                    raise ValueError("required interaction text must not be blank")
+                continue
+            validated[key] = value
+        return validated
 
 
 class AgentEvent(BaseModel):
     """A single thing that happened inside an agent run, provider-agnostic."""
 
     kind: EventKind
+    #: Stable normalized identity. Provider replay is ignored by this key, never by text equality.
+    event_id: str = ""
+    #: Monotonic within one run after normalization; provider order is retained separately below.
+    sequence: int | None = None
+    #: Stable provider-side cursor/item identity when one exists.
+    provider_cursor: str = ""
+    parent_event_id: str | None = None
+    turn_id: str | None = None
+    #: The discrete run this event describes. For collaboration events this is the child run.
+    agent_run_id: str | None = None
     text: str = ""
     session_id: str | None = None
     tool: str | None = None
@@ -50,12 +150,15 @@ class AgentEvent(BaseModel):
     #: it was sent. The vendor writes no timestamps, so this is what lets a message be shown where
     #: it actually happened instead of dumped after every reply it caused.
     raw_index: int | None = None
-    # Cost is API-EQUIVALENT: on a subscription run the user is not billed this, they already paid
-    # for the plan. The dashboard must label it accordingly rather than implying fresh spend.
+    # API-equivalent cost estimates usage value, not billed spend. Charge path and account impact
+    # remain separate typed facts; subscription usage may be included, limited, credited, or charged.
     cost_usd: float | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cached_input_tokens: int | None = None
     raw_type: str = ""
+    interaction: ConversationInteraction | None = None
+    status: EventStatus | None = None
     #: True when a terminal event itself carries the provider's final response (Claude structured
     #: output), rather than only a stop reason.  Media execution must prefer this over an earlier
     #: free-form assistant block.
@@ -74,6 +177,12 @@ class AgentEvent(BaseModel):
             return self.text or "rate limited"
         if self.kind == "message":
             return self._message_summary(viewer)
+        if self.kind == "interaction":
+            return "waiting for input"
+        if self.kind == "interaction_resolved":
+            return "input answered"
+        if self.kind == "cancelled":
+            return "cancelled"
         if self.kind == "done":
             return "done"
         if self.kind == "error":
@@ -110,6 +219,8 @@ def _who(run_id: str | None) -> str:
         return "?"
     if run_id == "operator":
         return "operator"
+    # Deliberately local: registry imports AgentEvent from this module, so a module-level import
+    # would create the events <-> registry cycle before either side had declared its models.
     from interact.agents import registry as reg
 
     run = reg._read_record(run_id)

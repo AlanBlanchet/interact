@@ -6,13 +6,15 @@ handed to that instance's singleton, so the new window is served by the OLD exte
 reinstalling at the same version never reaches it. `interact doctor` answered the question for
 servers and said nothing at all about the extension, which left half the delivery gate missing.
 
-Two ways it goes stale. A version behind the tree is the easy one. The one a version check
-structurally cannot see is a matching version whose BUILD was written after the editor started —
-which is every rebuild during development, i.e. exactly when it matters.
+Beyond a version mismatch, two same-version states go stale: installed compiled bytes can differ
+from this tree, or a running editor can predate an otherwise-current installed build. The first
+needs installation; the second needs a restart. Both are common during development, i.e. exactly
+when this diagnostic matters.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -114,12 +116,70 @@ def _build_mtime(ext: Path) -> float:
     return newest
 
 
+def _compiled_bundle_fingerprint(ext: Path) -> str | None:
+    """A deterministic digest of the files VS Code can load from ``out/``.
+
+    Source maps are excluded by ``vscode-extension/.vscodeignore`` and therefore cannot be part
+    of an installed package.  Everything else below ``out/`` is package payload.  Rejecting a
+    missing, changing, unreadable, or symlinked payload is deliberate: treating an unprovable
+    bundle as current would recreate the false-green this diagnostic exists to prevent, while
+    following a hostile symlink could read content outside the extension.
+    """
+    compiled = ext / "out"
+    try:
+        if compiled.is_symlink() or not compiled.is_dir():
+            return None
+        files = []
+        for path in compiled.rglob("*"):
+            if path.is_symlink():
+                return None
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                return None
+            if path.suffix != ".map":
+                files.append(path)
+    except OSError:
+        return None
+    if not files:
+        return None
+
+    digest = hashlib.sha256(b"interact-vscode-compiled-bundle-v1\0")
+    files.sort(key=lambda path: path.relative_to(compiled).as_posix())
+    digest.update(len(files).to_bytes(8, "big"))
+    for path in files:
+        relative = path.relative_to(compiled).as_posix().encode()
+        content = hashlib.sha256()
+        try:
+            before = path.stat(follow_symlinks=False)
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    content.update(chunk)
+            after = path.stat(follow_symlinks=False)
+        except OSError:
+            return None
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            return None
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(before.st_size.to_bytes(8, "big"))
+        digest.update(content.digest())
+    return digest.hexdigest()
+
+
 def extension_status() -> dict | None:
     """What is stale about the installed extension, or ``None`` when nothing is.
 
-    Returns ``{"installed", "tree", "reason"}`` where reason is ``"version"`` (an older build is
-    installed) or ``"code"`` (the right version is installed, but an editor is running that
-    started before it was built).
+    Returns ``{"installed", "tree", "reason", "remedy"}``. Reason is ``"version"`` for an older
+    installed version or ``"code"`` for same-version drift. Remedy is ``"install"`` when the
+    installed payload must be replaced and ``"restart"`` when only a running host predates it.
+    This distinction is operational: restarting cannot repair different bytes on disk, while
+    reinstalling an already-current bundle needlessly disrupts extension hosts.
     """
     d = _extensions_dir()
     installed: list[tuple[str, Path]] = []
@@ -138,7 +198,21 @@ def extension_status() -> dict | None:
     version, path = installed[-1]
     tree = _tree_version()
     if tree and version != tree:
-        return {"installed": version, "tree": tree, "reason": "version"}
+        return {"installed": version, "tree": tree, "reason": "version", "remedy": "install"}
+
+    installed_fingerprint = _compiled_bundle_fingerprint(path)
+    tree_fingerprint = _compiled_bundle_fingerprint(_extension_dir())
+    if (
+        installed_fingerprint is None
+        or tree_fingerprint is None
+        or installed_fingerprint != tree_fingerprint
+    ):
+        return {
+            "installed": version,
+            "tree": tree or version,
+            "reason": "code",
+            "remedy": "install",
+        }
 
     built = _build_mtime(path)
     starts = _editor_starts()
@@ -146,8 +220,14 @@ def extension_status() -> dict | None:
     if built and behind:
         # Not all of them, usually: windows opened since the rebuild are fine. Say how many are
         # not, because "your editor is stale" when five of eight are current is its own confusion.
-        return {"installed": version, "tree": tree or version, "reason": "code",
-                "behind": len(behind), "running": len(starts)}
+        return {
+            "installed": version,
+            "tree": tree or version,
+            "reason": "code",
+            "remedy": "restart",
+            "behind": len(behind),
+            "running": len(starts),
+        }
     return None
 
 

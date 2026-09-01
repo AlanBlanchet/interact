@@ -11,18 +11,38 @@ killed agent reports as crashed instead of spinning forever in the UI.
 
 import json
 import os
+import re
+import secrets
 import signal
+import stat
+import sys
 import time
 from pathlib import Path
-from typing import Literal
+from typing import BinaryIO, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, PrivateAttr
 
 from interact.agents.events import AgentEvent
 from interact.agents.providers import PROVIDERS
-from interact.server_registry import _alive  # generic pid liveness (Windows-safe, no signal sent)
+from interact.server_registry import (
+    _alive,  # generic pid liveness (Windows-safe, no signal sent)
+)
 
-RunStatus = Literal["running", "done", "failed", "crashed", "stopped", "foreign"]
+RunStatus = Literal[
+    "starting", "running", "waiting", "done", "failed", "cancelled", "crashed", "stopped",
+    "foreign",
+]
+RunKind = Literal["process", "conversation", "provider_child"]
+ConnectionMode = Literal["local_session", "api"]
+ChargePath = Literal[
+    "subscription_quota", "usage_credit", "metered_api", "local_compute", "unknown"
+]
+CostCertainty = Literal["known", "unknown"]
+AggregateChargePath = ChargePath | Literal["mixed"]
+ConversationCapability = Literal[
+    "streaming", "resume", "cancel", "approvals", "collaboration"
+]
+_RUN_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,160}$")
 
 
 class AgentRun(BaseModel):
@@ -31,6 +51,7 @@ class AgentRun(BaseModel):
     mapping table to fall out of date."""
 
     run_id: str
+    kind: RunKind = "process"
     provider: str
     name: str
     task: str = ""
@@ -55,6 +76,18 @@ class AgentRun(BaseModel):
     #: means nobody chose, so the CLI's own configured default applied.
     permission_mode: str | None = None
     parent_run_id: str | None = None
+    root_run_id: str | None = None
+    spawned_by_event_id: str | None = None
+    provider_session_id: str | None = None
+    provider_turn_id: str | None = None
+    connection: ConnectionMode | None = None
+    requested_model: str | None = None
+    requested_criterion: str | None = None
+    cataloged_at: float | None = None
+    charge_path: ChargePath = "unknown"
+    cost_certainty: CostCertainty = "unknown"
+    capabilities: list[ConversationCapability] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
     started_at: float = 0.0
     finished_at: float | None = None
     exit_code: int | None = None
@@ -63,13 +96,14 @@ class AgentRun(BaseModel):
     foreign: bool = False
 
     status: RunStatus = "running"
-    #: API-EQUIVALENT cost. On a subscription run the user is not billed this again; they already
-    #: paid for the plan. Callers must label it as equivalent value, never as fresh spend.
+    #: API-equivalent value of observed usage. The actual account impact is represented separately
+    #: by ``charge_path`` and ``cost_certainty`` and remains unknown without provider evidence.
     cost_usd: float | None = None
     #: Cumulative token use — how much CONTEXT this run has consumed, which is invisible from a
     #: cost figure alone (two models at the same price consume very differently).
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cached_input_tokens: int | None = None
     last: str = ""
 
     @classmethod
@@ -150,25 +184,240 @@ def agents_dir() -> Path:
     return Path.home() / ".interact" / "out" / "agents"
 
 
+def _ensure_registry_directory() -> Path:
+    """Create and repair the private directory chain without changing the user's home mode."""
+    directory = agents_dir()
+    home = Path.home()
+    try:
+        relative = directory.relative_to(home)
+    except ValueError:
+        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if directory.is_symlink() or not directory.is_dir():
+            raise OSError(f"unsafe agent registry directory: {directory}")
+        directory.chmod(0o700)
+    else:
+        current = home
+        for part in relative.parts:
+            current /= part
+            current.mkdir(mode=0o700, exist_ok=True)
+            if current.is_symlink() or not current.is_dir():
+                raise OSError(f"unsafe agent registry directory: {current}")
+            current.chmod(0o700)
+    return directory
+
+
+def _open_private(path: Path, flags: int, *, create: bool = True) -> int:
+    directory = _ensure_registry_directory()
+    if path.parent != directory:
+        raise OSError("agent registry file escaped its private directory")
+    directory_descriptor = _registry_directory_descriptor()
+    try:
+        creation_flags = os.O_CREAT if create else 0
+        descriptor = os.open(
+            path.name, flags | creation_flags | _no_follow_flags(), 0o600,
+            dir_fd=directory_descriptor,
+        )
+    finally:
+        os.close(directory_descriptor)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("agent registry path is not a regular file")
+        os.fchmod(descriptor, 0o600)
+    except OSError:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _no_follow_flags() -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if (
+        not isinstance(no_follow, int) or no_follow <= 0
+        or not isinstance(directory, int) or directory <= 0
+        or os.open not in os.supports_dir_fd
+        or os.rename not in os.supports_dir_fd
+        or os.unlink not in os.supports_dir_fd
+    ):
+        raise OSError("agent registry requires effective O_NOFOLLOW and dir_fd support")
+    return no_follow
+
+
+def _registry_directory_descriptor() -> int:
+    no_follow = _no_follow_flags()
+    directory_flag = os.O_DIRECTORY
+    directory = _ensure_registry_directory()
+    home = Path.home()
+    try:
+        relative = directory.relative_to(home)
+    except ValueError as error:
+        raise OSError("agent registry directory must be anchored beneath the user home") from error
+    descriptor = os.open(home, os.O_RDONLY | directory_flag | no_follow)
+    try:
+        for part in relative.parts:
+            child = os.open(
+                part, os.O_RDONLY | directory_flag | no_follow, dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("agent registry directory handle is not a directory")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_private(path: Path) -> bytes | None:
+    _no_follow_flags()
+    try:
+        descriptor = _open_private(path, os.O_RDONLY, create=False)
+    except OSError:
+        return None
+    try:
+        stream = os.fdopen(descriptor, "rb")
+    except OSError:
+        os.close(descriptor)
+        raise
+    with stream:
+        return stream.read()
+
+
+def _private_mtime(path: Path) -> float | None:
+    descriptor = _open_private(path, os.O_RDONLY, create=False)
+    try:
+        return os.fstat(descriptor).st_mtime
+    finally:
+        os.close(descriptor)
+
+
+def _append_private(path: Path, payload: bytes) -> None:
+    descriptor = _open_private(path, os.O_APPEND | os.O_WRONLY)
+    try:
+        if os.write(descriptor, payload) != len(payload):
+            raise OSError("short agent-registry append")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _private_leaf_matches(
+    name: str, directory_descriptor: int, identity: tuple[int, int],
+) -> bool:
+    """Check identity already visible before publication, without promising atomic same-UID
+    defence for the final check-to-rename window. Directory mode 0700 excludes other OS users;
+    another process under the same account remains inside this bounded trust boundary."""
+    try:
+        comparison = os.open(
+            name, os.O_RDONLY | _no_follow_flags(), dir_fd=directory_descriptor,
+        )
+    except OSError:
+        return False
+    matches = False
+    try:
+        opened = os.fstat(comparison)
+        matches = stat.S_ISREG(opened.st_mode) and (
+            opened.st_dev, opened.st_ino
+        ) == identity
+    except OSError:
+        pass
+    try:
+        os.close(comparison)
+    except OSError:
+        return False
+    return matches
+
+
+def _replace_private(path: Path, payload: bytes) -> None:
+    directory = _ensure_registry_directory()
+    if path.parent != directory:
+        raise OSError("agent registry file escaped its private directory")
+    directory_descriptor = _registry_directory_descriptor()
+    descriptor = -1
+    replacement_name: str | None = None
+    owned_identity: tuple[int, int] | None = None
+    try:
+        candidate_name = f".{path.name}.{secrets.token_hex(8)}.new"
+        descriptor = os.open(
+            candidate_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | _no_follow_flags(),
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+        replacement_name = candidate_name
+        created = os.fstat(descriptor)
+        owned_identity = (created.st_dev, created.st_ino)
+        os.fchmod(descriptor, 0o600)
+        if os.write(descriptor, payload) != len(payload):
+            raise OSError("short agent-registry write")
+        os.fsync(descriptor)
+        written = os.fstat(descriptor)
+        owned_identity = (written.st_dev, written.st_ino)
+        if not _private_leaf_matches(
+            replacement_name, directory_descriptor, owned_identity,
+        ):
+            raise OSError("agent registry replacement identity changed before publication")
+        os.replace(
+            replacement_name, path.name,
+            src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+        )
+    finally:
+        primary_error = sys.exception()
+        cleanup_error: OSError | None = None
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                cleanup_error = error
+        if replacement_name is not None and owned_identity is not None and _private_leaf_matches(
+            replacement_name, directory_descriptor, owned_identity,
+        ):
+            try:
+                os.unlink(replacement_name, dir_fd=directory_descriptor)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                cleanup_error = cleanup_error or error
+        try:
+            os.close(directory_descriptor)
+        except OSError as error:
+            cleanup_error = cleanup_error or error
+        if primary_error is None and cleanup_error is not None:
+            raise cleanup_error
+
+
+def _safe_run_id(run_id: str) -> str:
+    if run_id in (".", "..") or _RUN_ID.fullmatch(run_id) is None:
+        raise ValueError("invalid agent run id")
+    return run_id
+
+
 def _record_path(run_id: str) -> Path:
-    return agents_dir() / f"{run_id}.json"
+    return agents_dir() / f"{_safe_run_id(run_id)}.json"
 
 
 def messages_path(run_id: str) -> Path:
     """Messages live BESIDE the vendor stream, never inside it. The stream is the vendor's own
     file and the mirror is rewritten from it, so anything appended there is clobbered on the next
     read — a message must outlive that."""
-    return agents_dir() / f"{run_id}.messages.jsonl"
+    return agents_dir() / f"{_safe_run_id(run_id)}.messages.jsonl"
 
 
 def events_path(run_id: str) -> Path:
-    return agents_dir() / f"{run_id}.jsonl"
+    return agents_dir() / f"{_safe_run_id(run_id)}.jsonl"
 
 
 def raw_events_path(run_id: str) -> Path:
     """Where the child writes its OWN stream, verbatim. Owned by the OS, not by any interact
     process — so the record of what an agent did survives interact restarting or dying."""
-    return agents_dir() / f"{run_id}.raw.jsonl"
+    return agents_dir() / f"{_safe_run_id(run_id)}.raw.jsonl"
+
+
+def open_raw_events(run_id: str, *, append: bool) -> BinaryIO:
+    """Open a provider-owned stream while preserving registry privacy under any umask."""
+    flags = os.O_APPEND if append else os.O_TRUNC
+    descriptor = _open_private(raw_events_path(run_id), flags | os.O_WRONLY)
+    return os.fdopen(descriptor, "ab" if append else "wb")
 
 
 def _terminate(pid: int) -> bool:
@@ -194,9 +443,15 @@ def register(*, run_id: str, pid: int | None, provider: str, name: str, task: st
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
                    agent=agent, definition_path=str(definition) if definition else None,
                    permission_mode=permission_mode, started_at=time.time())
-    d = agents_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    _record_path(run_id).write_text(run.model_dump_json())
+    _write(run)
+    try:
+        descriptor = _open_private(
+            raw_events_path(run_id), os.O_APPEND | os.O_WRONLY, create=False
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        os.close(descriptor)
     return run
 
 
@@ -226,9 +481,15 @@ def stop(run_id: str) -> bool:
 
 
 def _read_record(run_id: str) -> AgentRun | None:
+    _no_follow_flags()
     try:
-        run = AgentRun.model_validate_json(_record_path(run_id).read_text())
+        payload = _read_private(_record_path(run_id))
+        if payload is None:
+            return None
+        run = AgentRun.model_validate_json(payload)
     except (OSError, ValueError):
+        return None
+    if run.run_id != run_id:
         return None
     return _backfill_definition(run)
 
@@ -256,7 +517,18 @@ def _backfill_definition(run: AgentRun) -> AgentRun:
 
 
 def _write(run: AgentRun) -> None:
-    _record_path(run.run_id).write_text(run.model_dump_json())
+    path = _record_path(run.run_id)
+    _replace_private(path, run.model_dump_json().encode())
+
+
+def save_run(run: AgentRun) -> None:
+    """Persist a typed run after its owning lifecycle changed it."""
+    _write(run)
+
+
+def get_run(run_id: str) -> AgentRun | None:
+    """Read one canonical run record without deriving the whole registry."""
+    return _read_record(run_id)
 
 
 def append_event(run_id: str, event: AgentEvent) -> None:
@@ -267,24 +539,190 @@ def append_event(run_id: str, event: AgentEvent) -> None:
     computed only on the Python read path would show up there as blank and free. Folding here
     keeps it O(1) per event and makes the record authoritative for every reader.
     """
-    path = events_path(run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        f.write(event.model_dump_json() + "\n")
-
     stored = _read_record(run_id)
     if stored is None:
         return
+    terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
+    same_turn = event.turn_id is None or event.turn_id == stored.provider_turn_id
+    newer_root_turn = (
+        stored.kind == "conversation" and event.kind in ("started", "prompt")
+        and event.turn_id is not None and event.turn_id != stored.provider_turn_id
+    )
+    if stored.kind == "conversation" and event.turn_id is not None and not same_turn \
+            and not newer_root_turn:
+        return
+    if terminal and same_turn:
+        return
+
+    _append_private(events_path(run_id), (event.model_dump_json() + "\n").encode())
     if event.cost_usd is not None:
         stored.cost_usd = (stored.cost_usd or 0.0) + event.cost_usd
-    for field in ("input_tokens", "output_tokens"):
+    if event.kind == "tool" and event.tool is not None and event.tool not in stored.tools:
+        stored.tools.append(event.tool)
+    for field in ("input_tokens", "output_tokens", "cached_input_tokens"):
         used = getattr(event, field)
         if used is not None:
             setattr(stored, field, (getattr(stored, field) or 0) + used)
     summary = event.summary(viewer=run_id)
     if summary:  # system/hook events summarise to nothing; they must not blank the row
         stored.last = summary
+    if stored.kind == "conversation":
+        if newer_root_turn:
+            stored.provider_turn_id = event.turn_id
+            stored.status = "running"
+            stored.finished_at = None
+        if event.kind == "done":
+            stored.status = "done"
+            stored.finished_at = event.at if event.at is not None else time.time()
+        elif event.kind == "cancelled":
+            stored.status = "cancelled"
+            stored.finished_at = event.at if event.at is not None else time.time()
+        elif event.kind == "error":
+            stored.status = "failed"
+            stored.finished_at = event.at if event.at is not None else time.time()
+        elif event.kind == "interaction":
+            stored.status = "waiting"
+        elif not terminal and event.kind in ("started", "prompt", "text", "thinking", "tool"):
+            stored.status = "running"
+    elif stored.kind == "provider_child":
+        was_terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
+        if event.kind == "done":
+            stored.status = "done"
+        elif event.kind == "cancelled":
+            stored.status = "cancelled"
+        elif event.kind == "error":
+            stored.status = "failed"
+        elif event.kind == "interaction" and not was_terminal:
+            stored.status = "waiting"
+        elif not was_terminal and event.kind in ("started", "prompt", "text", "thinking", "tool"):
+            stored.status = "running"
+        if event.kind in ("done", "error", "cancelled") and stored.finished_at is None:
+            stored.finished_at = event.at if event.at is not None else time.time()
     _write(stored)
+
+
+class _ConversationProjector(BaseModel):
+    """The conversation event cursor, persistence, and snapshot boundary."""
+
+    _seen: dict[str, set[str]] = PrivateAttr(default_factory=dict)
+    _sequences: dict[str, int] = PrivateAttr(default_factory=dict)
+
+    def apply_child(self, child: AgentRun, event: AgentEvent) -> AgentRun | None:
+        parent_run_id = child.parent_run_id
+        root_run_id = child.root_run_id
+        spawned_by_event_id = child.spawned_by_event_id
+        if parent_run_id is None or root_run_id is None or spawned_by_event_id is None:
+            raise ValueError("provider child metadata is incomplete")
+        upsert_provider_child(
+            run_id=child.run_id,
+            provider=child.provider,
+            parent_run_id=parent_run_id,
+            root_run_id=root_run_id,
+            spawned_by_event_id=spawned_by_event_id,
+            cwd=child.cwd,
+            task=child.task or None,
+            requested_model=child.requested_model,
+            status=child.status,
+            started_at=child.started_at,
+            finished_at=child.finished_at,
+        )
+        return self.apply(parent_run_id, event)
+
+    def apply(self, run_id: str, event: AgentEvent) -> AgentRun | None:
+        if run_id not in self._seen:
+            persisted = read_events(run_id)
+            self._seen[run_id] = {item.event_id for item in persisted if item.event_id}
+            self._sequences[run_id] = max(
+                (item.sequence or 0 for item in persisted), default=0
+            )
+        if event.event_id and event.event_id in self._seen[run_id]:
+            return None
+        self._sequences[run_id] += 1
+        event.sequence = self._sequences[run_id]
+        if event.event_id:
+            self._seen[run_id].add(event.event_id)
+        if event.at is None:
+            event.at = time.time()
+        if event.kind == "text" and ":delta:" in event.event_id:
+            return get_run(run_id)
+        append_event(run_id, event)
+        return get_run(run_id)
+
+
+class _BillingSummary(BaseModel):
+    charge_path: AggregateChargePath
+    paths: list[ChargePath]
+    cost_certainty: CostCertainty
+
+
+def billing_summary(runs: list[AgentRun]) -> _BillingSummary:
+    paths: list[ChargePath] = list(dict.fromkeys(run.charge_path for run in runs))
+    aggregate: AggregateChargePath = paths[0] if len(paths) == 1 else "mixed"
+    certainty: CostCertainty = (
+        "known" if paths and all(run.cost_certainty == "known" for run in runs) else "unknown"
+    )
+    return _BillingSummary(charge_path=aggregate, paths=paths, cost_certainty=certainty)
+
+
+def upsert_provider_child(
+    *, run_id: str, provider: str, parent_run_id: str, root_run_id: str,
+    spawned_by_event_id: str, cwd: str, task: str | None, requested_model: str | None,
+    status: RunStatus, started_at: float | None = None, finished_at: float | None = None,
+) -> AgentRun:
+    """Create or enrich one provider-native child without replay or order regressions."""
+    run = _read_record(run_id)
+    if run is not None and (
+        run.kind != "provider_child"
+        or run.provider != provider
+        or run.root_run_id != root_run_id
+        or run.parent_run_id != parent_run_id
+    ):
+        raise ValueError("provider child identity collision")
+    if run is None:
+        observed_at = time.time()
+        run = AgentRun(
+            run_id=run_id,
+            kind="provider_child",
+            provider=provider,
+            name="subagent",
+            task=task or "",
+            cwd=cwd,
+            project=project_for(cwd),
+            pid=None,
+            model=requested_model,
+            parent_run_id=parent_run_id,
+            root_run_id=root_run_id,
+            spawned_by_event_id=spawned_by_event_id,
+            provider_session_id=run_id,
+            connection="local_session",
+            requested_model=requested_model,
+            charge_path="unknown",
+            cost_certainty="unknown",
+            capabilities=["collaboration"],
+            started_at=started_at if started_at is not None else observed_at,
+            finished_at=finished_at,
+            status=status,
+        )
+        _write(run)
+    if task:
+        run.task = task
+    if requested_model:
+        run.requested_model = requested_model
+        run.model = requested_model
+    if status in ("starting", "running") or run.spawned_by_event_id is None:
+        run.spawned_by_event_id = spawned_by_event_id
+    rank = {"starting": 0, "running": 1, "waiting": 2, "cancelled": 3,
+            "done": 4, "failed": 4, "crashed": 4, "stopped": 4, "foreign": 4}
+    if rank[status] >= rank[run.status]:
+        run.status = status
+    if started_at is not None:
+        run.started_at = min(run.started_at, started_at)
+    if finished_at is not None:
+        run.finished_at = finished_at
+    elif run.status in ("done", "failed", "cancelled") and run.finished_at is None:
+        run.finished_at = time.time()
+    _write(run)
+    return run
 
 
 def record_message(*, from_run: str, to_run: str, text: str) -> bool:
@@ -295,6 +733,7 @@ def record_message(*, from_run: str, to_run: str, text: str) -> bool:
     directly above whatever it did next. Returns False for an unknown recipient rather than
     writing a message nobody can receive.
     """
+    _no_follow_flags()
     if _read_record(to_run) is None:
         return False
     for side in (from_run, to_run):
@@ -306,10 +745,9 @@ def record_message(*, from_run: str, to_run: str, text: str) -> bool:
         # traffic honestly instead of guessing from what a previous render happened to remember.
         event = AgentEvent(kind="message", text=text, from_run=from_run, to_run=to_run,
                            at=time.time(), raw_index=_raw_line_count(side))
-        path = messages_path(side)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
-            f.write(event.model_dump_json() + "\n")
+        _append_private(
+            messages_path(side), (event.model_dump_json() + "\n").encode()
+        )
     # Keep the run rows current: a message is the most recent thing that happened to both.
     # Each side sees the exchange from its own point of view: the recipient reads "← sender",
     # the sender "→ recipient". One shared string would show one of them an arrow pointing at
@@ -325,7 +763,8 @@ def record_message(*, from_run: str, to_run: str, text: str) -> bool:
 def _raw_line_count(run_id: str) -> int:
     """How many lines the vendor stream holds right now — where a message lands in it."""
     try:
-        return sum(1 for _ in raw_events_path(run_id).open("rb"))
+        payload = _read_private(raw_events_path(run_id))
+        return 0 if payload is None else len(payload.splitlines())
     except OSError:
         return 0
 
@@ -354,7 +793,8 @@ def _interleave(parsed: list[AgentEvent], messages: list[AgentEvent],
 
 def _read_messages(run_id: str) -> list[AgentEvent]:
     try:
-        lines = messages_path(run_id).read_text().splitlines()
+        payload = _read_private(messages_path(run_id))
+        lines = [] if payload is None else payload.decode().splitlines()
     except OSError:
         return []
     out = []
@@ -390,10 +830,12 @@ def read_events(run_id: str) -> list[AgentEvent]:
     parser. A corrupt or half-written line is skipped, never fatal — a truncated write during a
     crash must not make the whole run unreadable.
     """
+    _no_follow_flags()
     stored = _read_record(run_id)
     provider = PROVIDERS.get(stored.provider) if stored else None
     try:
-        raw_lines = raw_events_path(run_id).read_text(errors="replace").splitlines()
+        payload = _read_private(raw_events_path(run_id))
+        raw_lines = [] if payload is None else payload.decode(errors="replace").splitlines()
     except OSError:
         raw_lines = []
 
@@ -404,7 +846,7 @@ def read_events(run_id: str) -> list[AgentEvent]:
         for index, line in enumerate(raw_lines):
             try:
                 event = provider.parse(line)
-            except Exception:
+            except (KeyError, TypeError, ValueError):
                 continue
             if event is not None:
                 parsed.append(event.model_copy(update={"raw_index": index}))
@@ -417,7 +859,8 @@ def read_events(run_id: str) -> list[AgentEvent]:
     # No raw stream — events were appended directly (a test, or a provider that has none).
     out: list[AgentEvent] = []
     try:
-        for line in events_path(run_id).read_text().splitlines():
+        payload = _read_private(events_path(run_id))
+        for line in ([] if payload is None else payload.decode().splitlines()):
             try:
                 out.append(AgentEvent.model_validate_json(line))
             except ValueError:
@@ -438,7 +881,8 @@ def _carry_observed_at(path: Path, events: list[AgentEvent]) -> None:
     """
     seen: list[float | None] = []
     try:
-        for line in path.read_text().splitlines():
+        payload = _read_private(path)
+        for line in ([] if payload is None else payload.decode().splitlines()):
             if line.strip():
                 seen.append(json.loads(line).get("at"))
     except (OSError, ValueError):
@@ -463,12 +907,13 @@ def _mirror_normalised(run_id: str, events: list[AgentEvent]) -> None:
     _carry_observed_at(path, events)
     payload = "".join(e.model_dump_json() + "\n" for e in events)
     try:
-        if path.read_text() == payload:
+        existing = _read_private(path)
+        if existing is not None and existing.decode() == payload:
             return
     except OSError:
         pass
     try:
-        path.write_text(payload)
+        _replace_private(path, payload.encode())
     except OSError:
         pass
 
@@ -480,6 +925,14 @@ def last_event(run_id: str) -> AgentEvent | None:
 
 def _status_for(run: AgentRun) -> RunStatus:
     """The one thing a file cannot assert about itself: whether it is still running."""
+    if run.kind == "provider_child":
+        return run.status
+    if run.kind == "conversation":
+        if run.status in ("waiting", "done", "failed", "cancelled", "stopped"):
+            return run.status
+        if run.pid and _alive(run.pid):
+            return run.status
+        return "crashed"
     if run.exit_code is not None:
         return ("stopped" if run.exit_code == -signal.SIGTERM
                 else "done" if run.exit_code == 0 else "failed")
@@ -506,14 +959,18 @@ def _derive(run: AgentRun) -> AgentRun:
     if run.exit_code is None and events:
         terminal = next((e for e in reversed(events) if e.kind in ("done", "error")), None)
         if terminal is not None:
-            run.status = "done" if terminal.kind == "done" else "failed"
+            run.status = (
+                "waiting" if run.kind == "conversation" and terminal.kind == "done"
+                else "done" if terminal.kind == "done"
+                else "failed"
+            )
     # A process that dies never calls finish(), so an ended run routinely has no end TIME — and a
     # timeline cannot draw an interval without one. The last byte the child wrote is an OBSERVED
     # end: not when it died, but the last moment we know it was alive, which is honest and
     # drawable. Only ever stamped for a run that is no longer running.
     if run.finished_at is None and run.status != "running":
         try:
-            run.finished_at = raw_events_path(run.run_id).stat().st_mtime
+            run.finished_at = _private_mtime(raw_events_path(run.run_id))
         except OSError:
             pass
     if events:
@@ -542,7 +999,7 @@ def _discover_foreign() -> list[dict]:
     for provider in PROVIDERS.values():
         try:
             found.extend(provider.discover())
-        except Exception:  # a provider's discovery must never break the listing
+        except (OSError, ValueError):  # one unavailable provider must not break listing
             continue
     return found
 
@@ -553,12 +1010,14 @@ def list_runs(*, include_foreign: bool = False) -> list[AgentRun]:
     the vendor's session id as our run id."""
     d = agents_dir()
     runs: list[AgentRun] = []
+    known: set[str] = set()
     if d.exists():
         for path in sorted(d.glob("*.json")):
-            try:
-                runs.append(_backfill_definition(AgentRun.model_validate_json(path.read_text())))
-            except (OSError, ValueError):
-                continue  # a corrupt record must not hide every other run
+            run = _read_record(path.stem)
+            if run is None or run.run_id in known:
+                continue  # a corrupt or aliased record must not hide every other run
+            known.add(run.run_id)
+            runs.append(run)
     runs = [_derive(r) for r in runs]
 
     if include_foreign:

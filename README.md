@@ -42,14 +42,20 @@ The same tools drive a **real desktop app** — `launch_app` puts it in an isola
 # 1. install the `interact` command (installs uv if missing)
 curl -LsSf https://raw.githubusercontent.com/AlanBlanchet/interact/main/install.sh | sh
 
-# 2. register it with your agent
-interact install claude     # or: cursor · vscode · copilot · codex · windsurf · zed · claude-desktop
+# 2. register it with Codex
+interact install codex
 
-# 3. check keys, providers, browser, desktop
+# 3. start a fresh Codex session (or restart the IDE extension), then verify
+codex mcp get interact
+
+# 4. check keys, providers, browser, desktop
 interact doctor
 ```
 
 That's it — your agent can now navigate, click, type, scroll, drag, see, hear and watch.
+
+Other hosts use the same bootstrap: `interact install claude`, `cursor`, `vscode`, `copilot`,
+`windsurf`, `zed`, or `claude-desktop`.
 
 <details>
 <summary>Other install routes (Windows, no-install, VS Code)</summary>

@@ -20,10 +20,24 @@
  *  a transcript and then vanished is reported finished; one that vanished having said nothing is
  *  the shape a real crash leaves.
  */
-export type RunStatus = "running" | "done" | "failed" | "crashed" | "stopped" | "foreign"
-  /** Declared in the company file, never asked — synthesized by the panel so the whole roster
-   *  stands in the world; liveness has nothing to probe on it. */
-  | "declared";
+import type { AgentRun as GeneratedAgentRun } from "./generated/types";
+
+/** Python owns persisted status vocabulary; the panel adds only its roster-only synthetic row. */
+export type RunStatus = NonNullable<GeneratedAgentRun["status"]> | "declared";
+
+const RUN_STATUSES = [
+  "starting", "running", "waiting", "done", "failed", "cancelled", "crashed", "stopped",
+  "foreign", "declared",
+] as const satisfies readonly RunStatus[];
+
+/** Old/corrupt records remain readable without blessing arbitrary strings as a finite status. */
+function isRunStatus(value: unknown): value is RunStatus {
+  return typeof value === "string" && RUN_STATUSES.some((status) => status === value);
+}
+
+export function runStatusOf(value: unknown): RunStatus {
+  return isRunStatus(value) ? value : "running";
+}
 
 export function livenessOf(
   recorded: RunStatus,
@@ -32,7 +46,7 @@ export function livenessOf(
   streamEnded: boolean,
   producedOutput: boolean = false,
 ): RunStatus {
-  if (recorded !== "running") return recorded; // already settled; never second-guessed
+  if (recorded !== "starting" && recorded !== "running") return recorded;
   if (typeof pid !== "number") return recorded; // nothing to probe — a crash would be invented
   if (processAlive) return recorded;
   if (streamEnded) return "done";

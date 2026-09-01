@@ -6,6 +6,10 @@ disk predated every change, so even a brand-new window showed the old product wh
 check passed.
 """
 
+import pytest
+
+from interact.cli import app_commands
+
 # --- Detecting a stale extension is half a feature ---------------------------------------------
 #
 # `interact doctor` has always SAID the installed extension is older than the tree, and could do
@@ -69,3 +73,49 @@ def test_a_failed_package_is_reported_rather_than_claimed(monkeypatch, tmp_path)
     monkeypatch.setattr(es, "_run", lambda argv, cwd=None: (1, "vsce exploded"))
     monkeypatch.setattr(es, "_extension_dir", lambda: tmp_path)
     assert es.deliver_extension() is False
+
+
+@pytest.mark.parametrize(
+    ("status", "message", "expected_deliveries"),
+    [
+        pytest.param(
+            {
+                "installed": "0.28.0",
+                "tree": "0.28.0",
+                "reason": "code",
+                "remedy": "install",
+            },
+            "compiled bundle differs",
+            1,
+            id="bundle-mismatch-installs",
+        ),
+        pytest.param(
+            {
+                "installed": "0.28.0",
+                "tree": "0.28.0",
+                "reason": "code",
+                "remedy": "restart",
+                "behind": 1,
+                "running": 1,
+            },
+            "fully restart",
+            0,
+            id="loaded-host-restarts",
+        ),
+    ],
+)
+def test_doctor_applies_the_machine_readable_extension_remedy(
+    monkeypatch, capsys, status, message, expected_deliveries
+):
+    deliveries = []
+    monkeypatch.setattr(app_commands, "extension_status", lambda: status)
+    monkeypatch.setattr(
+        app_commands,
+        "deliver_extension",
+        lambda: deliveries.append(status["remedy"]) or True,
+    )
+
+    app_commands._print_extension_status(fix=True)
+
+    assert message in capsys.readouterr().out
+    assert deliveries == ["install"] * expected_deliveries

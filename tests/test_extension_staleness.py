@@ -13,6 +13,8 @@ Two ways it goes stale, and the second is the one a version check cannot see:
 
 import time
 
+import pytest
+
 from interact import server_registry as reg
 from interact.extension_status import extension_status
 
@@ -35,26 +37,57 @@ def test_a_matching_version_with_a_newer_build_than_the_editor_is_still_stale(tm
     ext.mkdir()
     (ext / "out").mkdir()
     (ext / "out" / "extension.js").write_text("// rebuilt just now\n")
+    tree = tmp_path / "tree"
+    (tree / "out").mkdir(parents=True)
+    (tree / "out" / "extension.js").write_text("// rebuilt just now\n")
     monkeypatch.setattr("interact.extension_status._extensions_dir", lambda: tmp_path)
+    monkeypatch.setattr("interact.extension_status._extension_dir", lambda: tree)
     monkeypatch.setattr("interact.extension_status._tree_version", lambda: "0.28.0")
     # An editor that started an hour ago cannot be running a build written a moment ago.
     monkeypatch.setattr("interact.extension_status._editor_starts", lambda: [time.time() - 3600])
 
     st = extension_status()
 
-    assert st is not None and st["reason"] == "code", st
+    assert st is not None and (st["reason"], st["remedy"]) == ("code", "restart"), st
 
 
-def test_a_matching_version_with_an_editor_started_after_the_build_is_clean(tmp_path, monkeypatch):
-    ext = tmp_path / "alanblanchet.interact-0.28.0"
-    ext.mkdir()
-    (ext / "out").mkdir()
-    (ext / "out" / "extension.js").write_text("x")
-    monkeypatch.setattr("interact.extension_status._extensions_dir", lambda: tmp_path)
+@pytest.mark.parametrize(
+    ("installed_bundle", "expected_status"),
+    [
+        pytest.param(b"exports.activate = 'current';\n", None, id="matching-bundle"),
+        pytest.param(
+            b"exports.activate = 'stale';\n",
+            ("code", "install"),
+            id="different-bundle",
+        ),
+    ],
+)
+def test_matching_version_with_an_editor_started_after_the_build_uses_compiled_bundle(
+    tmp_path, monkeypatch, installed_bundle, expected_status
+):
+    extensions = tmp_path / "extensions"
+    ext = extensions / "alanblanchet.interact-0.28.0"
+    installed_compiled = ext / "out" / "extension.js"
+    installed_compiled.parent.mkdir(parents=True)
+    installed_compiled.write_bytes(installed_bundle)
+
+    tree = tmp_path / "tree"
+    tree_compiled = tree / "out" / "extension.js"
+    tree_compiled.parent.mkdir(parents=True)
+    tree_compiled.write_bytes(b"exports.activate = 'current';\n")
+
+    monkeypatch.setattr("interact.extension_status._extensions_dir", lambda: extensions)
+    monkeypatch.setattr("interact.extension_status._extension_dir", lambda: tree)
     monkeypatch.setattr("interact.extension_status._tree_version", lambda: "0.28.0")
-    monkeypatch.setattr("interact.extension_status._editor_starts", lambda: [time.time() + 60])
+    monkeypatch.setattr(
+        "interact.extension_status._editor_starts",
+        lambda: [installed_compiled.stat().st_mtime + 60],
+    )
 
-    assert extension_status() is None
+    status = extension_status()
+    actual_status = None if status is None else (status["reason"], status["remedy"])
+
+    assert actual_status == expected_status, status
 
 
 def test_no_installed_extension_is_not_a_complaint(tmp_path, monkeypatch):
@@ -83,7 +116,11 @@ def test_it_does_not_crash_where_proc_does_not_exist(monkeypatch, tmp_path):
     ext = tmp_path / "alanblanchet.interact-0.28.0"
     (ext / "out").mkdir(parents=True)
     (ext / "out" / "extension.js").write_text("x")
+    tree = tmp_path / "tree"
+    (tree / "out").mkdir(parents=True)
+    (tree / "out" / "extension.js").write_text("x")
     monkeypatch.setattr(es, "_extensions_dir", lambda: tmp_path)
+    monkeypatch.setattr(es, "_extension_dir", lambda: tree)
     monkeypatch.setattr(es, "_tree_version", lambda: "0.28.0")
 
     def no_proc():

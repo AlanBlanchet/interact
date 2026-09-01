@@ -152,7 +152,7 @@ class AgentProvider(ABC):
         found = shutil.which(self.binary)
         if found is None:
             raise FileNotFoundError(f"{self.name} CLI is not installed")
-        return found
+        return str(Path(found).resolve())
 
     def subscription_env(
         self, base: dict[str, str] | None = None, *, temp_dir: Path | None = None
@@ -682,6 +682,10 @@ class CodexProvider(AgentProvider):
     verified = False
     caveat = "unverified: the general agent adapter has not been exercised end-to-end"
 
+    def app_server_command(self) -> list[str]:
+        """The installed local-session protocol entry point, resolved before spawning."""
+        return [self.executable(), "app-server", "--listen", "stdio://"]
+
     def auth_command(self) -> list[str]:
         return [self.executable(), "login", "status"]
 
@@ -743,6 +747,7 @@ class CodexProvider(AgentProvider):
 
 class _MediaSessionProvider(Protocol):
     name: str
+    binary: str
     native_providers: frozenset[str]
     media_model_field: str
     no_extra_usage_guidance: str

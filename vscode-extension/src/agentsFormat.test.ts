@@ -12,7 +12,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { AgentRun } from "./agents.ts";
-import { formatCost, formatElapsed, groupKeyFor, orderGroups, rowDescription, statusIcon } from "./agentsFormat.ts";
+import {
+  formatCost,
+  formatElapsed,
+  groupKeyFor,
+  orderGroups,
+  rowDescription,
+  statusIcon,
+} from "./agentsFormat.ts";
+import { runTooltip } from "./billingPresentation.ts";
 
 function run(over: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -30,6 +38,20 @@ test("unknown cost is an em dash, never $0.00", () => {
   assert.equal(formatCost(null), "—");
   assert.equal(formatCost(undefined), "—");
   assert.equal(formatCost(0.6155), "~$0.6155");
+});
+
+test("a run tooltip reports its billing path without inventing account coverage", () => {
+  const unknown = runTooltip(run({
+    charge_path: "unknown", cost_certainty: "unknown", cost_usd: null,
+  }));
+  assert.match(unknown, /Unknown charge path and account impact/i);
+  assert.doesNotMatch(unknown, /already paid|\bfree\b|\$0(?:\.0+)?(?![\d.])/i);
+  assert.match(runTooltip(run({
+    charge_path: "subscription_quota", cost_certainty: "unknown", cost_usd: 2.4,
+  })), /~\$2\.4000 API-equivalent usage.*Subscription quota and account impact not reported/i);
+  assert.match(runTooltip(run({
+    charge_path: "metered_api", cost_certainty: "known", cost_usd: 0.32,
+  })), /\$0\.3200 observed metered API charge/i);
 });
 
 test("a project group is the directory's basename, not the whole path", () => {

@@ -8,9 +8,22 @@
  *  file or a web page — so it is escaped here, once, rather than at each call site.
  */
 
+import type {
+  AgentEvent,
+  AgentRun,
+  ConversationCatalog,
+  ConversationInteraction,
+  ConversationRoute,
+  InteractionSubmission,
+} from "./generated/types";
+import type { BillingPresentation } from "./billingPresentation";
+import type { TeamSpend } from "./teamSpend";
+
 export interface Turn {
   kind: string;
   text?: string;
+  /** Provider lifecycle for events whose kind spans more than one phase, notably child spawn. */
+  status?: AgentEvent["status"];
   tool?: string | null;
   tool_input?: string;
   /** The vendor's tool_use id — what lets the ⧉ open this call's WHOLE input/output out of the
@@ -278,6 +291,13 @@ const LABEL: Record<string, string> = {
   spawn: "spawned",
 };
 
+const SPAWN_LABEL: Partial<Record<NonNullable<AgentEvent["status"]>, string>> = {
+  completed: "child finished",
+  failed: "child failed",
+  provider_failed: "child failed",
+  cancelled: "child cancelled",
+};
+
 /** Who a message is from, as the reader sees it. Unlabelled, an incoming message looked like
  *  noise — and the point of this panel is being able to tell who said what. */
 function messageLabel(turn: Turn): string {
@@ -450,6 +470,10 @@ export function renderTurn(turn: Turn): string {
     return toolBox(turn, undefined);
   }
   if (NOT_A_TURN.has(turn.kind)) return ""; // run infrastructure, not something the agent said
+  if (turn.kind === "error") {
+    return `<div class="${cls}"><div class="who">error</div>` +
+      `<div class="body">${escapeHtml(PROVIDER_FAILURE_NOTICE)}</div></div>`;
+  }
   // A harness injection (a stop-hook review, a system reminder) is not something HE said, and
   // rendering it verbatim under "YOU" claims he wrote it. It folds as system machinery.
   // BOTH kinds: what a person or the harness types arrives as "prompt" in the real stream, and
@@ -462,7 +486,9 @@ export function renderTurn(turn: Turn): string {
   }
   const label = turn.kind === "message"
     ? escapeHtml(messageLabel(turn))
-    : LABEL[turn.kind] ?? escapeHtml(turn.kind);
+    : turn.kind === "spawn"
+      ? SPAWN_LABEL[turn.status ?? "unknown"] ?? LABEL.spawn
+      : LABEL[turn.kind] ?? escapeHtml(turn.kind);
   const raw = turn.text ?? "";
   if (turn.kind === "thinking" && !raw.trim()) {
     // The vendor emits thinking blocks with the CONTENT withheld (signature only) unless its own
@@ -536,6 +562,17 @@ export function renderTranscript(turns: Turn[]): string {
  *  exists there (the roster moved to the Team tab), so a first-timer stared at 740px of void with
  *  directions to a place that was not on the map. An empty state must be a DOOR, not a caption. */
 export const CHAT_EMPTY_HINT = "No conversation open yet.";
+/** A recursive diagnostic summary, not another copy of each run's full 300-event transcript. */
+export const CONVERSATION_ACTIVITY_EVENT_LIMIT = 24;
+/** Keep a large provider team from multiplying DOM and registry reads at every tree level. */
+export const CONVERSATION_ACTIVITY_CHILD_LIMIT = 24;
+
+export function boundedConversationActivityChildren<Item>(
+  children: readonly Item[],
+): { items: Item[]; omitted: number } {
+  const omitted = Math.max(0, children.length - CONVERSATION_ACTIVITY_CHILD_LIMIT);
+  return { items: children.slice(omitted), omitted };
+}
 
 /** A file the panel can open for you — the point of a link rather than a path you copy out. */
 export interface ChatFile {
@@ -546,6 +583,8 @@ export interface ChatFile {
 /** What a run IS, as opposed to what it has said. */
 export interface ChatRun {
   run_id: string;
+  kind?: AgentRun["kind"];
+  capabilities?: AgentRun["capabilities"];
   provider?: string;
   model?: string | null;
   agent?: string | null;
@@ -560,6 +599,168 @@ export interface ChatRun {
   permission?: { label: string; unrestricted: boolean } | null;
 }
 
+/** Presentation state owned by the extension host.  Catalog and event payloads stay the generated
+ * Python-owned protocol types; only the few extension-local lifecycle facts live here. */
+export interface ConversationConsoleState {
+  phase: "loading" | "ready" | "empty" | "starting" | "pending" | "error";
+  catalog?: ConversationCatalog;
+  active_run_id?: string;
+  error?: string;
+  approvals?: { run_id: string; event: AgentEvent }[];
+}
+
+export const PROVIDER_FAILURE_NOTICE =
+  "The provider request failed. See the provider session for details.";
+
+/** Provider approval ids need not be globally unique; their run is part of their identity. */
+export function conversationApprovalKey(runId: string, approvalId: string): string {
+  return `${runId}\0${approvalId}`;
+}
+
+/** Parse one hostile webview value against the provider schema already held by the extension.
+ *  The generated wire decoder can prove primitive JSON shapes, but only the pending interaction
+ *  can prove which keys, kinds and choice values this provider actually offered. */
+export function validatedInteractionSubmission(
+  interaction: ConversationInteraction,
+  candidate: unknown,
+): InteractionSubmission | undefined {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return undefined;
+  }
+  const envelope = candidate as Record<string, unknown>;
+  const envelopeKeys = Object.keys(envelope);
+  if (envelopeKeys.length !== 2
+      || envelopeKeys.some((key) => key !== "interaction_id" && key !== "values")
+      || envelope.interaction_id !== interaction.id
+      || envelope.values === null || typeof envelope.values !== "object"
+      || Array.isArray(envelope.values)) {
+    return undefined;
+  }
+  const advertised = new Map(interaction.fields.map((field) => [field.key, field]));
+  if (advertised.size !== interaction.fields.length) return undefined;
+  const rawValues = envelope.values as Record<string, unknown>;
+  const submittedKeys = Object.keys(rawValues);
+  if (submittedKeys.some((key) => !advertised.has(key))) {
+    return undefined;
+  }
+  const entries: [string, string | boolean][] = [];
+  for (const field of interaction.fields) {
+    const present = Object.prototype.hasOwnProperty.call(rawValues, field.key);
+    if (!present) {
+      if (field.required !== false) return undefined;
+      continue;
+    }
+    const value = rawValues[field.key];
+    if (field.kind === "boolean") {
+      if (typeof value !== "boolean") return undefined;
+    } else {
+      if (typeof value !== "string") return undefined;
+      if (field.kind === "choice" && !(field.options ?? []).includes(value)) return undefined;
+      if (field.kind === "text" && !value.trim()) {
+        if (field.required !== false) return undefined;
+        continue;
+      }
+    }
+    entries.push([field.key, value]);
+  }
+  return { interaction_id: interaction.id, values: Object.fromEntries(entries) };
+}
+
+function terminalConversationEvent(event: AgentEvent): boolean {
+  return event.kind === "done" || event.kind === "error" || event.kind === "cancelled";
+}
+
+/** Terminal runs cannot retain an actionable approval button, even if resolution was lost. */
+export function conversationApprovalsAfterEvent(
+  approvals: NonNullable<ConversationConsoleState["approvals"]>,
+  run: AgentRun,
+  event: AgentEvent,
+): NonNullable<ConversationConsoleState["approvals"]> {
+  if (terminalConversationEvent(event)) {
+    return approvals.filter((approval) => approval.run_id !== run.run_id);
+  }
+  if (event.kind !== "interaction_resolved" || !event.event_id) return approvals;
+  const resolvedId = event.event_id.split(":", 1)[0];
+  return approvals.filter((approval) =>
+    approval.run_id !== run.run_id || approval.event.interaction?.id !== resolvedId);
+}
+
+/** A child's lifecycle is discrete: only the active root may complete the root turn. */
+export function conversationStateAfterEvent(
+  state: ConversationConsoleState,
+  run: AgentRun,
+  event: AgentEvent,
+): ConversationConsoleState {
+  if (!terminalConversationEvent(event) || run.run_id !== state.active_run_id) return state;
+  return {
+    ...state,
+    phase: "ready",
+    active_run_id: undefined,
+    error: event.kind === "error" ? PROVIDER_FAILURE_NOTICE : undefined,
+  };
+}
+
+type ConversationRunSnapshot = Omit<AgentRun, "status"> & {
+  status?: AgentRun["status"] | AgentEvent["status"];
+};
+
+function canonicalRunStatus(
+  status: ConversationRunSnapshot["status"],
+): AgentRun["status"] | undefined {
+  if (status === "completed") return "done";
+  if (status === "provider_failed") return "failed";
+  if (status === null || status === "interaction_required" || status === "unknown") return undefined;
+  return status;
+}
+
+function settledRunStatus(status: AgentRun["status"] | undefined): boolean {
+  return status === "done" || status === "failed" || status === "cancelled"
+    || status === "crashed" || status === "stopped";
+}
+
+/** Provider streams may replay richer start metadata after completion. Enrich the snapshot without
+ * letting that stale lifecycle claim resurrect a child; a genuinely newer provider turn may run. */
+export function mergeConversationRunSnapshot(
+  previous: ConversationRunSnapshot | undefined,
+  incoming: ConversationRunSnapshot,
+): AgentRun {
+  const nextStatus = canonicalRunStatus(incoming.status);
+  if (!previous) return { ...incoming, status: nextStatus } as AgentRun;
+  const previousStatus = canonicalRunStatus(previous.status);
+  const sameTurn = previous.provider_turn_id === incoming.provider_turn_id;
+  const staleLifecycle = nextStatus === "starting" || nextStatus === "running" || nextStatus === "waiting";
+  if (sameTurn && settledRunStatus(previousStatus) && staleLifecycle) {
+    return {
+      ...previous,
+      ...incoming,
+      status: previousStatus,
+      finished_at: previous.finished_at,
+      exit_code: previous.exit_code,
+      cost_usd: previous.cost_usd ?? incoming.cost_usd,
+      input_tokens: Math.max(previous.input_tokens ?? 0, incoming.input_tokens ?? 0) || undefined,
+      output_tokens: Math.max(previous.output_tokens ?? 0, incoming.output_tokens ?? 0) || undefined,
+    } as AgentRun;
+  }
+  return {
+    ...previous,
+    ...incoming,
+    status: nextStatus ?? previousStatus,
+    cost_usd: incoming.cost_usd ?? previous.cost_usd,
+    input_tokens: Math.max(previous.input_tokens ?? 0, incoming.input_tokens ?? 0) || undefined,
+    output_tokens: Math.max(previous.output_tokens ?? 0, incoming.output_tokens ?? 0) || undefined,
+  } as AgentRun;
+}
+
+/** A recursive projection for the activity drawer.  The run itself remains the generated wire
+ * type; the extension adds only its already-renderable transcript and children. */
+export interface ConversationActivityView {
+  run: AgentRun;
+  current_tool?: string | null;
+  transcript: Turn[];
+  children: ConversationActivityView[];
+  omitted_children?: number;
+}
+
 export interface ChatDocument {
   /** The conversation that SPAWNED this one, when there is one.
    *
@@ -570,7 +771,7 @@ export interface ChatDocument {
   parent?: { runId: string; title: string } | null;
   /** What the whole team is costing and this agent's share. Passed in for the same reason the
    *  commands are: this module stays import-free so its test can load it directly. */
-  spend?: { total: number; agents: number; running: number; sharePercent: number | null };
+  spend?: TeamSpend;
   /** What the panel can DO, not just say. Passed in rather than imported so this module stays
    *  import-free — its test loads it directly under --experimental-strip-types, which needs `.ts`
    *  specifiers that tsc refuses when emitting. The list itself lives in `chatCommands.ts`.
@@ -609,6 +810,12 @@ export interface ChatDocument {
    *  identical whether the agent is thinking or the send silently failed — a reviewer read the
    *  silence as a broken button while the reply was on its way. */
   awaitingReply?: boolean;
+  /** Present whenever the local conversation host is available, including before a run exists. */
+  console?: ConversationConsoleState;
+  /** The selected root and every provider-native child, joined causally by the extension. */
+  activity?: ConversationActivityView[];
+  /** Shared, path-partitioned billing copy computed by the extension host. */
+  billing?: BillingPresentation;
 }
 
 /** Just the transcript, for patching into a live view.
@@ -666,9 +873,225 @@ export function renderTabs(tabs: Tab[]): string {
   return `<nav class="tabs" aria-label="Agents on this errand">${tabs.map(one).join("")}</nav>`;
 }
 
+function routeAvailable(route: ConversationRoute): boolean {
+  return route.availability === "available";
+}
+
+/** Only an included local session may be preselected. API billing always requires a route click. */
+function initialRoute(catalog: ConversationCatalog): ConversationRoute | undefined {
+  return catalog.routes.find((route) => route.connection === "local_session" && routeAvailable(route));
+}
+
+function routeOption(route: ConversationRoute, selected: boolean): string {
+  const connection = route.connection === "local_session" ? "session" : route.connection;
+  const label = `${route.label} · ${route.provider} · ${connection}`;
+  return `<option value="${escapeHtml(route.id)}"${selected ? " selected" : ""}` +
+    `${routeAvailable(route) ? "" : " disabled"}` +
+    ` data-available="${routeAvailable(route) ? "1" : "0"}"` +
+    ` data-note="${escapeHtml(route.billing_note)}"` +
+    ` data-reason="${escapeHtml(route.reason ?? "")}"` +
+    ` data-charge="${escapeHtml(route.charge_path)}"` +
+    ` data-certainty="${escapeHtml(route.cost_certainty)}"` +
+    ` data-default="${escapeHtml(route.default_model ?? "")}">${escapeHtml(label)}</option>`;
+}
+
+/** Full policy/authentication reasons remain inspectable even when select labels are clipped. */
+function unavailableRouteDisclosure(catalog: ConversationCatalog, open = false): string {
+  const unavailable = catalog.routes.filter((route) => !routeAvailable(route));
+  if (!unavailable.length) return "";
+  const rows = unavailable.map((route) => {
+    const connection = route.connection === "local_session" ? "session" : route.connection;
+    const availability = route.availability.replace(/_/g, " ");
+    const reason = route.reason || "No additional reason was reported.";
+    return `<li><b>${escapeHtml(route.provider)} · ${escapeHtml(connection)}</b>` +
+      `<span>${escapeHtml(availability)} — ${escapeHtml(reason)}</span></li>`;
+  }).join("");
+  return `<details class="route-issues"${open ? " open" : ""}>` +
+    `<summary>${unavailable.length} unavailable route${unavailable.length === 1 ? "" : "s"}</summary>` +
+    `<ul>${rows}</ul></details>`;
+}
+
+function emptyRouteState(catalog?: ConversationCatalog): string {
+  return '<section class="console-state empty"><b>No runnable routes</b>' +
+    '<span>Install or authenticate a supported local session, or explicitly configure an API route.</span>' +
+    `${catalog ? unavailableRouteDisclosure(catalog, true) : ""}</section>`;
+}
+
+function consolePicker(state: ConversationConsoleState): string {
+  if (state.phase === "loading" && !state.catalog) {
+    return '<section class="console-state loading" role="status">Loading available routes…</section>';
+  }
+  if (state.error && !state.catalog) {
+    return `<section class="console-state error" role="alert">${escapeHtml(state.error)}</section>`;
+  }
+  if ((state.phase === "starting" || state.phase === "pending") && !state.catalog) {
+    const message = state.phase === "starting" ? "Starting the conversation…" : "The agent is answering…";
+    return `<section class="console-state pending" role="status">${message}</section>`;
+  }
+  const catalog = state.catalog;
+  if (!catalog || catalog.routes.length === 0) return emptyRouteState(catalog);
+  if (state.phase === "empty") return emptyRouteState(catalog);
+  const selected = initialRoute(catalog);
+  const models = catalog.routes.flatMap((route) => (route.models ?? []).map((model) =>
+    `<option data-model="${escapeHtml(model.id)}" data-route="${escapeHtml(route.id)}"` +
+    ` value="${escapeHtml(model.id)}" label="${escapeHtml(`${model.provider} · ${model.id}`)}"></option>`));
+  const criteria = catalog.criteria.map((criterion) =>
+    `<option data-criterion="${escapeHtml(criterion)}" value="${escapeHtml(criterion)}"></option>`);
+  const status = state.error
+    ? `<p id="console-live-state" class="console-state error" role="alert">${escapeHtml(state.error)}</p>`
+    : state.phase === "starting"
+      ? '<p id="console-live-state" class="console-state pending" role="status">Starting the conversation…</p>'
+      : state.phase === "pending"
+        ? '<p id="console-live-state" class="console-state pending" role="status">The agent is answering…</p>'
+        : '<p id="console-live-state" class="console-state" role="status" hidden></p>';
+  const selection = selected?.default_model ?? "";
+  const chooseRoute = selected ? "" : '<option value="" selected disabled>Choose a route</option>';
+  const selectionDisabled = selected ? "" : " disabled";
+  return `<section class="console-picker" aria-label="Conversation route and model">
+    <label for="route">Route</label>
+    <select id="route" aria-describedby="route-policy billing">${chooseRoute}${catalog.routes.map((route) =>
+      routeOption(route, route.id === selected?.id)).join("")}</select>
+    <fieldset class="selection-kind"><legend>Choose by</legend>
+      <label><input type="radio" name="selection-kind" value="model" checked${selectionDisabled}> Exact model</label>
+      <label><input type="radio" name="selection-kind" value="criterion"${selectionDisabled}> Criterion</label>
+    </fieldset>
+    <label id="selection-label" for="selection">Model</label>
+    <input id="selection" list="selection-options" value="${escapeHtml(selection)}"
+           autocomplete="off" placeholder="Search the runnable models"${selectionDisabled}>
+    <datalist id="selection-options">${models.join("")}</datalist>
+    <template id="selection-source">${models.join("")}${criteria.join("")}</template>
+    <p id="route-policy" class="route-policy"${selected?.reason ? "" : " hidden"}>` +
+      `<b>Provider policy</b><br>${escapeHtml(selected?.reason ?? "")}</p>
+    <p id="billing" class="billing"><b>${escapeHtml(selected?.charge_path ?? "Choose a route")}</b>` +
+      ` · ${escapeHtml(selected?.cost_certainty ?? "no billing path selected")}<br>` +
+      `${escapeHtml(selected?.billing_note ?? "Select a route to inspect its account and billing impact.")}</p>
+    ${unavailableRouteDisclosure(catalog)}
+    ${status}
+  </section>`;
+}
+
+function approvalCards(approvals: ConversationConsoleState["approvals"]): string {
+  if (!approvals?.length) return "";
+  const cards = approvals.flatMap(({ run_id, event }) => {
+    const interaction = event.interaction;
+    if (!interaction) return [];
+    let unanswerable = false;
+    const fields = interaction.fields.map((field, index) => {
+      const required = field.required !== false;
+      const attributes = `class="interaction-field" data-field-key="${escapeHtml(field.key)}"` +
+        ` data-field-kind="${field.kind}" data-required="${required ? "1" : "0"}"`;
+      if (field.kind === "choice") {
+        const choices = (field.options ?? []).map((option) =>
+          `<label><input type="radio" name="interaction-field-${index}"` +
+          ` data-interaction-value value="${escapeHtml(option)}"${required ? " required" : ""}>` +
+          ` <span>${escapeHtml(option)}</span></label>`).join("");
+        if (required && !choices) unanswerable = true;
+        return `<fieldset ${attributes}><legend>${escapeHtml(field.label)}</legend>` +
+          (choices || `<span class="interaction-unavailable">No choices were advertised by the provider.</span>`) +
+          `</fieldset>`;
+      }
+      if (field.kind === "text") {
+        return `<label ${attributes}><span>${escapeHtml(field.label)}</span>` +
+          `<textarea data-interaction-value rows="2"${required ? " required" : ""}></textarea></label>`;
+      }
+      return `<label ${attributes}><input type="checkbox" data-interaction-value>` +
+        ` <span>${escapeHtml(field.label)}</span></label>`;
+    }).join("");
+    const disclosure = (interaction.disclosure ?? []).length
+      ? `<ul class="interaction-disclosure">${interaction.disclosure?.map((item) =>
+        `<li><code>${escapeHtml(item)}</code></li>`).join("")}</ul>`
+      : "";
+    return [`<article class="approval" data-run="${escapeHtml(run_id)}">
+      <b>${escapeHtml(interaction.title)}</b>
+      <p>${escapeHtml(event.text || "The provider is waiting for your decision.")}</p>
+      ${disclosure}
+      <form class="interaction-form" data-interaction="${escapeHtml(interaction.id)}"
+            data-run="${escapeHtml(run_id)}">
+        <div class="interaction-fields">${fields}</div>
+        <p class="interaction-error" role="alert" hidden>Complete every required field.</p>
+        <button class="interaction-submit" type="submit"${unanswerable ? " disabled" : ""}>Submit response</button>
+      </form>
+    </article>`];
+  });
+  return cards.length
+    ? `<section class="approvals" aria-label="Requests waiting for input">${cards.join("")}</section>`
+    : "";
+}
+
+function durationOf(run: AgentRun): string | null {
+  if (typeof run.started_at !== "number" || typeof run.finished_at !== "number") return null;
+  return `${Math.max(0, Math.round(run.finished_at - run.started_at))}s`;
+}
+
+function activityNode(view: ConversationActivityView, depth: number): string {
+  const { run } = view;
+  const requested = run.requested_criterion ?? run.requested_model ?? "provider default";
+  const tools = run.tools?.join(", ") || "none reported";
+  const facts = [
+    ["Task", run.task || "No task reported"],
+    ["Route", `${run.provider} · ${run.connection === "local_session" ? "session" : run.connection ?? "unknown"}`],
+    ["Requested", requested],
+    ["Resolved", run.model ?? "unknown"],
+    ["Status", run.status],
+    ["Duration", durationOf(run) ?? (run.status === "running" ? "running" : "unknown")],
+    ["Current tool", view.current_tool ?? "none"],
+    ["Tools", tools],
+    ["Usage", `${run.input_tokens ?? "?"} in · ${run.output_tokens ?? "?"} out`],
+    ["Billing", `${run.charge_path ?? "unknown"} · ${run.cost_certainty ?? "unknown"}`],
+  ];
+  const details = facts.map(([label, value]) =>
+    `<dt>${escapeHtml(String(label))}</dt><dd>${escapeHtml(String(value))}</dd>`).join("");
+  const transcript = view.transcript.length
+    ? `<div class="activity-transcript">${renderTranscript(view.transcript)}</div>`
+    : '<p class="activity-empty">No transcript reported yet.</p>';
+  const omitted = view.omitted_children
+    ? `<p class="activity-omitted">${view.omitted_children} earlier child runs omitted from this summary. ` +
+      `Open Team or session navigation to inspect every run.</p>`
+    : "";
+  return `<details class="activity-run" data-run="${escapeHtml(run.run_id)}" data-depth="${depth}"` +
+    `${depth === 0 ? " open" : ""}>
+      <summary><span>${escapeHtml(run.name)}</span><b>${escapeHtml(run.status ?? "unknown")}</b></summary>
+      <dl>${details}</dl>${transcript}
+      ${view.children.map((child) => activityNode(child, depth + 1)).join("")}${omitted}
+    </details>`;
+}
+
+function activityTree(
+  activity: ConversationActivityView[] | undefined,
+  billing: BillingPresentation | undefined,
+  spend: TeamSpend | undefined,
+): string {
+  if (!activity?.length) return "";
+  const spendSummary = spend && spend.agents > 0 ? teamSpendSummary(spend) : "";
+  const spendRow = spendSummary
+    ? `<p class="team-spend" aria-label="Team spend: ${escapeHtml(spendSummary)}">${escapeHtml(spendSummary)}</p>`
+    : "";
+  const billingSummary = billing
+    ? `<p class="billing-summary" aria-label="${escapeHtml(billing.ariaSummary)}"><b>${escapeHtml(billing.heading)}</b>: ` +
+      `${billing.lines.map((line) => escapeHtml(line.text)).join("; ")}</p>`
+    : "";
+  return `<section class="activity-tree" aria-label="Agent activity">
+    <h2>Agent activity</h2>${spendRow}${billingSummary}${activity.map((view) => activityNode(view, 0)).join("")}
+  </section>`;
+}
+
+/** The live-patched portion around a transcript.  Keeping it separate lets child/approval events
+ * update without replacing the document and destroying a half-written prompt. */
+export function conversationActivityFragment(
+  activity: ConversationActivityView[] | undefined,
+  consoleState: ConversationConsoleState | undefined,
+  billing?: BillingPresentation,
+  spend?: TeamSpend,
+): string {
+  const error = consoleState?.error
+    ? `<p class="console-state error" role="alert">${escapeHtml(consoleState.error)}</p>`
+    : "";
+  return error + approvalCards(consoleState?.approvals) + activityTree(activity, billing, spend);
+}
+
 export function chatDocument(
   { nonce, turns, name, status, awaitingReply, run, files, sentBy, commands, spend, parent,
-    readOnly, tabs }: ChatDocument,
+    readOnly, tabs, console: consoleState, activity, billing }: ChatDocument,
 ): string {
   const up = parent
     ? `<button class="back" id="up" data-run="${escapeHtml(parent.runId)}"` +
@@ -695,10 +1118,15 @@ export function chatDocument(
     ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
     : "";
   const body = name
-    ? renderDetails(run, files, sentBy, spend) + renderTranscript(turns) + pending
-    : `<div class="hint"><p>${escapeHtml(CHAT_EMPTY_HINT)}</p>` +
-      `<button class="door" id="openTeam">Open the Team</button>` +
-      `<p class="hint-sub">Pick a character or a roster row there to talk to it.</p></div>`;
+    ? renderDetails(run, files, sentBy, spend) +
+      `<div id="conversation-activity">${conversationActivityFragment(activity, consoleState, billing, spend)}</div>`
+    : consoleState
+      ? consolePicker(consoleState) +
+        `<div id="conversation-activity">${approvalCards(consoleState.approvals)}${activityTree(activity, billing, spend)}</div>`
+      : `<div class="hint"><p>${escapeHtml(CHAT_EMPTY_HINT)}</p>` +
+        `<button class="door" id="openTeam">Open the Team</button>` +
+        `<p class="hint-sub">Pick a character or a roster row there to talk to it.</p></div>`;
+  const transcript = name ? renderTranscript(turns) + pending : "";
   // The panel could only SEND. Everything else you might want to do with the agent you are
   // reading — stop it, start another, open the team, change workspace — lived in a tree context
   // menu or the command palette. All three reference tools put this behind a slash menu in the
@@ -719,17 +1147,47 @@ export function chatDocument(
   // A session interact did not start cannot be steered from here — the CLI refuses the send,
   // and a composer that pretends otherwise is a dead control with a Send button. Watching is
   // the honest offer, and the placeholder says where steering happens.
-  const canSend = Boolean(name) && !readOnly;
-  const composer = `<form id="composer">
+  const route = consoleState?.catalog ? initialRoute(consoleState.catalog) : undefined;
+  const canStart = !name && consoleState?.phase === "ready" && Boolean(route && routeAvailable(route));
+  const turnPending = consoleState?.phase === "starting" || consoleState?.phase === "pending";
+  const conversationRun = run?.kind === "conversation" || run?.kind === "provider_child";
+  const providerChild = run?.kind === "provider_child";
+  const resumeUnavailable = run?.kind === "conversation"
+    && !run.capabilities?.includes("resume");
+  const bridgeStopped = conversationRun && consoleState?.phase === "error";
+  const canSend = (Boolean(name) && !readOnly && !providerChild && !resumeUnavailable
+    && !turnPending && !bridgeStopped)
+    || canStart;
+  const coldStart = !name && Boolean(consoleState);
+  const readyPlaceholder = coldStart
+    ? "Ask the new conversation…  (Shift+Enter for a new line)"
+    : `Reply to ${name ?? "the agent"}…  (/ for commands)`;
+  const lifecycleLocked = Boolean(readOnly || resumeUnavailable || turnPending || bridgeStopped
+    || (coldStart && consoleState?.phase !== "ready"));
+  const cancel = turnPending && consoleState?.active_run_id
+    ? `<button type="button" id="cancel" data-run="${escapeHtml(consoleState.active_run_id)}">Cancel</button>`
+    : "";
+  const resumeNotice = resumeUnavailable
+    ? `<p class="console-state">This conversation cannot be resumed here. Start a new conversation to continue.</p>`
+    : "";
+  const composer = `${resumeNotice}<form id="composer" data-cold-start="${coldStart ? "1" : "0"}"
+         data-lifecycle-locked="${lifecycleLocked ? "1" : "0"}">
          <ul id="palette" role="listbox" aria-label="Commands" hidden>${menu}</ul>
-         <textarea id="message" rows="3" ${canSend ? "" : "disabled "}placeholder="${
-           canSend ? `Reply to ${escapeHtml(name!)}…  (/ for commands)`
+         <textarea id="message" rows="3" data-ready-placeholder="${escapeHtml(readyPlaceholder)}"
+                   ${canSend ? "" : "disabled "}placeholder="${
+           canStart || canSend ? escapeHtml(readyPlaceholder)
+                : providerChild ? "Inspect here; continue from the parent conversation"
                 : readOnly ? "One of your own sessions — watch here, reply in its window"
-                : "Pick an agent to reply — or press / for the panel's commands"}"
-                   aria-label="Message this agent"></textarea>
+                : resumeUnavailable ? "This conversation cannot be resumed here"
+                : turnPending ? "Waiting for the current turn"
+                : consoleState?.phase === "error" ? "The local conversation bridge stopped"
+                : coldStart && consoleState?.phase === "ready"
+                  ? "Choose a route to start a conversation"
+                  : "No runnable conversation route"}"
+                   aria-label="${name ? "Message this agent" : "Start a conversation"}"></textarea>
          <div class="controls">
            <button type="button" id="cmds" title="Commands">/</button>
-           <button type="submit"${canSend ? "" : " disabled"}>Send</button>
+           ${cancel}<button type="submit"${canSend ? "" : " disabled"}>${coldStart ? "Start" : "Send"}</button>
          </div>
        </form>`;
   return `<!DOCTYPE html>
@@ -743,7 +1201,7 @@ export function chatDocument(
 <body>
 ${header}
 ${renderTabs(tabs ?? [])}
-<main id="transcript">${body}</main>
+<main id="transcript">${body}<div id="transcript-content">${transcript}</div></main>
 ${composer}
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
@@ -807,25 +1265,171 @@ if (details) {
   });
 }
 
+// One route choice owns provider + connection mode.  The second control chooses either one exact
+// model or one criterion; changing modes rebuilds the searchable datalist from inert DOM nodes.
 const form = document.getElementById("composer");
+const messageBox = document.getElementById("message");
+const routeSelect = document.getElementById("route");
+const selectionBox = document.getElementById("selection");
+const selectionList = document.getElementById("selection-options");
+const selectionSource = document.getElementById("selection-source");
+const selectionLabel = document.getElementById("selection-label");
+const routePolicy = document.getElementById("route-policy");
+const billing = document.getElementById("billing");
+function selectionKind() {
+  const checked = document.querySelector('input[name="selection-kind"]:checked');
+  return checked ? checked.value : "model";
+}
+function refreshComposerAvailability() {
+  if (!form || !messageBox) return;
+  const lifecycleReady = form.dataset.lifecycleLocked !== "1";
+  const routeReady = form.dataset.coldStart !== "1" || Boolean(
+    routeSelect && routeSelect.value && routeSelect.selectedOptions[0]?.dataset.available === "1"
+  );
+  const enabled = lifecycleReady && routeReady;
+  messageBox.disabled = !enabled;
+  if (enabled && messageBox.dataset.readyPlaceholder) {
+    messageBox.placeholder = messageBox.dataset.readyPlaceholder;
+  }
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = !enabled;
+}
+function refreshSelection(reset) {
+  if (!routeSelect || !selectionBox || !selectionList || !selectionSource) return;
+  const kind = selectionKind();
+  const routeId = routeSelect.value;
+  const choices = Array.from(selectionSource.content.querySelectorAll("option"))
+    .filter((option) => kind === "criterion"
+      ? option.hasAttribute("data-criterion")
+      : option.dataset.route === routeId)
+    .map((option) => option.cloneNode(true));
+  selectionList.replaceChildren(...choices);
+  const selectedRoute = routeSelect.selectedOptions[0];
+  const routeReady = Boolean(routeSelect.value && selectedRoute?.dataset.available === "1");
+  const lifecycleLocked = form?.dataset.lifecycleLocked === "1";
+  if (reset) selectionBox.value = kind === "model" ? (selectedRoute?.dataset.default || "") : "";
+  selectionBox.placeholder = kind === "model"
+    ? "Search the runnable models"
+    : "Search model criteria";
+  if (selectionLabel) selectionLabel.textContent = kind === "model" ? "Model" : "Criterion";
+  selectionBox.disabled = lifecycleLocked || !routeReady;
+  document.querySelectorAll('input[name="selection-kind"]').forEach((radio) => {
+    radio.disabled = lifecycleLocked || !routeReady;
+  });
+  routeSelect.disabled = lifecycleLocked;
+  if (routePolicy) {
+    const reason = routeReady ? (selectedRoute.dataset.reason || "") : "";
+    routePolicy.replaceChildren();
+    routePolicy.hidden = !reason;
+    if (reason) {
+      const label = document.createElement("b");
+      label.textContent = "Provider policy";
+      routePolicy.append(label, document.createElement("br"), reason);
+    }
+  }
+  if (billing) {
+    billing.replaceChildren();
+    const strong = document.createElement("b");
+    strong.textContent = routeReady ? (selectedRoute.dataset.charge || "unknown") : "Choose a route";
+    billing.append(strong,
+      " · " + (routeReady ? (selectedRoute.dataset.certainty || "unknown") : "no billing path selected"),
+      document.createElement("br"),
+      routeReady ? (selectedRoute.dataset.note || "")
+        : "Select a route to inspect its account and billing impact.");
+  }
+  refreshComposerAvailability();
+}
+if (routeSelect) routeSelect.addEventListener("change", () => refreshSelection(true));
+document.querySelectorAll('input[name="selection-kind"]').forEach((radio) => {
+  radio.addEventListener("change", () => refreshSelection(true));
+});
+refreshSelection(false);
+
+// One interaction is one transaction. Collect every provider-advertised field, then cross the
+// bridge once; changing one input never resolves a request by itself.
+document.addEventListener("submit", (event) => {
+  const interactionForm = event.target && event.target.matches
+    && event.target.matches("form.interaction-form") ? event.target : null;
+  if (!interactionForm) return;
+  event.preventDefault();
+  if (interactionForm.dataset.submitted === "1") return;
+  const entries = [];
+  let complete = interactionForm.reportValidity();
+  interactionForm.querySelectorAll("[data-field-key][data-field-kind]").forEach((field) => {
+    const key = field.dataset.fieldKey;
+    const kind = field.dataset.fieldKind;
+    const required = field.dataset.required === "1";
+    const controls = field.querySelectorAll("[data-interaction-value]");
+    if (!key || !kind || controls.length === 0) { complete = false; return; }
+    if (kind === "choice") {
+      const selected = field.querySelector("[data-interaction-value]:checked");
+      if (!selected) { if (required) complete = false; return; }
+      entries.push([key, selected.value]);
+      return;
+    }
+    const control = controls[0];
+    if (kind === "boolean") { entries.push([key, Boolean(control.checked)]); return; }
+    if (kind !== "text") { complete = false; return; }
+    if (required && !control.value.trim()) { complete = false; return; }
+    if (required || control.value.trim()) entries.push([key, control.value]);
+  });
+  const error = interactionForm.querySelector(".interaction-error");
+  if (!complete) { if (error) error.hidden = false; return; }
+  if (error) error.hidden = true;
+  interactionForm.dataset.submitted = "1";
+  interactionForm.querySelectorAll("input, textarea, button").forEach((control) => {
+    control.disabled = true;
+  });
+  vscode.postMessage({ type: "interaction", runId: interactionForm.dataset.run,
+    submission: { interaction_id: interactionForm.dataset.interaction,
+      values: Object.fromEntries(entries) } });
+});
+let cancelButton = document.getElementById("cancel");
+function refreshCancel(runId) {
+  if (!runId) {
+    if (cancelButton) cancelButton.remove();
+    cancelButton = null;
+    return;
+  }
+  if (!cancelButton) {
+    cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.id = "cancel";
+    cancelButton.textContent = "Cancel";
+    const submit = form ? form.querySelector('button[type="submit"]') : null;
+    if (submit) submit.before(cancelButton);
+  }
+  cancelButton.dataset.run = runId;
+  cancelButton.onclick = () => {
+    vscode.postMessage({ type: "cancel", runId: cancelButton.dataset.run });
+  };
+}
+refreshCancel(cancelButton ? cancelButton.dataset.run : "");
+
 if (form) {
-  const box = document.getElementById("message");
+  const box = messageBox;
   // The box empties optimistically — a chat that lags behind your typing feels broken — but the
   // text is KEPT until the host confirms it went. It used to be discarded on submit, so a send
   // that failed (the agent had ended, the CLI was not on PATH) left you with a toast and no
   // message: you lost what you wrote, which is the one thing a chat box must never do.
   let inFlight = "";
   const send = () => {
-    const text = box.value.trim();
-    if (!text) return;
+    const text = box.value;
+    if (!text.trim()) return;
+    if (routeSelect && !routeSelect.value) return;
     inFlight = text;
-    vscode.postMessage({ type: "send", text });
+    if (routeSelect && selectionBox) {
+      vscode.postMessage({ type: "start", text, routeId: routeSelect.value,
+                           selectionKind: selectionKind(), selection: selectionBox.value });
+    } else {
+      vscode.postMessage({ type: "send", text });
+    }
     box.value = "";
     box.setAttribute("data-sending", "1");
   };
   window.addEventListener("message", (event) => {
     const msg = event.data;
-    if (!msg || msg.type !== "sent") return;
+    if (!msg || (msg.type !== "sent" && msg.type !== "started")) return;
     box.removeAttribute("data-sending");
     if (msg.ok) { inFlight = ""; return; }
     // Put it back exactly as written, and put the cursor where they left it, so the fix is to
@@ -833,6 +1437,34 @@ if (form) {
     if (inFlight && !box.value) box.value = inFlight;
     inFlight = "";
     box.focus();
+  });
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (!msg || msg.type !== "console-state") return;
+    const notice = document.getElementById("console-live-state");
+    if (notice && typeof msg.message === "string") {
+      notice.hidden = !msg.message;
+      notice.textContent = msg.message || "";
+      notice.className = "console-state " + (msg.error ? "error" : "pending");
+      notice.setAttribute("role", msg.error ? "alert" : "status");
+    }
+    if (typeof msg.canSend === "boolean") {
+      form.dataset.lifecycleLocked = msg.canSend ? "0" : "1";
+      if (msg.canSend && messageBox.dataset.readyPlaceholder) {
+        messageBox.placeholder = messageBox.dataset.readyPlaceholder;
+      } else if (msg.error) {
+        messageBox.placeholder = "The local conversation bridge stopped";
+      } else if (msg.activeRunId) {
+        messageBox.placeholder = msg.message || "Turn in progress";
+      }
+      refreshSelection(false);
+      refreshComposerAvailability();
+    }
+    if (Object.prototype.hasOwnProperty.call(msg, "activeRunId")) {
+      refreshCancel(msg.activeRunId || "");
+    }
+    const status = document.querySelector("header .status, body > .status");
+    if (status && typeof msg.runStatus === "string") status.textContent = msg.runStatus;
   });
   // A slash menu, driven by the same list the markup was built from. Typing "/" opens it, arrows
   // and Enter pick, Escape closes — the shape every one of the reference panels uses.
@@ -917,6 +1549,7 @@ document.addEventListener("click", (event) => {
   vscode.postMessage({ type: "open", path: button.getAttribute("data-path") });
 });
 const main = document.getElementById("transcript");
+const transcriptContent = document.getElementById("transcript-content");
 // Stick to the bottom only while the reader IS at the bottom: yanking someone back down while
 // they are reading further up is worse than not following at all.
 function atBottom() {
@@ -929,12 +1562,21 @@ function follow(wasAtBottom) {
 // whatever is half-typed in the composer, which is exactly when you are watching.
 window.addEventListener("message", (event) => {
   const msg = event.data;
-  if (!msg || msg.type !== "transcript" || !main) return;
+  if (!msg || msg.type !== "transcript" || !main || !transcriptContent) return;
   const wasAtBottom = atBottom();
-  main.innerHTML = msg.html;
+  transcriptContent.innerHTML = msg.html;
   follow(wasAtBottom);
 });
+window.addEventListener("message", (event) => {
+  const msg = event.data;
+  if (!msg || msg.type !== "activity") return;
+  const activity = document.getElementById("conversation-activity");
+  if (activity) activity.innerHTML = msg.html;
+});
 follow(true);
+// Assigning webview.html creates a new document asynchronously. Provider events can arrive before
+// this script is listening, so ask the extension to replay its current finite state once only.
+vscode.postMessage({ type: "ready" });
 </script>
 </body>
 </html>`;
@@ -1070,6 +1712,98 @@ const STYLE = `
     animation: blink 1.6s steps(1) infinite;
   }
   #transcript { flex: 1; overflow-y: auto; padding: .6em .8em; }
+  .console-picker {
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: .45em;
+    padding: .2em 0 .8em;
+  }
+  .console-picker > label, .selection-kind legend {
+    color: var(--wp-dim); font-size: 10px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .console-picker select, .console-picker input[list] {
+    box-sizing: border-box; min-width: 0; width: 100%; font: inherit;
+    color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+    border: 1px solid var(--wp-line); border-radius: var(--wp-r-sm); padding: .48em .55em;
+  }
+  .console-picker select:focus-visible, .console-picker input[list]:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder, #4f9cf5); outline-offset: 1px;
+  }
+  .selection-kind {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35em .8em;
+    min-width: 0; margin: .1em 0; padding: 0; border: 0;
+  }
+  .selection-kind legend { margin-bottom: .3em; }
+  .selection-kind label { display: inline-flex; align-items: center; gap: .3em; white-space: nowrap; }
+  .billing {
+    margin: .2em 0 0; padding: .55em .65em; line-height: 1.4; overflow-wrap: break-word;
+    color: var(--wp-dim); background: var(--wp-wall); border-left: 2px solid var(--wp-line);
+  }
+  .billing b { color: var(--wp-fg); }
+  .route-policy {
+    margin: .2em 0 0; padding: .55em .65em; line-height: 1.4; overflow-wrap: break-word;
+    color: var(--wp-fg); background: var(--vscode-inputValidation-warningBackground, var(--wp-wall));
+    border-left: 2px solid var(--vscode-inputValidation-warningBorder, var(--wp-line));
+  }
+  .route-policy b { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+  .route-issues { min-width: 0; color: var(--wp-dim); }
+  .route-issues summary { cursor: pointer; overflow-wrap: break-word; }
+  .route-issues ul { display: grid; gap: .45em; margin: .45em 0 0; padding: 0; list-style: none; }
+  .route-issues li { display: grid; gap: .12em; min-width: 0; padding-left: .55em;
+                     border-left: 2px solid var(--wp-line); overflow-wrap: break-word; }
+  .route-issues li b { color: var(--wp-fg); font-size: .9em; }
+  .console-state { display: flex; flex-direction: column; gap: .25em; padding: .8em; }
+  .console-state.loading, .console-state.pending { color: var(--wp-dim); }
+  .console-state.error {
+    color: var(--vscode-errorForeground); border-left: 3px solid var(--vscode-errorForeground);
+    background: color-mix(in srgb, var(--vscode-errorForeground, #e06c75) 9%, var(--wp-bg));
+  }
+  .console-state.empty { color: var(--wp-dim); }
+  .console-state.empty b { color: var(--wp-fg); }
+  .approvals { display: grid; gap: .55em; margin: .5em 0 .8em; }
+  .approval {
+    min-width: 0; padding: .65em;
+    border: 1px solid var(--vscode-inputValidation-warningBorder, var(--wp-line));
+    border-radius: var(--wp-r); background: var(--vscode-inputValidation-warningBackground, var(--wp-wall));
+  }
+  .approval > b { display: block; max-width: 100%; overflow-wrap: anywhere; }
+  .approval p { margin: .35em 0 .55em; overflow-wrap: break-word; }
+  .interaction-disclosure { margin: .35em 0 .55em; padding-left: 1.25em; overflow-wrap: break-word; }
+  .interaction-fields { display: grid; gap: .55em; }
+  .interaction-field { display: grid; gap: .3em; min-width: 0; margin: 0; padding: 0; border: 0; }
+  fieldset.interaction-field label { display: flex; align-items: center; gap: .35em; }
+  .interaction-field > span, .interaction-field legend { font-weight: 600; }
+  .interaction-field textarea { box-sizing: border-box; width: 100%; resize: vertical; }
+  .interaction-unavailable, .interaction-error {
+    color: var(--vscode-errorForeground, var(--wp-fg));
+  }
+  .interaction-submit { margin-top: .65em; padding: .38em .75em; min-height: 30px; }
+  .activity-tree {
+    margin: .6em 0 .9em; padding: .55em 0 0; border-top: 1px solid var(--wp-line);
+  }
+  .activity-tree h2 {
+    margin: 0 0 .45em; color: var(--wp-dim); font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .activity-run {
+    margin: .35em 0; padding: .35em .45em; min-width: 0;
+    border-left: 2px solid var(--wp-line); background: var(--wp-wall);
+  }
+  .activity-run .activity-run { margin-left: .55em; background: transparent; }
+  .activity-run > summary {
+    display: flex; align-items: baseline; justify-content: space-between; gap: .5em;
+    cursor: pointer; min-width: 0;
+  }
+  .activity-run > summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .activity-run > summary b { flex: none; color: var(--wp-dim); font-size: .82em; }
+  .activity-run dl {
+    display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    gap: .15em .65em; margin: .5em 0; font-size: .88em;
+  }
+  .activity-run dt { color: var(--wp-dim); }
+  .activity-run dd { min-width: 0; margin: 0; overflow-wrap: break-word; }
+  .activity-transcript { margin-top: .55em; padding-top: .5em; border-top: 1px solid var(--wp-line); }
+  .activity-empty { margin: .45em 0 0; color: var(--wp-dim); font-style: italic; }
+  .activity-omitted { margin: .45em 0; color: var(--wp-dim); overflow-wrap: break-word; }
   .hint { color: var(--wp-dim); padding: 1.2em .9em; }
   .hint-sub { font-size: .88em; }
   .door {
@@ -1347,6 +2081,9 @@ const STYLE = `
     .details .grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
     .details .k { margin-top: .4em; font-size: 10px; text-transform: uppercase;
                   letter-spacing: .06em; }
+    .activity-run dl { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .activity-run dt { margin-top: .35em; font-size: 10px; text-transform: uppercase; }
+    .activity-run .activity-run { margin-left: .25em; }
   }
   .details .brief p { margin: .2em 0 .6em; white-space: pre-wrap; }
   .details .files { margin-top: .5em; }
@@ -1368,6 +2105,11 @@ const STYLE = `
   button:hover { background: var(--vscode-button-hoverBackground); }
   /* Pressed reads as settling, not as a stamp sliding off its own outline. */
   button:active { box-shadow: none; transform: translateY(1px); }
+  button:disabled {
+    cursor: not-allowed; color: var(--vscode-disabledForeground, var(--wp-dim));
+    background: var(--vscode-button-secondaryBackground, var(--wp-wall));
+    border-color: var(--wp-line); box-shadow: none; opacity: .55; transform: none;
+  }
 `;
 
 
@@ -1425,19 +2167,11 @@ export function renderDetails(
   run: ChatRun | undefined,
   files: ChatFile[] | undefined,
   sentBy?: string | null,
-  spend?: { total: number; agents: number; running: number; sharePercent: number | null },
+  spend?: TeamSpend,
 ): string {
   if (!run) return "";
   const rows: [string, string][] = [];
   if (run.agent) rows.push(["definition", run.agent]);
-  // What the TEAM is costing, not only this one. The budget question is never about a single
-  // agent, and this panel is where somebody watching the team actually looks. Equivalent spend,
-  // as everywhere in interact: on a subscription run it is not billed again.
-  if (spend && spend.agents > 0) {
-    const share = spend.sharePercent != null ? ` · this one ${spend.sharePercent}%` : "";
-    rows.push(["team", `~$${spend.total.toFixed(2)} over ${spend.agents} agent` +
-      `${spend.agents > 1 ? "s" : ""}${spend.running ? `, ${spend.running} still running` : ""}${share}`]);
-  }
   // Why this one stops to ask and that one just does it — the question a watcher asks about an
   // agent in flight, unanswerable from the record until it was written down. Silence when nobody
   // chose: "default" would state a policy that was never selected.
@@ -1470,4 +2204,11 @@ export function renderDetails(
     : "";
   return `<details class="details" open><summary>about this agent</summary>
     <div class="grid">${table}</div>${brief}${links}</details>`;
+}
+
+function teamSpendSummary(spend: TeamSpend): string {
+  const share = spend.sharePercent != null ? ` · this one ${spend.sharePercent}%` : "";
+  const total = spend.total == null ? "Cost not reported" : `~$${spend.total.toFixed(2)}`;
+  return `${total} over ${spend.agents} agent${spend.agents > 1 ? "s" : ""}` +
+    `${spend.running ? `, ${spend.running} still running` : ""}${share}`;
 }

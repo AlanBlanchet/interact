@@ -557,6 +557,10 @@ const HOUR = 3_600_000;
  *  claim this shape-coding makes. Each call returns fresh nodes.
  */
 const STATUS_GLYPH: Record<AgentStatus, () => (Node | null)[]> = {
+  starting: () => [
+    <circle cx="7" cy="7" r="5.4" className="g-stroke" fill="none" stroke-dasharray="1.5 1.5" />,
+    <circle cx="7" cy="7" r="1.5" className="g-fill" />,
+  ],
   running: () => [
     <circle cx="7" cy="7" r="5.4" className="g-stroke" fill="none" />,
     <circle cx="7" cy="7" r="2.4" className="g-fill" />,
@@ -564,6 +568,10 @@ const STATUS_GLYPH: Record<AgentStatus, () => (Node | null)[]> = {
   done: () => [
     <circle cx="7" cy="7" r="5.4" className="g-stroke" fill="none" />,
     <path d="M4.2 7.1 L6.2 9.1 L9.9 5" className="g-stroke" fill="none" />,
+  ],
+  waiting: () => [
+    <circle cx="7" cy="7" r="5.4" className="g-stroke" fill="none" />,
+    <path d="M5.3 4.4 V9.6 M8.7 4.4 V9.6" className="g-stroke" fill="none" />,
   ],
   failed: () => [
     <path d="M7 1.3 L13 11.9 L1 11.9 Z" className="g-stroke" fill="none" />,
@@ -575,6 +583,10 @@ const STATUS_GLYPH: Record<AgentStatus, () => (Node | null)[]> = {
     <path d="M4.6 4.6 L9.4 9.4 M9.4 4.6 L4.6 9.4" className="g-stroke" fill="none" />,
   ],
   stopped: () => [<rect x="2.6" y="2.6" width="8.8" height="8.8" rx="1.6" className="g-fill" />],
+  cancelled: () => [
+    <path d="M3 3 L11 11 M11 3 L3 11" className="g-stroke" fill="none" />,
+    <circle cx="7" cy="7" r="5.4" className="g-stroke" fill="none" />,
+  ],
   foreign: () => [
     <circle
       cx="7"
@@ -594,11 +606,14 @@ const STATUS_GLYPH: Record<AgentStatus, () => (Node | null)[]> = {
 };
 
 const STATUS_LABEL: Record<AgentStatus, string> = {
+  starting: "starting",
   running: "running",
+  waiting: "waiting",
   done: "done",
   failed: "failed",
   crashed: "crashed",
   stopped: "stopped",
+  cancelled: "cancelled",
   foreign: "foreign",
   declared: "ready",
 };
@@ -643,20 +658,14 @@ function fmtDuration(ms: number): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-/** API-EQUIVALENT value — a subscription run already paid for it. `null` is UNKNOWN and renders an
- *  em dash: "$0.00" would claim the run was free, which is a different fact.
+/** Reported or estimated USD value. `null` is UNKNOWN and renders an em dash: "$0.00" would claim
+ *  the run was free, which is a different fact. The charge path beside it owns its meaning.
  *
  *  One fixed precision down the whole column, so tabular figures line up on the decimal instead of
  *  switching shape between "~$1.94" and "~$0.6102" two rows apart. */
-function fmtCost(usd: number | null | undefined): string {
+function fmtCost(usd: number | null | undefined, certainty: AgentLane["costCertainty"]): string {
   if (usd == null) return "—";
-  return `~$${usd >= 100 ? usd.toFixed(2) : usd.toFixed(4)}`;
-}
-
-/** The header figure is read at a glance, not compared against a column — so it rounds. */
-function fmtCostCompact(usd: number | null | undefined): string {
-  if (usd == null) return "—";
-  return `~$${usd >= 1 ? usd.toFixed(2) : usd.toFixed(4)}`;
+  return `${certainty === "known" ? "" : "~"}$${usd >= 100 ? usd.toFixed(2) : usd.toFixed(4)}`;
 }
 
 /** When a lane's interval ends, or `null` when nothing on disk says. A crash the registry never
@@ -677,7 +686,6 @@ interface LaneGroup {
   key: string;
   lanes: AgentLane[];
   running: number;
-  cost: number | null;
   span: number;
 }
 
@@ -688,16 +696,12 @@ function buildGroups(lanes: AgentLane[], by: AgentGroupBy, now: number): LaneGro
     (map.get(key) ?? map.set(key, []).get(key)!).push(lane);
   }
   const groups = [...map.entries()].map(([key, group]) => {
-    // A group's cost is unknown-tolerant: it sums what IS known and stays null only when nothing
-    // in the group reported at all, so one unmetered run can't blank a whole project's total.
-    const known = group.filter((l) => l.costUsd != null);
     const ends = group.map((l) => laneEnd(l, now)).filter((e): e is number => e != null);
     const starts = group.map((l) => l.startedAt);
     return {
       key,
       lanes: group,
       running: group.filter((l) => l.status === "running").length,
-      cost: known.length ? known.reduce((s, l) => s + (l.costUsd ?? 0), 0) : null,
       span: ends.length ? Math.max(...ends) - Math.min(...starts) : 0,
     };
   });
@@ -887,6 +891,7 @@ function Lane({
     lane.cwd,
     unknownEnd && lane.status !== "running" ? "end time was never recorded" : "",
     lane.task,
+    `billing: ${lane.chargePath} · ${lane.costCertainty}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -963,8 +968,11 @@ function Lane({
 
       <div className="board-meta-col lane-meta">
         <span className="meta-elapsed">{elapsed}</span>
-        <span className={`meta-cost ${lane.costUsd == null ? "meta-unknown" : ""}`}>
-          {fmtCost(lane.costUsd)}
+        <span
+          className={`meta-cost ${lane.costUsd == null ? "meta-unknown" : ""}`}
+          aria-label={`${lane.chargePath}, ${lane.costCertainty}, ${fmtCost(lane.costUsd, lane.costCertainty)}`}
+        >
+          {fmtCost(lane.costUsd, lane.costCertainty)}
         </span>
       </div>
     </div>
@@ -973,7 +981,10 @@ function Lane({
 
 /** Per-status share of a group, as one thin bar — a group's health without reading any row. */
 function GroupPulse({ lanes }: { lanes: AgentLane[] }): Node {
-  const order: AgentStatus[] = ["running", "done", "stopped", "failed", "crashed", "foreign"];
+  const order: AgentStatus[] = [
+    "starting", "running", "waiting", "done", "stopped", "cancelled", "failed", "crashed",
+    "foreign", "declared",
+  ];
   const counts = order
     .map((s) => ({ s, n: lanes.filter((l) => l.status === s).length }))
     .filter((c) => c.n > 0);
@@ -1002,15 +1013,10 @@ function AgentBoard({ item }: { item: CellContent & { kind: "agent-board" } }): 
   const axis = buildAxis(item.windowStart, now);
   const groups = buildGroups(lanes, item.groupBy, now);
   const running = lanes.filter((l) => l.status === "running").length;
-  const knownCost = lanes.filter((l) => l.costUsd != null);
-  const total = knownCost.length
-    ? knownCost.reduce((s, l) => s + (l.costUsd ?? 0), 0)
-    : null;
-  const unmetered = lanes.length - knownCost.length;
   const byId = new Map(lanes.map((l) => [l.id, l]));
 
   return (
-    <div className="board">
+    <div className="board" role="region" aria-label={item.ariaSummary}>
       <div className="board-head">
         <div className="hero">
           <span className={`hero-num ${running ? "hero-live" : ""}`}>
@@ -1026,13 +1032,11 @@ function AgentBoard({ item }: { item: CellContent & { kind: "agent-board" } }): 
           </span>
         </div>
         <div className="hero hero-cost">
-          <span className="hero-num hero-num-sm">{fmtCostCompact(total)}</span>
           <span className="hero-side">
-            <span className="hero-label">API-equivalent</span>
-            <span className="hero-sub">
-              already covered by the plan
-              {unmetered > 0 ? ` · ${unmetered} unmetered` : ""}
-            </span>
+            <span className="hero-label">{item.billing.heading}</span>
+            {item.billing.lines.map((line) => (
+              <span className="hero-sub" data-charge-path={line.chargePath}>{line.text}</span>
+            ))}
           </span>
         </div>
         <div className="group-control" role="radiogroup" aria-label="Group agents by">
@@ -1121,8 +1125,6 @@ function AgentBoard({ item }: { item: CellContent & { kind: "agent-board" } }): 
                   </span>
                   <span className="tot-sep">·</span>
                   <span>{fmtDuration(group.span)}</span>
-                  <span className="tot-sep">·</span>
-                  <span className="tot-cost">{fmtCost(group.cost)}</span>
                 </span>
               </div>
             )}

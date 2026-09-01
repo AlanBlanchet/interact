@@ -141,7 +141,7 @@ export class ConversationPanel {
       run: run
         ? ({ ...run, permission: describeMode(run.permission_mode, this.modes) } as never)
         : (run as never),
-      spend: teamSpend(scopeStore()?.runs() ?? readAgentRuns(), run?.run_id),
+      spend: teamSpend(scopeStore()?.runs() ?? readAgentRuns(), run?.run_id, run ? [run] : []),
       files: run ? chatFiles(run, agentsDir(), fs.existsSync) : [],
       sentBy: run?.parent_run_id
         ? readAgentRuns().find((r) => r.run_id === run.parent_run_id)?.name ?? null

@@ -36,12 +36,31 @@ test("an agent whose cost is not known yet claims no share", () => {
   assert.equal(s.sharePercent, null);
 });
 
-test("a team that has spent nothing has no shares to report", () => {
+test("a team with no reported costs has neither a total nor shares", () => {
   const s = teamSpend([{ run_id: "a", cost_usd: null, status: "running" }] as AgentRun[], "a");
-  assert.equal(s.total, 0);
+  assert.equal(s.total, null);
   assert.equal(s.sharePercent, null);
 });
 
 test("it counts who is still working, since that is what is still spending", () => {
   assert.equal(teamSpend(runs, "a").running, 2);
+});
+
+test("terminal lifecycle and known accounting survive either snapshot order", () => {
+  const known = {
+    run_id: "root", status: "done", cost_usd: 2.5,
+    input_tokens: 20, output_tokens: 10,
+  } as AgentRun;
+  const stale = {
+    run_id: "root", status: "running", cost_usd: null,
+    input_tokens: 4, output_tokens: 2,
+  } as AgentRun;
+  for (const [stored, current] of [[known, stale], [stale, known]] as const) {
+    const spend = teamSpend([stored], "root", [current]);
+    assert.deepEqual(
+      { total: spend.total, running: spend.running },
+      { total: 2.5, running: 0 },
+      "stale lifecycle or null accounting must not overwrite terminal known facts",
+    );
+  }
 });

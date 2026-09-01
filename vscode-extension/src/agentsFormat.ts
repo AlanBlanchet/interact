@@ -42,8 +42,8 @@ export function statusIcon(status: string): StatusIcon {
 
 
 
-/** API-EQUIVALENT value: a subscription run already paid for it. `null` is UNKNOWN and renders an
- *  em dash — "$0.00" would claim the run was free, which is a different and wrong fact. */
+/** API-equivalent usage value. `null` is unknown and renders an em dash; it never implies a
+ *  provider charge, account coverage, or zero account impact. */
 export function formatCost(cost: number | null | undefined): string {
   return cost == null ? "—" : `~$${cost.toFixed(4)}`;
 }
