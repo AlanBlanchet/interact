@@ -2050,6 +2050,77 @@ def test_prospective_append_validates_state_before_writing(
         assert result.stdout == "[repository-gate] next state: RED\n"
 
 
+@pytest.mark.parametrize(
+    ("proposed_state", "commit_kind", "expected_returncode"),
+    [
+        ("COMMITTED", "actual", 0),
+        ("COMMITTED", "malformed", 1),
+        ("COMMITTED", "nonmatching", 1),
+        ("RED", "actual", 0),
+    ],
+)
+def test_prospective_transition_validates_after_candidate_is_committed(
+    git_repo: Path, proposed_state: str, commit_kind: str, expected_returncode: int,
+) -> None:
+    previous_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=git_repo, text=True, capture_output=True, check=True,
+    ).stdout.strip()
+    stage(git_repo, "candidate.txt", b"candidate content\n")
+    events = valid_events(git_repo, "VERIFIED")
+    ledger = write_ledger(git_repo, events)
+    ledger_before = ledger.read_bytes()
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=git_repo, check=True)
+    actual_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=git_repo, text=True, capture_output=True, check=True,
+    ).stdout.strip()
+    candidate_tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=git_repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    proposed_commit = {
+        "actual": actual_commit,
+        "malformed": "not-a-commit",
+        "nonmatching": previous_head,
+    }[commit_kind]
+    proposed = (
+        event(
+            "COMMITTED",
+            {
+                "commit": proposed_commit,
+                "tree": candidate_tree,
+                "candidate_tree": candidate_tree,
+            },
+        )
+        if proposed_state == "COMMITTED"
+        else red_event()
+    )
+    event_path = git_repo / "out" / "tests" / "prospective-committed.json"
+    event_path.parent.mkdir(parents=True)
+    event_path.write_text(json.dumps(proposed, separators=(",", ":")))
+
+    standalone = run_gate(git_repo, "verify-ledger", "--ledger", str(ledger))
+    assert standalone.returncode != 0
+    assert "candidate staged diff hash is stale" in standalone.stderr
+
+    result = run_gate(
+        git_repo,
+        "validate-append",
+        "--ledger",
+        str(ledger),
+        "--event",
+        str(event_path),
+    )
+
+    assert result.returncode == expected_returncode, result.stderr
+    assert ledger.read_bytes() == ledger_before
+    if expected_returncode == 0:
+        expected_next = "CLOSED" if proposed_state == "COMMITTED" else "IMPLEMENTED"
+        assert result.stdout == f"[repository-gate] next state: {expected_next}\n"
+
+
 def test_prospective_append_validates_first_baseline_without_writing(
     git_repo: Path,
 ) -> None:

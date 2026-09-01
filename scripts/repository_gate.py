@@ -616,15 +616,15 @@ class RepositoryGate(BaseModel):
             and prefix_text.strip() in empty_prefixes
             else self._parse_events(path, recovery)
         )
-        expected_state: State | None = "BASELINED"
-        if events:
-            expected_state = self._validate_sequence(events)
-            self._validate_bindings(events)
         proposed = self._decode_event_blocks(
             [self._read_proposed_event(event)],
             path.stem,
             recovery,
         )[0]
+        expected_state: State | None = "BASELINED"
+        if events:
+            expected_state = self._validate_sequence(events)
+            self._validate_bindings(events, bind_current_candidate=False)
         combined = [*events, proposed]
         try:
             next_state = self._validate_sequence(combined)
