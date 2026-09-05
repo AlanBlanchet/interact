@@ -45,6 +45,7 @@ from interact.criteria import Variables
 from interact.config import Config
 from interact.prompt_cache import _PromptCache
 from interact.prompt_client import _PromptClient
+from interact.prompt_secret import read_prompt_token
 
 _INPUT_LIMIT = 128 * 1024
 _ENTITY_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,160}$")
@@ -294,13 +295,19 @@ class _ConversationHost(BaseModel):
         if (
             not self.config.prompt_endpoint
             or not self.config.prompt_account
-            or not self.config.prompt_token
+            or (not self.config.prompt_token and self.config.prompt_token_file is None)
         ):
             raise ValueError("prompt service configuration is incomplete")
+        if self.config.prompt_token and self.config.prompt_token_file is not None:
+            raise ValueError("prompt token configuration is ambiguous")
+        token = (
+            read_prompt_token(self.config.prompt_token_file)
+            if self.config.prompt_token_file is not None else self.config.prompt_token
+        )
         cache = _PromptCache(self.config.prompt_cache)
         try:
             content, reference = _PromptClient(
-                self.config.prompt_endpoint, self.config.prompt_token
+                self.config.prompt_endpoint, token
             ).resolve(self.config.prompt_account, cache, request.prompt_selection)
         finally:
             cache.close()

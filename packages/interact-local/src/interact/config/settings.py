@@ -129,6 +129,7 @@ class Config(BaseSettings):
     prompt_endpoint: str = ""
     prompt_account: str = ""
     prompt_token: str = ""
+    prompt_token_file: Path | None = None
     prompt_cache: Path = Path.home() / ".interact" / "prompts.sqlite3"
     claude_media_model: str = ""
     # Fallback model chains (comma-separated litellm ids) tried, in order, when the primary
@@ -196,7 +197,8 @@ class Config(BaseSettings):
     nested_headless: bool = False
 
     @field_validator(
-        "debug_dir", "screenshot_dump_dir", "browser_profile_dir", "prompt_cache", mode="after"
+        "debug_dir", "screenshot_dump_dir", "browser_profile_dir", "prompt_cache",
+        "prompt_token_file", mode="after"
     )
     @classmethod
     def _expand_user(cls, value: Path | None) -> Path | None:

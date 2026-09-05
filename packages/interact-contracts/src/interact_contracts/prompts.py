@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _PART = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_GIT_OBJECT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 class PromptKey(BaseModel):
@@ -105,3 +106,45 @@ class PromptCatalogPage(BaseModel):
 
     def by_key(self) -> dict[tuple[str, str], PromptChannelEntry]:
         return {(entry.key.namespace, entry.key.slug): entry for entry in self.entries}
+
+
+class PromptPublicationRequest(BaseModel):
+    """One complete exact-commit prompt snapshot applied by global cursor CAS."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    expected_cursor: str | None = None
+    source_commit: str
+    entries: tuple[PromptSelection, ...]
+    revisions: tuple[PromptRevision, ...]
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> "PromptPublicationRequest":
+        if self.expected_cursor is not None and not _DIGEST.fullmatch(self.expected_cursor):
+            raise ValueError("publication cursor must be lowercase SHA-256")
+        if not _GIT_OBJECT.fullmatch(self.source_commit):
+            raise ValueError("publication source commit must be a lowercase Git object id")
+        entries = [(entry.key.namespace, entry.key.slug) for entry in self.entries]
+        if entries != sorted(entries) or len(set(entries)) != len(entries):
+            raise ValueError("publication entries must have unique ordered keys")
+        if any(entry.channel != "stable" for entry in self.entries):
+            raise ValueError("publication entries must select the stable channel")
+        identities = [
+            (revision.key.namespace, revision.key.slug, revision.digest)
+            for revision in self.revisions
+        ]
+        if len(set(identities)) != len(identities):
+            raise ValueError("publication revision key and digest pairs must be unique")
+        revision_ids = [revision.revision for revision in self.revisions]
+        if len(set(revision_ids)) != len(revision_ids):
+            raise ValueError("publication revision identifiers must be unique")
+        selected = {
+            (entry.key.namespace, entry.key.slug, entry.digest) for entry in self.entries
+        }
+        if any(
+            (revision.key.namespace, revision.key.slug, revision.digest) not in selected
+            for revision in self.revisions
+        ):
+            raise ValueError("publication revisions must be referenced by an entry")
+        if any(revision.source_commit != self.source_commit for revision in self.revisions):
+            raise ValueError("publication revisions must bind the source commit")
+        return self

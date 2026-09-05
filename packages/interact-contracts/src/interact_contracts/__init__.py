@@ -5,11 +5,12 @@ from .prompts import (
     PromptChannelEntry,
     PromptExecutionRef,
     PromptKey,
+    PromptPublicationRequest,
     PromptRevision,
     PromptSelection,
 )
 
 __all__ = [
     "PromptCatalogPage", "PromptChannelEntry", "PromptExecutionRef", "PromptKey", "PromptRevision",
-    "PromptSelection",
+    "PromptPublicationRequest", "PromptSelection",
 ]

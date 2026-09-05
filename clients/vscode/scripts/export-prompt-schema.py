@@ -10,6 +10,7 @@ from interact_contracts import (
     PromptChannelEntry,
     PromptExecutionRef,
     PromptKey,
+    PromptPublicationRequest,
     PromptRevision,
     PromptSelection,
 )
@@ -18,7 +19,7 @@ from interact_contracts import (
 def main() -> None:
     contract = Union[
         PromptKey, PromptRevision, PromptChannelEntry, PromptCatalogPage, PromptSelection,
-        PromptExecutionRef,
+        PromptExecutionRef, PromptPublicationRequest,
     ]
     print(json.dumps(TypeAdapter(contract).json_schema(), indent=2, sort_keys=True))
 

@@ -41,8 +41,23 @@ class _PromptCache:
             os.close(descriptor)
         self._database = database
         self._database.execute(
-            "CREATE TABLE IF NOT EXISTS revisions (account TEXT NOT NULL, digest TEXT NOT NULL, namespace TEXT NOT NULL, slug TEXT NOT NULL, revision TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(account, digest))"
+            "CREATE TABLE IF NOT EXISTS revisions (account TEXT NOT NULL, digest TEXT NOT NULL, namespace TEXT NOT NULL, slug TEXT NOT NULL, revision TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(account, namespace, slug, digest))"
         )
+        primary_key = tuple(
+            row[1] for row in sorted(
+                self._database.execute("PRAGMA table_info(revisions)"), key=lambda row: row[5]
+            ) if row[5]
+        )
+        if primary_key != ("account", "namespace", "slug", "digest"):
+            with self._database:
+                self._database.execute(
+                    "CREATE TABLE revisions_keyed (account TEXT NOT NULL, digest TEXT NOT NULL, namespace TEXT NOT NULL, slug TEXT NOT NULL, revision TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(account, namespace, slug, digest))"
+                )
+                self._database.execute(
+                    "INSERT INTO revisions_keyed SELECT account, digest, namespace, slug, revision, content FROM revisions"
+                )
+                self._database.execute("DROP TABLE revisions")
+                self._database.execute("ALTER TABLE revisions_keyed RENAME TO revisions")
         self._database.execute(
             "CREATE TABLE IF NOT EXISTS channels (account TEXT NOT NULL, namespace TEXT NOT NULL, slug TEXT NOT NULL, channel TEXT NOT NULL, revision TEXT NOT NULL, digest TEXT NOT NULL, lock_version INTEGER NOT NULL, PRIMARY KEY(account, namespace, slug, channel))"
         )
@@ -56,16 +71,28 @@ class _PromptCache:
     def apply(
         self, account: str, page: PromptCatalogPage, revisions: tuple[PromptRevision, ...]
     ) -> None:
-        by_digest = {revision.digest: revision for revision in revisions}
+        by_identity = {
+            (revision.key.namespace, revision.key.slug, revision.digest): revision
+            for revision in revisions
+        }
+        for entry in page.entries:
+            revision = by_identity.get(
+                (entry.key.namespace, entry.key.slug, entry.digest)
+            )
+            if (
+                revision is None
+                or revision.key != entry.key
+                or revision.revision != entry.revision
+            ):
+                raise ValueError("catalog entry has no matching verified revision")
         with self._database:
+            self._database.execute(
+                "DELETE FROM channels WHERE account=?", (account,)
+            )
             for entry in page.entries:
-                revision = by_digest.get(entry.digest)
-                if (
-                    revision is None
-                    or revision.key != entry.key
-                    or revision.revision != entry.revision
-                ):
-                    raise ValueError("catalog entry has no matching verified revision")
+                revision = by_identity[
+                    (entry.key.namespace, entry.key.slug, entry.digest)
+                ]
                 self._database.execute(
                     "INSERT OR IGNORE INTO revisions VALUES (?, ?, ?, ?, ?, ?)",
                     (account, revision.digest, revision.key.namespace, revision.key.slug, str(revision.revision), revision.content),
@@ -73,11 +100,6 @@ class _PromptCache:
                 self._database.execute(
                     "INSERT INTO channels VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account, namespace, slug, channel) DO UPDATE SET revision=excluded.revision, digest=excluded.digest, lock_version=excluded.lock_version WHERE excluded.lock_version > channels.lock_version",
                     (account, entry.key.namespace, entry.key.slug, entry.channel, str(entry.revision), entry.digest, entry.lock_version),
-                )
-            for key in page.removed:
-                self._database.execute(
-                    "DELETE FROM channels WHERE account=? AND namespace=? AND slug=?",
-                    (account, key.namespace, key.slug),
                 )
             self._database.execute(
                 "INSERT INTO catalogs VALUES (?, ?, ?) ON CONFLICT(account) DO UPDATE SET server_timestamp=excluded.server_timestamp, cursor=excluded.cursor",
@@ -108,7 +130,7 @@ class _PromptCache:
 
     def resolve(self, account: str, key: PromptKey, channel: str, digest: str) -> str:
         row = self._database.execute(
-            "SELECT revisions.content, channels.digest FROM channels JOIN revisions ON revisions.account=channels.account AND revisions.digest=channels.digest WHERE channels.account=? AND channels.namespace=? AND channels.slug=? AND channels.channel=?",
+            "SELECT revisions.content, channels.digest FROM channels JOIN revisions ON revisions.account=channels.account AND revisions.namespace=channels.namespace AND revisions.slug=channels.slug AND revisions.digest=channels.digest WHERE channels.account=? AND channels.namespace=? AND channels.slug=? AND channels.channel=?",
             (account, key.namespace, key.slug, channel),
         ).fetchone()
         if row is None or row[1] != digest:

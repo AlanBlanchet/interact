@@ -64,6 +64,10 @@ app.command(
     help="Spawn and supervise agent runs across providers.",
 )
 app.command(
+    "interact.cli.prompts:prompts_app", name="prompts",
+    help="Author and synchronize prompts through a local Git worktree.",
+)
+app.command(
     "interact.cli.tui_command:tui", name="_tui", show=False,
     help="Open the interactive configuration dashboard.",
 )

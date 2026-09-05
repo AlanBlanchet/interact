@@ -41,6 +41,23 @@ export interface PromptExecutionRef {
   revision: string;
 }
 /**
+ * One complete exact-commit prompt snapshot applied by global cursor CAS.
+ */
+export interface PromptPublicationRequest {
+  expected_cursor?: string | null;
+  source_commit: string;
+  entries: PromptSelection[];
+  revisions: PromptRevision[];
+}
+/**
+ * Untrusted channel and digest requested for server-backed resolution.
+ */
+export interface PromptSelection {
+  key: PromptKey;
+  channel: string;
+  digest: string;
+}
+/**
  * Immutable prompt content and its verifiable publication provenance.
  */
 export interface PromptRevision {
@@ -51,12 +68,4 @@ export interface PromptRevision {
   content: string;
   source_commit: string;
   created_at: string;
-}
-/**
- * Untrusted channel and digest requested for server-backed resolution.
- */
-export interface PromptSelection {
-  key: PromptKey;
-  channel: string;
-  digest: string;
 }

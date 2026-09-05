@@ -587,11 +587,16 @@ async def test_fake_app_server_crosses_catalog_thread_turn_and_stream(console_wo
     ("case", "expected_ok"),
     [
         ("verified", True),
+        ("verified-file", True),
         ("revision-mismatch", False),
         ("digest-mismatch", False),
         ("missing-config", False),
         ("wrong-token", False),
         ("offline-uncached", False),
+        ("token-file-mode", False),
+        ("token-file-symlink", False),
+        ("token-file-oversize", False),
+        ("token-ambiguous", False),
     ],
 )
 async def test_console_binds_server_prompt_before_starting_provider(
@@ -615,7 +620,22 @@ async def test_console_binds_server_prompt_before_starting_provider(
     endpoint = "http://127.0.0.1:1" if case == "offline-uncached" else f"http://127.0.0.1:{port}"
     monkeypatch.setenv("INTERACT_PROMPT_ENDPOINT", endpoint)
     monkeypatch.setenv("INTERACT_PROMPT_ACCOUNT", "tenant-a")
-    monkeypatch.setenv("INTERACT_PROMPT_TOKEN", "wrong" if case == "wrong-token" else token)
+    token_file = root / "prompt-token"
+    token_file.write_text(token if case != "token-file-oversize" else "x" * 4097)
+    token_file.chmod(0o644 if case == "token-file-mode" else 0o600)
+    configured_file = token_file
+    if case == "token-file-symlink":
+        configured_file = root / "prompt-token-link"
+        configured_file.symlink_to(token_file)
+    file_case = case.startswith("token-file") or case in {"verified-file", "token-ambiguous"}
+    monkeypatch.setenv(
+        "INTERACT_PROMPT_TOKEN",
+        "wrong" if case == "wrong-token" else (token if not file_case or case == "token-ambiguous" else ""),
+    )
+    if file_case:
+        monkeypatch.setenv("INTERACT_PROMPT_TOKEN_FILE", str(configured_file.resolve()))
+    else:
+        monkeypatch.delenv("INTERACT_PROMPT_TOKEN_FILE", raising=False)
     monkeypatch.setenv("INTERACT_PROMPT_CACHE", str((root / "prompts.sqlite3").resolve()))
     if case == "missing-config":
         monkeypatch.setenv("INTERACT_PROMPT_ACCOUNT", "")

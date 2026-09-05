@@ -14,6 +14,10 @@ class _Handler(BaseHTTPRequestHandler):
     digest: str
     revision: str
     body_revision: str
+    second_content: str | None
+    second_digest: str | None
+    second_revision: str | None
+    corrupt_second: bool
     token: str
 
     def do_GET(self) -> None:
@@ -21,14 +25,24 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(401)
             return
         if self.path == "/v1/catalog":
-            payload = {
-                "entries": [{
-                    "key": {"namespace": "interact", "slug": "system"},
+            entries = [{
+                "key": {"namespace": "interact", "slug": "system"},
+                "channel": "stable",
+                "revision": self.revision,
+                "digest": self.digest,
+                "lock_version": 1,
+            }]
+            if self.second_digest is not None:
+                entries.append({
+                    "key": {"namespace": "interact", "slug": "review"},
                     "channel": "stable",
-                    "revision": self.revision,
-                    "digest": self.digest,
+                    "revision": self.second_revision,
+                    "digest": self.second_digest,
                     "lock_version": 1,
-                }],
+                })
+            payload = {
+                "entries": entries,
+                "cursor": "complete-snapshot",
                 "server_timestamp": datetime.now(UTC).isoformat(),
             }
         elif self.path == f"/v1/revisions/interact/system/{self.digest}":
@@ -37,6 +51,20 @@ class _Handler(BaseHTTPRequestHandler):
                 "revision": self.body_revision,
                 "digest": self.digest,
                 "content": self.content,
+                "source_commit": "synthetic",
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        elif self.second_digest is not None and self.path == (
+            f"/v1/revisions/interact/review/{self.second_digest}"
+        ):
+            payload = {
+                "key": {"namespace": "interact", "slug": "review"},
+                "revision": self.second_revision,
+                "digest": self.second_digest,
+                "content": (
+                    f"{self.second_content} corrupt"
+                    if self.corrupt_second else self.second_content
+                ),
                 "source_commit": "synthetic",
                 "created_at": datetime.now(UTC).isoformat(),
             }
@@ -60,12 +88,22 @@ if __name__ == "__main__":
     parser.add_argument("--content", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--body-revision")
+    parser.add_argument("--second-content")
+    parser.add_argument("--second-revision")
+    parser.add_argument("--corrupt-second", action="store_true")
     parser.add_argument("--token", required=True)
     args = parser.parse_args()
     _Handler.content = args.content
     _Handler.digest = hashlib.sha256(args.content.encode()).hexdigest()
     _Handler.revision = args.revision
     _Handler.body_revision = args.body_revision or args.revision
+    _Handler.second_content = args.second_content
+    _Handler.second_digest = (
+        hashlib.sha256(args.second_content.encode()).hexdigest()
+        if args.second_content is not None else None
+    )
+    _Handler.second_revision = args.second_revision
+    _Handler.corrupt_second = args.corrupt_second
     _Handler.token = args.token
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     args.port_file.write_text(str(server.server_port))

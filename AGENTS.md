@@ -10,12 +10,18 @@ This file is the canonical project instruction source. Provider-specific files m
 - `src/interact/desktop/` owns desktop backends, isolated displays, input, windows, coordinates, recording, and accessibility integration.
 - `src/interact/cli/` owns user commands and the terminal UI.
 - `src/interact/config/` owns typed settings and the declarative settings schema used by every front end.
-- `vscode-extension/` owns the TypeScript extension and webviews; Python models remain the source for generated TypeScript bindings.
+- `clients/vscode/` owns the TypeScript extension and webviews; Python models remain the source for generated TypeScript bindings.
 - `tests/` contains unit and integration coverage. Real-model tests must be explicitly marked, key-gated, and excluded from ordinary unit runs.
 
 The MCP tool docstrings and typed schemas are the API source of truth. Inspect them before changing or documenting a tool. Do not preserve an older parameter name or tool name merely because a provider instruction still mentions it.
 
 Generic capture and action tools select their surface through `target`: browser by default, a desktop window title, a screen selector, or a supported file target. Browser-only capabilities remain separate. Do not reintroduce the obsolete split `window`/`session` guidance for generic tools.
+
+## Prompt authoring and distribution
+
+Personal prompts are authored in the private Git worktree at `${XDG_DATA_HOME:-~/.local/share}/interact/prompts`; they never enter this public repository. `interact prompts` is the supported authoring, history, synchronization, compilation, and installation surface. A clean committed source revision compiles into a commit-bound manifest beneath the user's Interact cache, and only a fully validated projection may be installed into Claude, Codex, or VS Code consumer locations. The source worktree is editable and available offline; caches, generated projections, provider install roots, and project-local overlays are derived and must never be hand-edited or treated as source.
+
+The public `prompts/` package contains only distributable product defaults and schemas. Runtime prompt metadata in SQLite is a server-derived index/cache, not authoring history; Git remains the authority for prompt content, dates, ancestry, merges, and conflicts. Preserve user routing settings through the supported Interact configuration surface. Never commit a personal corpus, private overlay, or installed projection to this repository.
 
 ## Available team
 
