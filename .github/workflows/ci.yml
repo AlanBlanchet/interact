@@ -69,7 +69,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: vscode-extension
+        working-directory: clients/vscode
     steps:
       - uses: actions/checkout@v4
       - name: Install uv  # compile runs the Python type/data generators
@@ -153,7 +153,7 @@ jobs:
         id: version
         run: |
           py=$(sed -nE 's/^version *= *"([^"]+)".*/\1/p' pyproject.toml | head -1)
-          ext=$(sed -nE 's/.*"version" *: *"([^"]+)".*/\1/p' vscode-extension/package.json | head -1)
+          ext=$(sed -nE 's/.*"version" *: *"([^"]+)".*/\1/p' clients/vscode/package.json | head -1)
           if [ -z "$py" ]; then echo "::error::no version in pyproject.toml"; exit 1; fi
           if [ -n "$ext" ] && [ "$ext" != "$py" ]; then
             echo "::error::version mismatch — pyproject.toml=$py but package.json=$ext"; exit 1
@@ -189,7 +189,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: vscode-extension
+        working-directory: clients/vscode
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_PAT: ${{ secrets.OVSX_PAT }}

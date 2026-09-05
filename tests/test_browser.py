@@ -9,7 +9,8 @@ from interact.config import LOG_MAXLEN, Config
 from interact.state import InteractiveElement, PageState, _visible_text, ref_locator
 
 _ANNOTATE_JS = (
-    Path(__file__).parents[1] / "src" / "interact" / "js" / "annotate_elements.js"
+    Path(__file__).parents[1]
+    / "packages" / "interact-local" / "src" / "interact" / "js" / "annotate_elements.js"
 ).read_text()
 
 

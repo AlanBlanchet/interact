@@ -1,8 +1,51 @@
 <p align="center">
   <a href="https://alanblanchet.github.io/interact/">
-    <img src="docs/assets/banner.png" alt="interact — give your agent eyes and hands" width="820">
+    <img src="site/assets/banner.png" alt="interact — give your agent eyes and hands" width="820">
   </a>
 </p>
+
+## Repository boundaries
+
+This public repository is one release graph with explicit product homes:
+
+- `packages/interact-local` owns the `interact` Python import, CLI, MCP server, automation, local
+  sessions, and explicit API routes.
+- `packages/interact-contracts` owns dependency-light prompt distribution contracts and their
+  generated JSON Schema; `clients/vscode` consumes the generated TypeScript form.
+- `clients/vscode` owns the VS Code extension, and `site` owns the static public website boundary.
+- Librarian-edited Markdown under `prompts` is canonical source. Private tenant, authentication,
+  billing, secrets, queues, retention, and deployment code never enters this repository.
+
+The packages version together from root `pyproject.toml`. Local-session and local-compute routes
+remain distinct from separately billed `metered_api` routes; failure never silently crosses that
+charge boundary, and a vendor subscription is not described as universally free. Private services
+consume a released public schema version from their own repository and are never imported here.
+
+### Prompt distribution foundation
+
+Librarians edit `prompts/manifest.json` and its referenced Markdown files; the manifest digest is
+validated before publication. Start the private sibling service locally with:
+
+```bash
+cd ../interact-cloud
+uv run python -m interact_cloud --database out/local-cloud.sqlite3 --ready out/ready.json
+```
+
+`interact.prompt_client._PromptClient.sync(account, cache)` downloads the authenticated typed
+catalog and exact immutable revisions into an account-scoped `_PromptCache`. A conversation start
+may carry a `PromptSelection` beside the user's ordinary `prompt`. The shipped console syncs and
+exactly resolves that selection itself, sends the verified content as the provider's system or
+developer instruction, keeps the user's question as the user turn, and persists the resulting
+server-derived `PromptExecutionRef` on `AgentRun`. Missing, oversized, unauthorized, or mismatched
+revisions fail before provider startup and never select another prompt or charge route.
+
+The executable local file-to-HTTP-to-cache control is:
+
+```bash
+cd ../interact-cloud
+PYTHONPATH=../interact/packages/interact-local/src:../interact/packages/interact-contracts/src:src \
+  uv run pytest tests/test_http.py::test_real_http_process_enforces_tenant_non_disclosure -q
+```
 
 <p align="center">
   <b>Browser <i>and</i> desktop automation for AI agents — over MCP.</b><br>
@@ -30,11 +73,11 @@
 Your agent clicks a filter, types a search, adds to a cart. Each caption is the tool call that ran
 and the text that came back — that text is all your model sees.
 
-<p align="center"><img src="docs/assets/demo-browser.gif" alt="An agent driving a web store: clicking the Audio filter narrows the list to 2 products, typing 'field' narrows it to 1, and Add to cart takes the cart from 0 to 1" width="760"></p>
+<p align="center"><img src="site/assets/demo-browser.gif" alt="An agent driving a web store: clicking the Audio filter narrows the list to 2 products, typing 'field' narrows it to 1, and Add to cart takes the cart from 0 to 1" width="760"></p>
 
 The same tools drive a **real desktop app** — `launch_app` puts it in an isolated display the agent owns.
 
-<p align="center"><img src="docs/assets/demo-desktop.gif" alt="An agent launching gnome-calculator into interact's sandbox and clicking 7 x 6 = , the app showing 42" width="380"></p>
+<p align="center"><img src="site/assets/demo-desktop.gif" alt="An agent launching gnome-calculator into interact's sandbox and clicking 7 x 6 = , the app showing 42" width="380"></p>
 
 ## 60-second quickstart
 

@@ -5,9 +5,9 @@ set -e
 # 1) Version single-source-of-truth: pyproject.toml and the VS Code extension must agree.
 #    Stops a half-bumped commit before it reaches CI (which would refuse to tag).
 py=$(sed -nE 's/^version *= *"([^"]+)".*/\1/p' pyproject.toml | head -1)
-ext=$(sed -nE 's/.*"version" *: *"([^"]+)".*/\1/p' vscode-extension/package.json | head -1)
+ext=$(sed -nE 's/.*"version" *: *"([^"]+)".*/\1/p' clients/vscode/package.json | head -1)
 if [ -n "$ext" ] && [ "$py" != "$ext" ]; then
-    echo "[hook] FAIL: version mismatch — pyproject.toml=$py but vscode-extension/package.json=$ext"
+    echo "[hook] FAIL: version mismatch — pyproject.toml=$py but clients/vscode/package.json=$ext"
     echo "[hook]   fix both at once:  python -m interact.versioning bump <major|minor|patch>"
     exit 1
 fi
@@ -31,11 +31,11 @@ _load_node() {
 
 # 2) Regenerate TS bindings when the Pydantic API surface changes (keeps the committed
 #    generated/types.ts in lock-step with the models).
-if git diff --cached --name-only | grep -qE '^src/interact/(models|formats|api_types)\.py$|^src/interact/benchmarks/(published|upstream)\.py$'; then
+if git diff --cached --name-only | grep -qE '^packages/interact-local/src/interact/(models|formats|api_types)\.py$|^packages/interact-local/src/interact/benchmarks/(published|upstream)\.py$|^packages/interact-contracts/src/interact_contracts/'; then
     if _load_node; then
         echo "[hook] Pydantic API changed — regenerating TS types..."
-        if bash vscode-extension/scripts/generate-types.sh >/dev/null 2>&1; then
-            git add vscode-extension/src/generated/types.ts 2>/dev/null || true
+        if bash clients/vscode/scripts/generate-types.sh >/dev/null 2>&1; then
+            git add clients/vscode/src/generated/types.ts clients/vscode/src/generated/promptContracts.ts packages/interact-contracts/schema/prompt-contracts.schema.json 2>/dev/null || true
         else
             echo "[hook] WARN: type generation failed, continuing"
         fi
@@ -79,12 +79,12 @@ trap - EXIT HUP INT TERM
 # 4) Typecheck + build the VS Code extension when its source changes — the real gate that catches
 #    TS errors before they land. (Packaging/installing the .vsix is a separate manual step, not
 #    done here: the .vsix is gitignored, so rebuilding it every commit just burns time.)
-if git diff --cached --name-only | grep -q "^vscode-extension/"; then
+if git diff --cached --name-only | grep -q "^clients/vscode/"; then
     if _load_node; then
         echo "[hook] Extension source changed — typechecking (npm run compile)..."
-        if ! (cd vscode-extension && npm run compile >/dev/null 2>&1); then
+        if ! (cd clients/vscode && npm run compile >/dev/null 2>&1); then
             echo "[hook] FAIL: extension does not compile — fix before committing"
-            echo "[hook]   run: (cd vscode-extension && npm run compile)   to see the errors"
+            echo "[hook]   run: (cd clients/vscode && npm run compile)   to see the errors"
             exit 1
         fi
         echo "[hook] Extension compiles."

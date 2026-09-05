@@ -4,7 +4,7 @@ The dashboard is a SEPARATE process from the MCP server: Python appends to
 ``Config.usage_log`` and the VS Code panel reads a path it computes itself. Nothing but this
 test binds the two, and when they drifted (8fb56b1 moved the writer from ``<debug_dir>/logs/``
 to ``<debug_dir>/``) the panel silently charted a file nobody writes. So: run the extension's
-OWN resolver (``vscode-extension/src/paths.ts``, via node) and assert it lands on exactly the
+OWN resolver (``clients/vscode/src/paths.ts``, via node) and assert it lands on exactly the
 file Python writes.
 """
 
@@ -21,7 +21,7 @@ import pytest
 
 from interact.config import Config
 
-PATHS_TS = Path(__file__).resolve().parents[1] / "vscode-extension" / "src" / "paths.ts"
+PATHS_TS = Path(__file__).resolve().parents[1] / "clients" / "vscode" / "src" / "paths.ts"
 AGENT_MODELS_TS = PATHS_TS.with_name("agentModels.ts")
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EXT_DIR = REPO_ROOT / "vscode-extension"
+EXT_DIR = REPO_ROOT / "clients" / "vscode"
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("INTERACT_E2E_VSCODE") != "1",

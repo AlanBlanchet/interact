@@ -19,7 +19,7 @@ from threading import Event
 
 import pytest
 
-EXT = Path(__file__).resolve().parent.parent / "vscode-extension"
+EXT = Path(__file__).resolve().parent.parent / "clients" / "vscode"
 PREVIEW = EXT / "webview" / "workplace" / "dev" / "preview.ts"
 
 #: NOT a list. The colours that make a sprite a person are read off the standing worker itself, so
@@ -734,12 +734,12 @@ def _unavailable(why: str) -> None:
 def panel_pages(tmp_path_factory):
     """Render the side panel's documents from source, once per session.
 
-    The generator lives IN the repo (`vscode-extension/webview/dev/panels.ts`). It used to be a
+    The generator lives IN the repo (`clients/vscode/webview/dev/panels.ts`). It used to be a
     hand-written file in /tmp, so when /tmp was cleaned these tests reported "fixture is not
     present" and skipped — silently, which reads as a deliberate skip rather than a guard that has
     gone. A fixture outside the repo is a test that stops guarding without telling anyone.
     """
-    ext = Path(__file__).resolve().parent.parent / "vscode-extension"
+    ext = Path(__file__).resolve().parent.parent / "clients" / "vscode"
     out = tmp_path_factory.mktemp("panels")
     bundle = out / "panels.js"
     build = subprocess.run(

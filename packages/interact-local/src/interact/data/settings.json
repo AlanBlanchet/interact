@@ -1,0 +1,398 @@
+{
+  "settings": [
+    {
+      "key": "media.backend",
+      "field": "media_backend",
+      "label": "Media backend",
+      "description": "Where image and sampled-video analysis runs in an isolated sandbox. Auto follows the billing policy.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Auto",
+          "value": "auto"
+        },
+        {
+          "label": "Subscription session",
+          "value": "session"
+        },
+        {
+          "label": "API",
+          "value": "api"
+        }
+      ],
+      "env": "INTERACT_MEDIA_BACKEND",
+      "default": "auto"
+    },
+    {
+      "key": "media.billing",
+      "field": "media_billing",
+      "label": "Media billing policy",
+      "description": "Session only prevents interact's metered API fallback; vendor CLI account credits are separate and require the explicit attestation below.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Session only",
+          "value": "session_only"
+        },
+        {
+          "label": "API allowed",
+          "value": "api_allowed"
+        }
+      ],
+      "env": "INTERACT_MEDIA_BILLING",
+      "default": "session_only"
+    },
+    {
+      "key": "media.noExtraUsageConfirmedFor",
+      "field": "media_session_no_extra_usage_confirmed_for",
+      "label": "No-extra-usage confirmed providers",
+      "description": "Claude confirmation: Usage credits disabled, zero prepaid balance, and auto-reload off. interact cannot verify this account state.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "None (sessions blocked)",
+          "value": ""
+        },
+        {
+          "label": "Claude",
+          "value": "claude"
+        }
+      ],
+      "env": "INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR",
+      "default": ""
+    },
+    {
+      "key": "media.providerOrder",
+      "field": "media_provider_order",
+      "label": "Subscription provider order",
+      "description": "Media-capable subscription CLI, currently Claude.",
+      "group": "Models",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Claude",
+          "value": "claude"
+        }
+      ],
+      "env": "INTERACT_MEDIA_PROVIDER_ORDER",
+      "default": "claude"
+    },
+    {
+      "key": "media.claudeModel",
+      "field": "claude_media_model",
+      "label": "Claude session model",
+      "description": "Optional Claude CLI model; blank uses the subscription CLI default.",
+      "group": "Models",
+      "kind": "str",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_CLAUDE_MEDIA_MODEL",
+      "default": ""
+    },
+    {
+      "key": "image.model",
+      "field": "image_model",
+      "label": "Vision API/local model",
+      "description": "API backend or fallback for screenshots and images. Subscription sessions use media.claudeModel instead.",
+      "group": "Models",
+      "kind": "model",
+      "role": "image",
+      "options": null,
+      "env": "INTERACT_IMAGE_MODEL",
+      "default": ""
+    },
+    {
+      "key": "component.model",
+      "field": "component_model",
+      "label": "Component API/local model",
+      "description": "API backend or fallback for GUI grounding (falls back to image.model). Subscription sessions use their media session model.",
+      "group": "Models",
+      "kind": "model",
+      "role": "component",
+      "options": null,
+      "env": "INTERACT_COMPONENT_MODEL",
+      "default": ""
+    },
+    {
+      "key": "video.model",
+      "field": "video_model",
+      "label": "Video API/local model",
+      "description": "API backend or fallback for video. Subscription sessions always receive ordered, timestamped sampled frames; an API model may receive native video when supported.",
+      "group": "Models",
+      "kind": "model",
+      "role": "video",
+      "options": null,
+      "env": "INTERACT_VIDEO_MODEL",
+      "default": ""
+    },
+    {
+      "key": "audio.model",
+      "field": "audio_model",
+      "label": "Audio API/local model",
+      "description": "API or local-compatible speech/audio model for transcribe. Claude subscription sessions do not hear audio; media.billing must allow this separate path.",
+      "group": "Models",
+      "kind": "model",
+      "role": "audio",
+      "options": null,
+      "env": "INTERACT_AUDIO_MODEL",
+      "default": ""
+    },
+    {
+      "key": "desktop.target",
+      "field": "desktop_target",
+      "label": "Desktop target",
+      "description": "Where desktop automation acts: your real session, or an isolated sandbox.",
+      "group": "Desktop",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "local \u2014 your real session",
+          "value": "local"
+        },
+        {
+          "label": "nested \u2014 isolated sandbox display",
+          "value": "nested"
+        }
+      ],
+      "env": "INTERACT_DESKTOP_TARGET",
+      "default": "local"
+    },
+    {
+      "key": "desktop.nestedHeadless",
+      "field": "nested_headless",
+      "label": "Nested headless",
+      "description": "Sandbox only: ON = Xvfb in the background (CI/servers); OFF = Xephyr you can watch.",
+      "group": "Desktop",
+      "kind": "bool",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_NESTED_HEADLESS",
+      "default": "false"
+    },
+    {
+      "key": "desktop.nestedDisplay",
+      "field": "nested_display",
+      "label": "Nested display",
+      "description": "X display number for the sandbox (e.g. 99 \u2192 :99).",
+      "group": "Desktop",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_NESTED_DISPLAY",
+      "default": "99"
+    },
+    {
+      "key": "desktop.nestedSize",
+      "field": "nested_size",
+      "label": "Nested size",
+      "description": "Sandbox screen size, WIDTHxHEIGHT.",
+      "group": "Desktop",
+      "kind": "str",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_NESTED_SIZE",
+      "default": "1280x800"
+    },
+    {
+      "key": "browser.headless",
+      "field": "headless",
+      "label": "Browser headless",
+      "description": "Run the automation browser without a visible window.",
+      "group": "Browser",
+      "kind": "bool",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_HEADLESS",
+      "default": "true"
+    },
+    {
+      "key": "browser.type",
+      "field": "browser_type",
+      "label": "Browser engine",
+      "description": "Which Playwright engine drives browser automation.",
+      "group": "Browser",
+      "kind": "enum",
+      "role": null,
+      "options": [
+        {
+          "label": "Chromium",
+          "value": "chromium"
+        },
+        {
+          "label": "Firefox",
+          "value": "firefox"
+        },
+        {
+          "label": "WebKit",
+          "value": "webkit"
+        }
+      ],
+      "env": "INTERACT_BROWSER_TYPE",
+      "default": "chromium"
+    },
+    {
+      "key": "browser.viewportWidth",
+      "field": "viewport_width",
+      "label": "Viewport width",
+      "description": "Browser viewport width in pixels.",
+      "group": "Browser",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_VIEWPORT_WIDTH",
+      "default": "1280"
+    },
+    {
+      "key": "browser.viewportHeight",
+      "field": "viewport_height",
+      "label": "Viewport height",
+      "description": "Browser viewport height in pixels.",
+      "group": "Browser",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_VIEWPORT_HEIGHT",
+      "default": "720"
+    },
+    {
+      "key": "browser.slowMo",
+      "field": "slow_mo",
+      "label": "Slow-mo (ms)",
+      "description": "Delay added between browser actions, in ms (0 = full speed; useful when watching).",
+      "group": "Browser",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_SLOW_MO",
+      "default": "0"
+    },
+    {
+      "key": "browser.profileDir",
+      "field": "browser_profile_dir",
+      "label": "Persistent profile dir",
+      "description": "When set, browser sessions keep their cookies/login on disk here (under <dir>/<session>) so you log in once and stay authenticated across restarts \u2014 run authenticated flows through the reliable DOM-ref path instead of driving a logged-in desktop browser window. Blank = ephemeral (logged out every launch).",
+      "group": "Browser",
+      "kind": "path",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_BROWSER_PROFILE_DIR",
+      "default": ""
+    },
+    {
+      "key": "vlm.maxTokens",
+      "field": "max_tokens",
+      "label": "VLM max tokens",
+      "description": "Cap on VLM output tokens per call (blank = the model's default).",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MAX_TOKENS",
+      "default": ""
+    },
+    {
+      "key": "media.timeout",
+      "field": "media_timeout",
+      "label": "Subscription media timeout (s)",
+      "description": "Hard limit for a Claude media-analysis child process.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_TIMEOUT",
+      "default": "120"
+    },
+    {
+      "key": "media.maxItems",
+      "field": "media_max_items",
+      "label": "Media items per request",
+      "description": "Maximum number of image, video, or audio items accepted in one analysis.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_MAX_ITEMS",
+      "default": "16"
+    },
+    {
+      "key": "media.maxTotalBytes",
+      "field": "media_max_total_bytes",
+      "label": "Media bytes per request",
+      "description": "Maximum aggregate decoded media bytes accepted before any provider runs.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_MAX_TOTAL_BYTES",
+      "default": "52428800"
+    },
+    {
+      "key": "media.maxContextChars",
+      "field": "media_max_context_chars",
+      "label": "Media context characters",
+      "description": "Maximum untrusted page, title, URL, or transcript context characters per request.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_MAX_CONTEXT_CHARS",
+      "default": "32768"
+    },
+    {
+      "key": "vlm.waitTimeout",
+      "field": "wait_timeout",
+      "label": "Action wait timeout (ms)",
+      "description": "How long a browser action waits for its target before failing (default 10000).",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_WAIT_TIMEOUT",
+      "default": "10000"
+    },
+    {
+      "key": "video.fps",
+      "field": "video_fps",
+      "label": "Video FPS",
+      "description": "Frames per second sampled from a recording for analysis.",
+      "group": "Advanced",
+      "kind": "int",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_VIDEO_FPS",
+      "default": "5"
+    },
+    {
+      "key": "video.duration",
+      "field": "video_duration",
+      "label": "Video duration (s)",
+      "description": "Default desktop recording length, in seconds.",
+      "group": "Advanced",
+      "kind": "str",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_VIDEO_DURATION",
+      "default": "3.0"
+    },
+    {
+      "key": "debug.dir",
+      "field": "debug_dir",
+      "label": "Debug / output dir",
+      "description": "Where interact writes logs + debug artifacts (blank = ~/.interact/out; point at a project's out/ when working locally).",
+      "group": "Advanced",
+      "kind": "path",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_DEBUG_DIR",
+      "default": "~/.interact/out"
+    }
+  ]
+}

@@ -767,12 +767,38 @@ def test_repeated_line_diff_completes_within_linear_time_bound(git_repo: Path):
     assert secret.decode() not in result.stdout + result.stderr
 
 
-def test_scanner_handles_rename_destination(git_repo: Path):
+@pytest.mark.parametrize(
+    "mutation", ["unchanged", "benign", "added", "modified", "changed_hostile"]
+)
+def test_scanner_handles_rename_destination(git_repo: Path, mutation: str):
+    secret = "token = 'ghp_" + "abcdefghijklmnopqrstuvwxyz123456'"
+    seed = git_repo / "seed.txt"
+    seed.write_text(secret + "\nordinary\n")
+    subprocess.run(["git", "add", "seed.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "credential-like baseline"], cwd=git_repo, check=True)
     subprocess.run(["git", "mv", "seed.txt", "renamed file.txt"], cwd=git_repo, check=True)
+    renamed = git_repo / "renamed file.txt"
+    if mutation == "benign":
+        renamed.write_text(secret + "\nordinary expanded\n")
+        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+    elif mutation == "added":
+        renamed.write_text(renamed.read_text() + secret + "\n")
+        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+    elif mutation == "modified":
+        renamed.write_text(secret + "\n" + secret + "\n")
+        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+    elif mutation == "changed_hostile":
+        renamed.write_text("token = 'ghp_" + "123456abcdefghijklmnopqrstuvwxyz" + "'\nordinary\n")
+        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
 
     result = run_gate(git_repo, "scan-staged")
 
-    assert result.returncode == 0, result.stderr
+    if mutation in {"unchanged", "benign"}:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1
+        assert "credential-prefix" in result.stderr
+        assert secret not in result.stdout + result.stderr
 
 
 def test_scanner_suppresses_only_its_detector_declarations(git_repo: Path):

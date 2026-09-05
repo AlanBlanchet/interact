@@ -549,7 +549,7 @@ class RepositoryGate(BaseModel):
     def scan_staged(self):
         findings: list[_Finding] = []
         confidential_terms = self._confidential_terms()
-        for path in self._staged_destinations():
+        for path, unchanged_source in self._staged_destinations():
             display_path = os.fsdecode(path)
             if display_path.startswith(".github/memory/iterations/"):
                 raise _GateError("private workflow ledgers must not be staged")
@@ -562,10 +562,16 @@ class RepositoryGate(BaseModel):
             indexed = self._blob(b":./" + path)
             if indexed is None:
                 raise _GateError("indexed scanner input is unavailable")
+            if unchanged_source is not None:
+                original = self._blob(b"HEAD:./" + unchanged_source)
+                if original is None:
+                    raise _GateError("rename source is unavailable")
+                if original == indexed:
+                    continue
             if b"\0" in indexed:
                 findings.extend(self._scan_bytes(display_path, "binary", indexed, confidential_terms))
                 continue
-            added = self._added_lines(path, indexed)
+            added = self._added_lines(path, indexed, unchanged_source)
             for line_number, line in added:
                 findings.extend(self._scan_bytes(display_path, line_number, line, confidential_terms))
         if findings:
@@ -678,7 +684,7 @@ class RepositoryGate(BaseModel):
         output = self._git(b"diff", b"--cached", b"--name-status", b"-z", b"--diff-filter=ACMR")
         assert output is not None
         fields = output.rstrip(b"\0").split(b"\0") if output else []
-        paths: list[bytes] = []
+        paths: list[tuple[bytes, bytes | None]] = []
         index = 0
         while index < len(fields):
             status = fields[index]
@@ -686,13 +692,14 @@ class RepositoryGate(BaseModel):
             if status[:1] in {b"R", b"C"}:
                 if index + 1 >= len(fields):
                     raise _GateError("Git returned malformed staged paths")
+                source = fields[index]
                 index += 1
-                paths.append(fields[index])
+                paths.append((fields[index], source if status[:1] == b"R" else None))
                 index += 1
             else:
                 if index >= len(fields):
                     raise _GateError("Git returned malformed staged paths")
-                paths.append(fields[index])
+                paths.append((fields[index], None))
                 index += 1
         return paths
 
@@ -708,7 +715,7 @@ class RepositoryGate(BaseModel):
         except ValueError as error:
             raise _GateError("Git returned an invalid indexed blob size") from error
 
-    def _added_lines(self, path: bytes, indexed: bytes):
+    def _added_lines(self, path: bytes, indexed: bytes, renamed_from: bytes | None):
         new_lines = indexed.split(b"\n")
         diff = self._git(
             b"diff",
@@ -719,7 +726,7 @@ class RepositoryGate(BaseModel):
             b"--no-ext-diff",
             b"--no-textconv",
             b"--",
-            path,
+            *((renamed_from, path) if renamed_from is not None else (path,)),
         )
         assert diff is not None
         added: list[tuple[int, bytes]] = []

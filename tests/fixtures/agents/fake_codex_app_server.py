@@ -55,6 +55,8 @@ class _FakeCodexAppServer:
                     "approvalsReviewer", "allowProviderModelFallback",
                 )
             }
+            if "developerInstructions" in params:
+                record["params"]["developerInstructions"] = params["developerInstructions"]
         if message.get("method") == "thread/resume" and isinstance(params, dict):
             record["params"] = {"threadId": params.get("threadId")}
         if message.get("method") == "turn/interrupt" and isinstance(params, dict):

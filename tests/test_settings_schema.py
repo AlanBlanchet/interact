@@ -60,7 +60,7 @@ def test_bundled_settings_json_is_in_lockstep_with_the_schema():
 def test_session_media_guidance_is_claude_only() -> None:
     root = Path(__file__).parent.parent
     root_section = (root / "README.md").read_text().split("### Models and keys", 1)[1].split("\n## ", 1)[0]
-    extension_section = (root / "vscode-extension" / "README.md").read_text().split(
+    extension_section = (root / "clients" / "vscode" / "README.md").read_text().split(
         "## Visual sessions, billing, and models", 1
     )[1].split("\n## ", 1)[0]
     confirmation = by_key("media.noExtraUsageConfirmedFor")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-EXT_ROOT = Path(__file__).resolve().parents[1] / "vscode-extension"
+EXT_ROOT = Path(__file__).resolve().parents[1] / "clients" / "vscode"
 
 
 @pytest.fixture(scope="module")

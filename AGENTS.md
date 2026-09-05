@@ -72,7 +72,7 @@ The recorded hashes are the durable pre-edit snapshot evidence. A late snapshot 
 
 A quarantine successor instead begins with a typed recovery baseline before any new recovery edit. It binds the exact manifest and predecessor digest, repeats the gate-derived request and acceptance without change, captures the current branch, `HEAD`, index, worktree, and untracked hashes, and distinguishes pre-existing user work from inherited agent residue. It adopts that residue truthfully; it does not reconstruct a fictional pre-edit snapshot. Quarantine clears all predecessor candidate, review, verification, and commit context, so the successor must complete every state from design through closure with fresh evidence.
 
-Read open project issues and relevant client-error reports when the request concerns live interact behavior. Treat cross-project client logs as private: inspect only the current project's records, minimize excerpts, and redact paths, prompts, tokens, and user content from reports.
+Read open project issues and relevant client-error reports when the request concerns live interact behavior. For GitHub repository metadata, issues, pull requests, and releases, prefer the authenticated `gh` CLI. Treat `gh` API authentication, Git transport authentication, and app-connector authorization as independent states; never report one surface's failure as “GitHub is disconnected.” Before falling back, name the exact surface, bounded failure reason, and attempted capability. Never read or print tokens. Use unauthenticated web only as a public-read fallback, and use an app connector only for a capability the CLI cannot supply. This access order grants no authority to push, publish, release, close, comment, or otherwise mutate an external resource. Treat cross-project client logs as private: inspect only the current project's records, minimize excerpts, and redact paths, prompts, tokens, and user content from reports.
 
 ### 2. DESIGNED
 
@@ -86,6 +86,8 @@ Before code, add a design checkpoint to the iteration ledger:
 - compatibility decision: cut over cleanly or preserve behavior for a stated reason.
 
 New public classes or models require the coding skill's class-design check before their declaration. A design review performed after implementation is not pre-code evidence.
+
+Order the design and implementation by acceptance dependency: deliver the user's primary architectural or product outcome first, then the correctness, safety, and delivery work required to make that outcome real. Optional polish and unrelated cleanup remain outside the active candidate; they cannot consume the delivery path before the primary outcome or keep an otherwise complete lineage open.
 
 ### 3. RED
 
@@ -112,7 +114,7 @@ Before `COMMITTED`, bind the active candidate to both the current index tree and
 
 ### 6. REVIEWED
 
-Use independent generic workers when they add real coverage, and give each the frozen tree hash and identical acceptance list. Required gates are determined by the change, not by a standing ceremony:
+Use independent generic workers when they add real coverage, and give each the frozen tree hash and identical acceptance list. Before candidate approval, one independent structural review must inspect the whole frozen diff for boundary coherence, duplication, misplaced responsibility, and consistency with the design; narrower specialist reviews supplement that whole-diff review rather than fragmenting it. Required gates are determined by the change, not by a standing ceremony:
 
 - code changes: independent functional verification and diff review;
 - public API or architecture changes: boundary and compatibility review;
@@ -120,7 +122,7 @@ Use independent generic workers when they add real coverage, and give each the f
 - security or privacy boundaries: threat and secret review;
 - performance claims: a measured realistic-scale review.
 
-A reviewer must report what it ran or inspected, exact exclusions, and findings tied to the candidate hash. Every `REVIEWED` command row must exit zero; encode an expected-negative control as an outer assertion that verifies the inner failure and succeeds, retaining the inner result in the summary. An approved reviewer has no findings, and a `REVIEWED` event whose reviewers are all approved advances to `VERIFIED`. A `changes_requested` or `rejected` reviewer has typed findings; any such disposition makes the candidate-bound `REVIEWED` event a structurally valid current terminal under both `verify-ledger` and `validate-append`, with `RED` as its sole next state. Prospective validation must accept that event without requiring its future `RED` to exist. The candidate remains bound until the subsequent typed nonzero `RED` clears it; `IMPLEMENTED`, a fresh `CANDIDATE_FROZEN`, and fresh review then follow. A review that trusts another worker's pass count, checks only the implementation narrative, or silently uses a smaller scope is invalid. Quarantine requires an independent validator to reproduce the exact predecessor failure and inspect the manifest, trusted-prefix binding, successor acceptance, and full frozen candidate.
+A reviewer must report what it ran or inspected, exact exclusions, and findings tied to the candidate hash. Every `REVIEWED` command row must exit zero; encode an expected-negative control as an outer assertion that verifies the inner failure and succeeds, retaining the inner result in the summary. An approved reviewer has no findings. When every reviewer is approved, the candidate may advance to `VERIFIED`; before verification, newly executed evidence that disproves the frozen candidate may instead append one typed nonzero `RED` directly. A second `REVIEWED` event for the same candidate is invalid. A `changes_requested` or `rejected` reviewer has typed findings; any such disposition makes the candidate-bound `REVIEWED` event a structurally valid current terminal under both `verify-ledger` and `validate-append`, with `RED` as its sole next state. Prospective validation must accept a nonapproved review or a direct post-approval `RED` without requiring a future event to exist. The candidate remains bound until the accepted typed nonzero `RED` clears it; `IMPLEMENTED`, a fresh `CANDIDATE_FROZEN`, and fresh review then follow. Only a finding tied to an acceptance item, invariant, or executable regression blocks the candidate; optional polish is recorded outside the active lineage and cannot force another review cycle. A review that trusts another worker's pass count, checks only the implementation narrative, silently uses a smaller scope, or substitutes several partial reviews for the whole-diff structural review is invalid. Quarantine requires an independent validator to reproduce the exact predecessor failure and inspect the manifest, trusted-prefix binding, successor acceptance, and full frozen candidate.
 
 ### 7. VERIFIED
 

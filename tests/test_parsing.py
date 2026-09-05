@@ -1,4 +1,4 @@
-"""Parametrized tests for src/interact/parsing.py."""
+"""Parametrized tests for packages/interact-local/src/interact/parsing.py."""
 
 from __future__ import annotations
 
@@ -59,4 +59,3 @@ def test_extract_json_array(raw, expected):
 )
 def test_extract_point(raw, expected):
     assert Parse.extract_point(raw) == expected
-

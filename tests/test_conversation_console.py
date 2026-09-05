@@ -15,6 +15,7 @@ import pytest
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import JsonValue, ValidationError
+from interact_contracts import PromptKey, PromptSelection
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
@@ -31,10 +32,11 @@ from interact.agents.protocol import (
 )
 from interact.agents.providers import CodexProvider
 from interact.data import PackageData
+from interact.config import Config
 
 FIXTURES = Path(__file__).parent / "fixtures" / "agents"
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-CODEX_SCHEMA_CAPTURE = PROJECT_ROOT / "src/interact/agents/codex_app_server_schema"
+CODEX_SCHEMA_CAPTURE = PROJECT_ROOT / "packages/interact-local/src/interact/agents/codex_app_server_schema"
 
 
 @pytest.fixture
@@ -169,6 +171,36 @@ async def _open_api_server(root: Path, *, delay: float = 0.0):
     process.terminate()
     await process.wait()
     raise RuntimeError("fake API server did not publish its port")
+
+
+async def _open_prompt_server(
+    root: Path, *, content: str, revision: str, token: str,
+    body_revision: str | None = None,
+):
+    port_file = root / "prompt.port"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(FIXTURES / "fake_prompt_server.py"),
+        "--port-file", str(port_file),
+        "--content", content,
+        "--revision", revision,
+        "--token", token,
+        *(["--body-revision", body_revision] if body_revision is not None else []),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stderr = process.stderr
+    assert stderr is not None
+    for _ in range(100):
+        if port_file.exists():
+            return process, int(port_file.read_text())
+        if process.returncode is not None:
+            detail = (await stderr.read()).decode(errors="replace")
+            raise RuntimeError(f"fake prompt server exited: {detail}")
+        await asyncio.sleep(0.02)
+    process.terminate()
+    await process.wait()
+    raise RuntimeError("fake prompt server did not publish its port")
 
 
 @pytest.mark.parametrize(
@@ -415,7 +447,9 @@ async def test_host_finishes_its_writer_when_registry_close_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     registry = _TransportRegistry(workspace_root=tmp_path)
-    host = _ConversationHost(workspace_root=tmp_path, transport_registry=registry)
+    host = _ConversationHost(
+        workspace_root=tmp_path, transport_registry=registry, config=Config()
+    )
     writer_started = asyncio.Event()
     writer_finished = asyncio.Event()
     writer_tasks: list[asyncio.Task[None]] = []
@@ -499,6 +533,7 @@ async def test_fake_app_server_crosses_catalog_thread_turn_and_stream(console_wo
         assert streamed[-1]["event"]["kind"] == "done", streamed[-1]["event"]
         assert started["run"]["provider"] == "codex"
         assert started["run"]["provider_session_id"] == "thread-root"
+        assert started["run"]["prompt"] is None
         assert any(item["event"]["kind"] == "text"
                    and item["event"]["text"] == "synthetic answer"
                    for item in streamed)
@@ -546,6 +581,91 @@ async def test_fake_app_server_crosses_catalog_thread_turn_and_stream(console_wo
         }
     finally:
         await _stop_console(process)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_ok"),
+    [
+        ("verified", True),
+        ("revision-mismatch", False),
+        ("digest-mismatch", False),
+        ("missing-config", False),
+        ("wrong-token", False),
+        ("offline-uncached", False),
+    ],
+)
+async def test_console_binds_server_prompt_before_starting_provider(
+    console_workspace, monkeypatch: pytest.MonkeyPatch, case: str, expected_ok: bool,
+) -> None:
+    root, workspace, binary_dir = console_workspace
+    trusted = "trusted prompt from the authenticated catalog"
+    revision = "00000000-0000-4000-8000-000000000002"
+    token = "synthetic-test-token"
+    digest = hashlib.sha256(trusted.encode()).hexdigest()
+    prompt_server, port = await _open_prompt_server(
+        root,
+        content=trusted,
+        revision=revision,
+        token=token,
+        body_revision=(
+            "00000000-0000-4000-8000-000000000003"
+            if case == "revision-mismatch" else None
+        ),
+    )
+    endpoint = "http://127.0.0.1:1" if case == "offline-uncached" else f"http://127.0.0.1:{port}"
+    monkeypatch.setenv("INTERACT_PROMPT_ENDPOINT", endpoint)
+    monkeypatch.setenv("INTERACT_PROMPT_ACCOUNT", "tenant-a")
+    monkeypatch.setenv("INTERACT_PROMPT_TOKEN", "wrong" if case == "wrong-token" else token)
+    monkeypatch.setenv("INTERACT_PROMPT_CACHE", str((root / "prompts.sqlite3").resolve()))
+    if case == "missing-config":
+        monkeypatch.setenv("INTERACT_PROMPT_ACCOUNT", "")
+    process = await _open_console(workspace)
+    try:
+        catalog_response = await _exchange(process, {
+            "version": 1, "request_id": "catalog", "method": "catalog",
+        })
+        route = next(route for route in catalog_response["catalog"]["routes"]
+                     if route["id"] == "codex:local_session")
+        request = ConversationRequest(
+            route_id=route["id"],
+            prompt="What should the user do next?",
+            prompt_selection=PromptSelection(
+                key=PromptKey(namespace="interact", slug="system"),
+                channel="stable",
+                digest="0" * 64 if case == "digest-mismatch" else digest,
+            ),
+            selection=ModelSelection(model="openai/example-model"),
+            workspace_root=str(workspace),
+        )
+        started = await _exchange(process, {
+            "version": 1,
+            "request_id": "start",
+            "method": "start",
+            "request": request.model_dump(mode="json"),
+        })
+        assert started["ok"] is expected_ok, started
+        if expected_ok:
+            await _event(process, "done", "error")
+            turn_start = next(record for record in _codex_log(binary_dir)
+                              if record["method"] == "turn/start")
+            assert turn_start["params"]["input"] == [
+                {"type": "text", "text": "What should the user do next?"}
+            ]
+            thread_start = next(record for record in _codex_log(binary_dir)
+                                if record["method"] == "thread/start")
+            assert thread_start["params"]["developerInstructions"] == trusted
+            assert started["run"]["prompt"] == {
+                **request.prompt_selection.model_dump(mode="json"),
+                "revision": revision,
+            }
+        else:
+            assert started["error_code"] == "invalid_request"
+            assert not any(record["method"] in {"thread/start", "turn/start"}
+                           for record in _codex_log(binary_dir))
+    finally:
+        await _stop_console(process)
+        prompt_server.terminate()
+        await prompt_server.wait()
     assert (binary_dir / "codex.exit").read_text() == "closed\n"
 
 
@@ -717,6 +837,65 @@ async def test_explicit_api_route_executes_the_resolved_model_exactly_once(
         await _stop_console(process)
         api_process.terminate()
         await api_process.wait()
+
+
+async def test_prompt_selected_api_keeps_instruction_separate_from_user_turn(
+    console_workspace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, workspace, _ = console_workspace
+    api_process, api_port, api_log = await _open_api_server(root)
+    instruction = "Answer using the verified project policy."
+    revision = "00000000-0000-4000-8000-000000000004"
+    token = "synthetic-test-token"
+    digest = hashlib.sha256(instruction.encode()).hexdigest()
+    prompt_process, prompt_port = await _open_prompt_server(
+        root, content=instruction, revision=revision, token=token,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-value")
+    monkeypatch.setenv("OPENAI_API_BASE", f"http://127.0.0.1:{api_port}/v1")
+    monkeypatch.setenv(
+        "INTERACT_MODELS_JSON", _models(("openai/example-model", 1.0))
+    )
+    monkeypatch.setenv("INTERACT_PROMPT_ENDPOINT", f"http://127.0.0.1:{prompt_port}")
+    monkeypatch.setenv("INTERACT_PROMPT_ACCOUNT", "tenant-a")
+    monkeypatch.setenv("INTERACT_PROMPT_TOKEN", token)
+    monkeypatch.setenv("INTERACT_PROMPT_CACHE", str((root / "prompts.sqlite3").resolve()))
+    process = await _open_console(workspace)
+    try:
+        started = await _exchange(process, {
+            "version": 1,
+            "request_id": "start",
+            "method": "start",
+            "request": {
+                "route_id": "openai:api",
+                "prompt": "What changed in the repository?",
+                "prompt_selection": {
+                    "key": {"namespace": "interact", "slug": "system"},
+                    "channel": "stable",
+                    "digest": digest,
+                },
+                "selection": {"model": "openai/example-model"},
+                "workspace_root": str(workspace),
+            },
+        })
+        assert started["ok"] is True, started
+        await _event(process, "done")
+        request = json.loads(api_log.read_text().splitlines()[0])
+        assert request["messages"] == [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": "What changed in the repository?"},
+        ]
+        assert started["run"]["prompt"] == {
+            "key": {"namespace": "interact", "slug": "system"},
+            "channel": "stable",
+            "revision": revision,
+            "digest": digest,
+        }
+    finally:
+        await _stop_console(process)
+        for server in (api_process, prompt_process):
+            server.terminate()
+            await server.wait()
 
 
 async def test_explicit_api_active_history_includes_assistant_response(
@@ -1770,7 +1949,7 @@ def test_codex_schema_capture_drives_complete_request_policy_without_handwritten
     assert refs and len(refs) == len(set(refs))
     for relative in refs:
         assert (fixture / relative.removeprefix("./")).is_file()
-    generated = Path("src/interact/agents/codex_schema.py")
+    generated = Path("packages/interact-local/src/interact/agents/codex_schema.py")
     assert generated.is_file()
     source = generated.read_text()
     assert hashlib.sha256(server_request_path.read_bytes()).hexdigest() in source
@@ -1859,7 +2038,7 @@ def test_codex_schema_boundary_validates_derived_requests_results_and_rejections
         entry["method"] for entry in entries
     }
 
-    module_path = Path("src/interact/agents/codex_schema.py")
+    module_path = Path("packages/interact-local/src/interact/agents/codex_schema.py")
     spec = importlib.util.spec_from_file_location("interact_codex_schema_test", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -2048,9 +2227,9 @@ async def test_protocol_failure_immediately_reaps_owned_provider_process(
 
 def test_transport_and_cli_import_contracts_are_explicit_and_lightweight() -> None:
     """Architecture and entrypoint invariants are executable without importing provider code."""
-    transport = Path("src/interact/agents/transport.py")
+    transport = Path("packages/interact-local/src/interact/agents/transport.py")
     assert transport.exists(), "one private capability-typed transport owner must exist"
-    host_source = Path("src/interact/agents/host.py").read_text()
+    host_source = Path("packages/interact-local/src/interact/agents/host.py").read_text()
     host_tree = ast.parse(host_source)
     imported_modules = {
         node.module
@@ -2066,7 +2245,7 @@ def test_transport_and_cli_import_contracts_are_explicit_and_lightweight() -> No
     assert "run.connection ==" not in host_source
     assert "route.connection ==" not in host_source
     assert "transport_registry" in _ConversationHost.model_fields
-    tree = ast.parse(Path("src/interact/cli/app.py").read_text())
+    tree = ast.parse(Path("packages/interact-local/src/interact/cli/app.py").read_text())
     local_imports = [node for node in ast.walk(tree)
                      if isinstance(node, (ast.Import, ast.ImportFrom)) and node.col_offset > 0]
     assert not local_imports
