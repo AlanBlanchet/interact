@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { restoreEnvironmentAfter } from "../test/fixtures/environment.ts";
 import { billingPresentation } from "./billingPresentation.ts";
 import { teamSpend } from "./teamSpend.ts";
 
@@ -228,6 +229,20 @@ test("the console renders every asynchronous state inline", () => {
   assert.match(blocked, /No runnable routes/i);
   assert.match(blocked, /claude[\s\S]*policy blocked[\s\S]*This account policy blocks session use/i,
     "an all-blocked catalog is empty but still explains every unavailable route");
+});
+
+test("an unavailable bridge offers an explicit reload without requiring an agent", () => {
+  const html = document({
+    phase: "error",
+    error: "The compatible local conversation bridge is unavailable.",
+  });
+  assert.match(html, /data-cold-start="1"/);
+  assert.match(html, /id="message"[^>]*disabled/);
+  assert.doesNotMatch(html, /select an agent|pick an agent/i);
+  assert.match(html, /data-action="reload-conversation"[^>]*>\s*Reload bridge/i,
+    "recovery must be a deliberate action that constructs a fresh client");
+  assert.match(html, /reload-conversation[\s\S]*postMessage\(\{\s*type:\s*["']reload-conversation["']/,
+    "the rendered action must cross the typed webview boundary");
 });
 
 test("pending work renders every interaction field and submits the form atomically", () => {
@@ -739,7 +754,10 @@ test("the installed compiled ChatView cold-starts a root conversation without ch
     });
     const vscodeStub = new Proxy({
       commands: { executeCommand: async () => undefined },
-      workspace: { workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }] },
+      workspace: {
+        workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }],
+        getConfiguration: () => ({ get: () => "" }),
+      },
       window: {
         showInformationMessage: () => undefined,
         showErrorMessage: () => undefined,
@@ -771,9 +789,11 @@ test("the installed compiled ChatView cold-starts a root conversation without ch
       }],
       ["./paths", { agentsDir: () => workspaceRoot }],
       ["./shared", { resolveCommand: () => ["interact", ["mcp"]] }],
+      ["./conversationBackend", { resolveConversationBackend: async () => ({
+        available: true, command: "interact", args: ["agents", "console"],
+      }), conversationExtensionVersion: () => "0.39.0" }],
       ["./runStatus", { runStatusOf: (status: unknown) => status }],
       ["./conversationClient", {
-        conversationHostArgs: () => ["agents", "console"],
         createConversationClient: () => conversationClient,
         usesConversationTransport: () => true,
       }],
@@ -794,7 +814,7 @@ test("the installed compiled ChatView cold-starts a root conversation without ch
       provider = new ChatViewProvider({ appendLine() {} });
       provider.resolveWebviewView(view);
       await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       assert.match(html, /id="composer" data-cold-start="1"/, scenario.name);
       assert.match(html, /<select[^>]*id="route"/, scenario.name);
@@ -827,11 +847,136 @@ test("the installed compiled ChatView cold-starts a root conversation without ch
       });
       assert.equal(Object.hasOwn(starts[0], "agent"), false,
         `${scenario.name} must not require or synthesize an agent id`);
+
     } finally {
       provider?.dispose?.();
       for (const dispose of disposals) dispose();
       Module._load = originalLoad;
     }
+  }
+});
+
+test("a compatible local bridge that exits before initialize survives a fresh extension reload", async () => {
+  const bundleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "out");
+  const builtChatView = path.join(bundleRoot, "chatView.js");
+  const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const fixtureRoot = path.join(workspaceRoot, "out", "tests", "conversation-exit-reload");
+  const bin = path.join(fixtureRoot, "bin");
+  const launches = path.join(fixtureRoot, "launches.txt");
+  const ready = path.join(fixtureRoot, "ready");
+  const release = path.join(fixtureRoot, "release");
+  fs.mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, "interact");
+  fs.rmSync(executable, { force: true });
+  fs.symlinkSync(path.resolve("test/fixtures/conversationFakeHost.ts"), executable);
+  fs.rmSync(launches, { force: true });
+
+  let inert: any;
+  inert = new Proxy(() => undefined, { get: () => inert, construct: () => ({}) });
+  const vscodeStub = new Proxy({
+    commands: { executeCommand: async () => undefined },
+    workspace: {
+      workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }],
+      getConfiguration: () => ({ get: () => "" }),
+    },
+    window: { showInformationMessage: () => undefined, showErrorMessage: () => undefined,
+      showTextDocument: async () => undefined },
+    Uri: { file: (fsPath: string) => ({ scheme: "file", fsPath }), from: (value: unknown) => value },
+  }, { get: (target, key) => Reflect.has(target, key) ? Reflect.get(target, key) : inert });
+  const localStubs = new Map<string, unknown>([
+    ["./agents", { readAgentRuns: () => [], activityOf: () => [] }],
+    ["./scopeStore", { scopeStore: () => undefined }],
+    ["./permissionModes", { knownModes: async () => [], describeMode: () => undefined }],
+    ["./paths", { agentsDir: () => workspaceRoot }],
+    ["./runStatus", { runStatusOf: (status: unknown) => status }],
+    ["./org", { companyOf: () => undefined, definitionFile: () => undefined, readOrg: () => undefined }],
+  ]);
+  const Module = require_("node:module") as { _load: (request: string, parent: unknown, isMain: boolean) => unknown };
+  const originalLoad = Module._load;
+  const originalPath = process.env.PATH ?? "";
+  const restoreEnvironment = restoreEnvironmentAfter([
+    "PATH", "INTERACT_FAKE_CONVERSATION_MODE", "INTERACT_FAKE_CONVERSATION_LOG",
+    "INTERACT_FAKE_LAUNCH_LOG", "INTERACT_FAKE_READY_MARKER", "INTERACT_FAKE_RELEASE_MARKER",
+  ]);
+  Module._load = (request, parent, isMain) => request === "vscode" ? vscodeStub
+    : localStubs.has(request) ? localStubs.get(request) : originalLoad(request, parent, isMain);
+  process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
+  process.env.INTERACT_FAKE_CONVERSATION_MODE = "exit_before_initialize";
+  process.env.INTERACT_FAKE_LAUNCH_LOG = launches;
+  try {
+    let html = "";
+    const posted: Record<string, unknown>[] = [];
+    let receive: ((message: Record<string, unknown>) => void) | undefined;
+    let visibilityChanged: (() => void) | undefined;
+    const disposals: Array<() => void> = [];
+    const webview = { options: {}, get html() { return html; }, set html(value: string) { html = value; },
+      onDidReceiveMessage(listener: (message: Record<string, unknown>) => void) {
+        receive = listener;
+        return { dispose() {} };
+      }, postMessage: async (message: Record<string, unknown>) => { posted.push(message); return true; } };
+    const view = { visible: true, webview, onDidChangeVisibility(listener: () => void) {
+      visibilityChanged = listener; return { dispose() {} };
+    },
+      onDidDispose(listener: () => void) { disposals.push(listener); return { dispose() {} }; }, show() {} };
+    const waitForRecovery = async (attempt: number): Promise<void> => {
+      const deadline = Date.now() + 1_000;
+      while (!/data-action="reload-conversation"[^>]*>\s*Reload bridge/i.test(html)
+          && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.match(html, /exited before initialization \(exit 1; 140 stderr bytes\)[\s\S]*Reload bridge/i,
+        `bridge attempt ${attempt} must replace loading with safe actionable recovery`);
+      assert.doesNotMatch(html, /private bridge diagnostic|!{3}/);
+    };
+    delete require_.cache[require_.resolve(builtChatView)];
+    const { ChatViewProvider } = require_(builtChatView);
+    const provider = new ChatViewProvider({ appendLine() {} });
+    try {
+      provider.resolveWebviewView(view);
+      assert.ok(receive, "the compiled provider must install its reload message boundary");
+      await waitForRecovery(1);
+      receive({ type: "reload-conversation" });
+      assert.match(html, /Loading available routes/i, "reload must visibly begin a fresh attempt");
+      await waitForRecovery(2);
+      receive({ type: "ready" });
+      assert.equal(fs.readFileSync(launches, "utf8"), "launch\nlaunch\n");
+
+      fs.rmSync(ready, { force: true });
+      fs.rmSync(release, { force: true });
+      process.env.INTERACT_FAKE_CONVERSATION_MODE = "controlled_post_catalog_exit";
+      process.env.INTERACT_FAKE_READY_MARKER = ready;
+      process.env.INTERACT_FAKE_RELEASE_MARKER = release;
+      posted.length = 0;
+      receive({ type: "reload-conversation" });
+      const readyDeadline = Date.now() + 1_000;
+      while ((!fs.existsSync(ready) || !/Local session/.test(html)) && Date.now() < readyDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(fs.existsSync(ready), "the real bridge must reach catalog before release");
+      const activeDocument = html;
+      fs.writeFileSync(release, "release");
+      const failureDeadline = Date.now() + 1_000;
+      while (!posted.some((message) => message.type === "console-state" && message.error === true)
+          && Date.now() < failureDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      const failure = posted.find((message) => message.type === "console-state" && message.error === true);
+      assert.match(String(failure?.message), /exit 1; 140 stderr bytes/);
+      assert.doesNotMatch(String(failure?.message), /private active diagnostic|!{3}/);
+      visibilityChanged?.();
+      assert.equal(html, activeDocument,
+        "post-failure visibility must not replace the already-live cold composer document");
+      receive({ type: "reload-conversation" });
+      const relaunchDeadline = Date.now() + 1_000;
+      while (fs.readFileSync(launches, "utf8").split("\n").filter(Boolean).length < 4
+          && Date.now() < relaunchDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(fs.readFileSync(launches, "utf8"), "launch\nlaunch\nlaunch\nlaunch\n",
+        "the in-place Reload action must create exactly one fresh client launch");
+    } finally {
+      provider.dispose();
+      for (const dispose of disposals) dispose();
+    }
+  } finally {
+    Module._load = originalLoad;
+    restoreEnvironment();
   }
 });
 
@@ -844,7 +989,6 @@ test("stored conversation continuation is gated only by its typed resume capabil
     `compiled conversation client is missing at ${builtConversationClient}`);
 
   const compiledClient = require_(builtConversationClient) as {
-    conversationHostArgs: (args: readonly string[], workspaceRoot: string) => string[];
     usesConversationTransport: (run: Record<string, unknown>) => boolean;
   };
   const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -860,6 +1004,9 @@ test("stored conversation continuation is gated only by its typed resume capabil
     }],
     ["./paths", { agentsDir: () => workspaceRoot }],
     ["./shared", { resolveCommand: () => ["interact", ["mcp"]] }],
+    ["./conversationBackend", { resolveConversationBackend: async () => ({
+      available: true, command: "interact", args: ["agents", "console"],
+    }), conversationExtensionVersion: () => "0.39.0" }],
     ["./runStatus", { runStatusOf: (status: unknown) => status }],
     ["./org", { companyOf: () => undefined, definitionFile: () => undefined,
       readOrg: () => undefined }],
@@ -868,7 +1015,6 @@ test("stored conversation continuation is gated only by its typed resume capabil
       return { error: "unexpected legacy continuation", stdout: "" };
     } }],
     ["./conversationClient", {
-      conversationHostArgs: compiledClient.conversationHostArgs,
       createConversationClient: () => currentClient,
       usesConversationTransport: compiledClient.usesConversationTransport,
     }],
@@ -884,7 +1030,10 @@ test("stored conversation continuation is gated only by its typed resume capabil
   });
   const vscodeStub = new Proxy({
     commands: { executeCommand: async () => undefined },
-    workspace: { workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }] },
+    workspace: {
+      workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }],
+      getConfiguration: () => ({ get: () => "" }),
+    },
     window: {
       showInformationMessage: () => undefined,
       showErrorMessage: () => undefined,
@@ -983,7 +1132,7 @@ test("stored conversation continuation is gated only by its typed resume capabil
         provider = new ChatViewProvider({ appendLine() {} });
         provider.resolveWebviewView(view);
         await new Promise((resolve) => setImmediate(resolve));
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         provider.show(String(currentRun.run_id));
         await new Promise((resolve) => setImmediate(resolve));
 
@@ -1040,8 +1189,10 @@ test("failed starts restore the exact prompt and a bridge crash never retries it
   ), "utf8");
   assert.match(source, /private rendered: string \| null \| undefined/,
     "a rendered cold composer must be distinct from an absent document so crash handling cannot replace and lose its draft");
-  assert.match(source, /if \(this\.rendered === undefined\) this\.render\(\)/,
-    "only an absent document may trigger the full bridge-failure repaint");
+  assert.match(source, /const repaintColdDocument = !this\.consoleState\.catalog[\s\S]*?if \(repaintColdDocument\) \{[\s\S]*?this\.rendered = undefined;[\s\S]*?this\.render\(\)/,
+    "only a cold bridge failure may invalidate Loading and repaint the actionable recovery state");
+  assert.match(source, /this\.conversationGeneration === generation && this\.conversationClient === client/,
+    "callbacks from a replaced bridge must not overwrite the reloaded client state");
   assert.match(source, /this\.rendered = current\?\.run_id \?\? null/,
     "render must record the already-live cold document with the non-absent sentinel");
 });
@@ -1132,6 +1283,18 @@ window.dispatchEvent(new MessageEvent("message", { data: {
 const ready = !document.getElementById("cancel") && !harnessBox.disabled &&
   harnessStatus.textContent === "waiting" &&
   harnessBox.placeholder.includes("Ask the new conversation");
+document.body.dataset.identity = "preserve-me";
+harnessBox.value = "half-typed draft";
+window.dispatchEvent(new MessageEvent("message", { data: {
+  type: "console-state",
+  message: "The conversation bridge stopped unexpectedly (exit 1; 140 stderr bytes). Reload the window to try again.",
+  error: true,
+  canSend: false,
+  activeRunId: null
+} }));
+const activeFailurePreservesDocument = document.body.dataset.identity === "preserve-me" &&
+  harnessBox.value === "half-typed draft" && harnessBox.disabled &&
+  document.getElementById("console-live-state")?.textContent.includes("exit 1; 140 stderr bytes");
 document.documentElement.style.width = "207px";
 document.body.style.width = "207px";
 const harnessApproval = document.querySelector(".approval");
@@ -1190,7 +1353,7 @@ const stablePatches = Boolean(document.getElementById("streamed-answer")) &&
 const listenerReady = vscode.messages.some((message) => message?.type === "ready");
 document.body.dataset.harness = selectionOnly && selected && pending && tracked && ready && approvalFits &&
   incompleteRejected && atomicSubmission && hostErrorRetainsDecision &&
-  stablePatches && listenerReady
+  stablePatches && listenerReady && activeFailurePreservesDocument
   ? "ok" : "failed";
 </script>`);
   const childHtml = chatDocument({

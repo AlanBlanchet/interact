@@ -98,19 +98,19 @@ body {
   --t-mass: color-mix(in srgb, var(--wp-ink) 50%, var(--wp-bg));
   --t-rug: color-mix(in srgb, var(--wp-fg) 15%, var(--wp-bg));
   --t-rug-hi: color-mix(in srgb, var(--wp-fg) 23%, var(--wp-bg));
-  --t-runner: color-mix(in srgb, var(--wp-h5) 30%, var(--wp-bg));
-  --t-runner-hi: color-mix(in srgb, var(--wp-h5) 44%, var(--wp-bg));
+  --t-runner: color-mix(in srgb, var(--wp-h5) 18%, var(--wp-bg));
+  --t-runner-hi: color-mix(in srgb, var(--wp-h5) 28%, var(--wp-bg));
   --t-screen: color-mix(in srgb, var(--wp-h1) 74%, var(--wp-bg));
   --t-warm: color-mix(in srgb, var(--wp-h3) 62%, var(--wp-bg));
   --t-mat: color-mix(in srgb, var(--wp-h3) 26%, var(--wp-bg));
-  --t-wood: color-mix(in srgb, #8a5a2b 74%, var(--wp-bg));
-  --t-wood-hi: color-mix(in srgb, #b8834a 74%, var(--wp-bg));
+  --t-wood: color-mix(in srgb, #73583f 52%, var(--wp-bg));
+  --t-wood-hi: color-mix(in srgb, #9b7652 58%, var(--wp-bg));
   --t-metal: color-mix(in srgb, var(--wp-fg) 46%, var(--wp-bg));
   --t-lit: var(--wp-h4);
   --t-glass: color-mix(in srgb, #9fd6e0 52%, var(--wp-bg));
   --t-leaf: color-mix(in srgb, var(--wp-h4) 74%, var(--wp-bg));
-  --t-ground: color-mix(in srgb, var(--wp-h4) 26%, var(--wp-bg));
-  --t-ground-hi: color-mix(in srgb, var(--wp-h4) 36%, var(--wp-bg));
+  --t-ground: color-mix(in srgb, var(--wp-h4) 16%, var(--wp-bg));
+  --t-ground-hi: color-mix(in srgb, var(--wp-h4) 22%, var(--wp-bg));
   --t-path: color-mix(in srgb, var(--wp-h3) 30%, var(--wp-bg));
   --t-path-hi: color-mix(in srgb, var(--wp-h3) 40%, var(--wp-bg));
   --t-fabric: color-mix(in srgb, var(--wp-h5) 40%, var(--wp-bg));
@@ -220,8 +220,8 @@ body.vscode-high-contrast-light .wp {
   /* By day the grounds are the brightest thing on screen and every green mixed toward a WHITE
      background goes to pastel — the same bottomless-mix problem the floors had. So the leaf
      tones are mixed toward the INK instead, which is the only surface with anything under it. */
-  --t-ground: color-mix(in srgb, var(--wp-h4) 40%, var(--wp-bg));
-  --t-ground-hi: color-mix(in srgb, var(--wp-h4) 52%, var(--wp-bg));
+  --t-ground: color-mix(in srgb, var(--wp-h4) 25%, var(--wp-bg));
+  --t-ground-hi: color-mix(in srgb, var(--wp-h4) 32%, var(--wp-bg));
   --t-leaf: color-mix(in srgb, var(--wp-h4) 74%, var(--wp-bg));
   --t-leaf-hi: color-mix(in srgb, var(--wp-h4) 92%, var(--wp-bg));
   --t-leaf-lo: color-mix(in srgb, var(--wp-h4) 62%, var(--wp-ink));
@@ -850,7 +850,8 @@ body.vscode-high-contrast-light .wp {
   bottom: 0;
   width: 32px;
   height: 32px;
-  transform: translateX(-50%) rotate(var(--lean, 0deg));
+  --body-scale: 1.3;
+  transform: translateX(-50%) scale(var(--body-scale)) rotate(var(--lean, 0deg));
   transform-origin: 50% 100%;
 }
 /* A HIT AREA BIGGER THAN THE PERSON. Pulled back, a body is ~11px of drawn sprite and desks sit
@@ -896,15 +897,43 @@ body.vscode-high-contrast-light .wp {
    resolve, so the gait has to live at HALF the footfall rate: lean left across one stride, lean
    right across the next, with the dip on each passing beat. ~1.8Hz at full pace, and the lean is
    wide enough to read at a glance. Driven by data-step so it stays keyed to DISTANCE walked. */
-.wp-actor.is-walking[data-step="0"] .wp-body .wp-doll { --wr: -7deg; }
-.wp-actor.is-walking[data-step="1"] .wp-body .wp-doll { --wr: -4deg; --wy: 1px; }
-.wp-actor.is-walking[data-step="2"] .wp-body .wp-doll { --wr: 7deg; }
-.wp-actor.is-walking[data-step="3"] .wp-body .wp-doll { --wr: 4deg; --wy: 1px; }
+.wp-actor.is-walking[data-step="0"] .wp-body .wp-doll { --wr: -10deg; --wx: -1px; }
+.wp-actor.is-walking[data-step="1"] .wp-body .wp-doll { --wr: -5deg; --wy: 2px; }
+.wp-actor.is-walking[data-step="2"] .wp-body .wp-doll { --wr: 10deg; --wx: 1px; }
+.wp-actor.is-walking[data-step="3"] .wp-body .wp-doll { --wr: 5deg; --wy: 2px; }
 
 /* The head of the company stands taller. The cheapest true thing the picture can say about the
    one agent everybody else reports to, and it needs no label to say it. 1.5, not 1.3: at 2x a
    half step keeps the brain's source pixels a whole three device pixels wide. */
-.wp-actor.is-brain .wp-body { transform: translateX(-50%) scale(1.5) rotate(var(--lean, 0deg)); }
+.wp-actor.is-brain .wp-body { --body-scale: 1.65; }
+.wp-body::before {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  opacity: .9;
+}
+/* Relationship lives on the silhouette, not in a seven-pixel label or a pod colour. The root's
+   diamond reads as one independent origin; the child's open corner is a branch. Both survive a
+   pulled-back camera because their edges grow with the body rather than counter-scaling as UI. */
+.wp-actor[data-lineage="root"] .wp-body::before {
+  width: 7px;
+  height: 7px;
+  left: 12px;
+  top: -8px;
+  background: var(--wp-fg);
+  transform: rotate(45deg);
+  box-shadow: 1px 1px 0 var(--wp-ink);
+}
+.wp-actor[data-lineage="child"] .wp-body::before {
+  width: 8px;
+  height: 8px;
+  left: -4px;
+  top: 3px;
+  border-left: 3px solid var(--wp-fg);
+  border-bottom: 3px solid var(--wp-fg);
+  filter: drop-shadow(1px 1px 0 var(--wp-ink));
+}
 .wp-actor.is-brain::before {
   content: "";
   position: absolute;
@@ -1007,6 +1036,12 @@ body.vscode-high-contrast-light .wp {
 .wp-actor:focus-visible .wp-tag { max-width: none; overflow: visible; }
 .wp-tag i { font-style: normal; color: var(--wp-dim); margin-left: 3px; }
 .wp-actor.is-brain .wp-tag { font-weight: 700; border-bottom-color: var(--wp-h3); }
+.wp-actor[data-lineage="root"] .wp-tag::before { content: "\25A0"; margin-right: 3px; }
+.wp-actor[data-lineage="child"] .wp-tag::before { content: "\2514"; margin-right: 3px; }
+.wp-actor[data-lineage="child"] .wp-tag { opacity: 0; }
+.wp-actor[data-lineage="child"]:hover .wp-tag,
+.wp-actor[data-lineage="child"]:focus-visible .wp-tag,
+.wp-actor[data-lineage="child"].is-picked .wp-tag { opacity: 1; }
 
 /* What this one can DO, read off its own definition file.
    Six marks at twelve CSS pixels — which the old whole-building fit then HALVED to six — was
@@ -1174,7 +1209,10 @@ body.vscode-high-contrast-light .wp {
 /* Somebody has come over to say something. Both of them stop and turn to each other — a message
    that lands with nobody reacting is a note flying past a person rather than to one. */
 .wp-actor.is-talking .wp-body { animation: wp-talk 480ms ease-in-out infinite; }
-@keyframes wp-talk { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-1px); } }
+@keyframes wp-talk {
+  0%, 100% { transform: translateX(-50%) scale(var(--body-scale)) translateY(0); }
+  50% { transform: translateX(-50%) scale(var(--body-scale)) translateY(-2px); }
+}
 .wp-actor.has-post .wp-shade { background: color-mix(in srgb, var(--wp-h3) 60%, transparent); }
 
 /* A RUNNING worker the registry says has stopped stops. Scoped to the sprite, never to the whole

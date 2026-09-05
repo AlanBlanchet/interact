@@ -12,19 +12,6 @@ import { renderTranscript } from "./conversationFormat.ts";
 const call = (tool: string, input: string) => ({ kind: "tool", tool, tool_input: input });
 const result = (text: string) => ({ kind: "tool_result", text });
 
-test("a command and what it returned are ONE box", () => {
-  const html = renderTranscript([call("Bash", "ls -la"), result("total 8\ndrwx")] as never[]);
-  const boxes = html.match(/<div class="turn turn-tool[^"]*"/g) ?? [];
-  assert.equal(boxes.length, 1, `a call and its result rendered as ${boxes.length} blocks, not one box`);
-});
-
-test("the box labels what went in and what came out", () => {
-  const html = renderTranscript([call("Bash", "ls -la"), result("total 8")] as never[]);
-  assert.match(html, />IN</, "nothing says which part is the command");
-  assert.match(html, />OUT</, "nothing says which part is the answer");
-  assert.ok(html.indexOf(">IN<") < html.indexOf(">OUT<"), "the command comes before its answer");
-});
-
 test("the command itself is shown verbatim", () => {
   const html = renderTranscript([call("Bash", "grep -rn 'x' src/"), result("ok")] as never[]);
   assert.ok(html.includes("grep -rn &#39;x&#39; src/"), "the command must be readable, and escaped");
@@ -48,7 +35,7 @@ test("two commands in a row do not swallow each other's answers", () => {
     call("Read", "a.ts"), result("contents of a"),
     call("Read", "b.ts"), result("contents of b"),
   ] as never[]);
-  const boxes = html.match(/<div class="turn turn-tool[^"]*"/g) ?? [];
+  const boxes = html.match(/<details class="turn turn-tool[^"]*"/g) ?? [];
   assert.equal(boxes.length, 2);
   assert.ok(html.indexOf("contents of a") < html.indexOf("b.ts"), "answers must stay with their call");
 });

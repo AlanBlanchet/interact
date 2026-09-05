@@ -636,6 +636,7 @@ class _CodexTransport(_ConversationTransport):
                 agent_run_id=run.run_id,
                 tool=item_type,
                 tool_input=self._tool_text(tool_input),
+                tool_id=item_id,
                 text=self._tool_text(output),
                 status="running",
             )),)

@@ -173,3 +173,31 @@ test("the scene hands the engine a grid whose size matches the map it drew", () 
   const solid = /data-solid="([01]+)"/.exec(html)![1];
   assert.equal(solid.length, cols * rows, "the walkability grid is a different size from the map");
 });
+
+test("a production lead and its launched agent expose lineage without relying on pod colour", () => {
+  const lead = person({
+    run_id: "production-root",
+    name: "implementation lead",
+    department: "production",
+    room: "Production & Makers",
+  });
+  const child = person({
+    run_id: "production-child",
+    name: "frontend",
+    parent_run_id: lead.run_id,
+    department: "production",
+    room: "Production & Makers",
+  });
+  const html = renderScene(team([lead, child]));
+  const root = html.slice(html.indexOf('data-run-id="production-root"'));
+  const launched = html.slice(html.indexOf('data-run-id="production-child"'));
+
+  assert.match(root, /data-lineage="root"/,
+    "the main agent needs a typed, non-colour relationship in the shipped markup");
+  assert.match(root, /aria-label="[^"]*main agent/i,
+    "screen-reader users must hear which actor is the main agent");
+  assert.match(launched, /data-lineage="child"/,
+    "a launched agent needs a typed relationship, not only a shared pod colour");
+  assert.match(launched, /aria-label="[^"]*launched by implementation lead/i,
+    "the child actor must name its parent in the accessible description");
+});

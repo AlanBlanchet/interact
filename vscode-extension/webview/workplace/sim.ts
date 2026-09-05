@@ -221,7 +221,11 @@ function bodyFor(el) {
      remembers the old number, so the clamp compares equal to itself and writes nothing — a line
      correctly shifted before the swap comes back unshifted after it and hangs off the panel.
      Anything cached about the DOM is dropped when the DOM changes under it. */
-  if (b.el !== el) { b.sx = 0; b.tx = 0; b.tagW = 0; }
+  if (b.el !== el) {
+    b.sx = 0; b.tx = 0; b.tagW = 0;
+    b.paintTransform = null; b.paintDepth = null; b.edgeKey = null;
+    b.paintLeft = null; b.paintLean = null;
+  }
   b.el = el;
   b.home = el.getAttribute("data-home") || "";
   if (!b.path && Math.abs(b.x - sx) < 0.5 && Math.abs(b.y - sy) < 0.5) settleFace(b);
@@ -393,12 +397,18 @@ function decide(b, t) {
    where, and every modulus over tile coordinates leaves some offset sharing a row. Only a pass
    that can SEE the neighbours gets this right, and 45 bodies is nothing to sort. */
 var TAG_ROWS = 3;
+var DECLUTTER_KEY = "";
 function declutter() {
   var list = [];
   for (var id in BODIES) {
     var b = BODIES[id];
     if (b.el && b.el.isConnected) list.push(b);
   }
+  var key = (VIEW.zoom || 1) + ":" + list.map(function (body) {
+    return body.id + "@" + body.x.toFixed(2) + "," + body.y.toFixed(2);
+  }).join("|");
+  if (key === DECLUTTER_KEY) return;
+  DECLUTTER_KEY = key;
   // Reading order: whoever is higher up the floor picks first, so the choice is stable frame to
   // frame and a plate does not flicker between rows while its owner walks.
   list.sort(function (p, q) { return p.y - q.y || p.x - q.x || (p.id < q.id ? -1 : 1); });
@@ -454,14 +464,7 @@ function place(b, t) {
     lean = dir === "x" ? b.face * 5 : 0;
   } else {
     var status = el.getAttribute("data-status");
-    var p = b.phase;
-    if (status === "running") {
-      var work = Math.sin((t / (BEAT * 0.5)) * Math.PI * 2 + p * 6.283);
-      bob = work > 0.86 ? -1 : 0;
-      lean = Math.sin((t / (BEAT * 2.5)) * Math.PI * 2 + p * 6.283) * 0.8;
-    } else if (status === "done" || status === "foreign") {
-      bob = Math.sin((t / (BEAT * 3)) * Math.PI * 2 + p * 6.283) > 0.7 ? -1 : 0;
-    } else if (status === "error") {
+    if (status === "error") {
       bob = 1;
     }
     /* Noticed: a body watching the hand leans toward it. The mirror flip alone is nearly
@@ -469,15 +472,35 @@ function place(b, t) {
        people visibly TURN with the pointer. */
     if (b.gazing) lean = b.face * 4;
   }
-  el.style.transform = "translate3d(" + px.toFixed(1) + "px," + (py + bob).toFixed(1) + "px,0)";
-  el.style.zIndex = String(100 + Math.round(b.y * 4));
+  var transform = "translate3d(" + px.toFixed(1) + "px," + (py + bob).toFixed(1) + "px,0)";
+  if (b.paintTransform !== transform) {
+    el.style.transform = transform;
+    b.paintTransform = transform;
+  }
+  var depth = String(100 + Math.round(b.y * 4));
+  if (b.paintDepth !== depth) {
+    el.style.zIndex = depth;
+    b.paintDepth = depth;
+  }
   // The nameplate row is assigned by declutter() once per frame across the WHOLE cast —
   // a per-body formula cannot see its neighbours. (Tile parity was tried: every modulus has
   // blind spots at some offset, and a calm floor never strolls out of the collision.)
-  sayEdge(b, py);
-  el.classList.toggle("face-left", b.face < 0);
-  if (lean) el.style.setProperty("--lean", lean.toFixed(2) + "deg");
-  else el.style.removeProperty("--lean");
+  var edgeKey = [py, VIEW.x, VIEW.y, VIEW.zoom, CAM.vw, CAM.vh].join(":");
+  if (b.edgeKey !== edgeKey) {
+    sayEdge(b, py);
+    b.edgeKey = edgeKey;
+  }
+  var left = b.face < 0;
+  if (b.paintLeft !== left) {
+    el.classList.toggle("face-left", left);
+    b.paintLeft = left;
+  }
+  var leanValue = lean ? lean.toFixed(2) + "deg" : "";
+  if (b.paintLean !== leanValue) {
+    if (leanValue) el.style.setProperty("--lean", leanValue);
+    else el.style.removeProperty("--lean");
+    b.paintLean = leanValue;
+  }
 }
 
 /** A BUBBLE MAY NOT FALL OFF THE FRAME.
@@ -600,7 +623,10 @@ function sayEdge(b, py) {
    are the ladder this art is exact on. The one licensed exception is the whole-floor FIT in a
    panel too narrow even for the bottom rung — seeing the company beats a perfect pixel there,
    and the far view is a signed plan, not something anybody reads sprites on. */
-var CAM = { x: 0, y: 0, step: 2, zoom: 1, vw: 0, vh: 0, follow: false, pin: false, ready: false };
+var CAM = {
+  x: 0, y: 0, step: 2, zoom: 1, vw: 0, vh: 0, miniW: 0, miniH: 0,
+  follow: false, pin: false, ready: false
+};
 
 /* ── THE CAMERA MOVES; IT DOES NOT CUT ───────────────────────────────────────────────────────
  *
@@ -722,15 +748,27 @@ function camFit() {
   if (!box.width || !box.height) return;
   CAM.vw = box.width;
   CAM.vh = box.height;
+  /* This is the camera's one layout boundary: bind and resize arrive here before camApply writes
+     the transformed stage. Reading the minimap after that write on every glide frame forced a
+     synchronous layout — up to 23ms with 48 actors — although its size only changes here. */
+  var mini = document.querySelector(".wp-mini");
+  CAM.miniW = mini ? Math.max(0, mini.clientWidth - 4) : 0;
+  CAM.miniH = mini ? Math.max(0, mini.clientHeight - 4) : 0;
   /* The hand's cached view origin moved with the layout; re-derive it on the next aim. */
   HAND.rok = false;
   if (!CAM.ready) {
     CAM.ready = true;
-    /* THE FLOOR OPENS WHOLE. The old default — following the work at a close rung — meant the
-       first thing a reader ever saw was a camera moving on its own, and a click aimed at a
-       sprite panned away between press and release. The survey is the resting truth; following
-       is one key away for whoever wants it. */
-    camFrameWhole();
+    /* Open on the occupied centre at a readable rung. The whole-floor survey remains one explicit
+       button away; making it the default reduced people to coloured punctuation in a side bar. */
+    CAM.step = Math.max(2, camFitStep());
+    CAM.zoom = zoomOf(CAM.step);
+    window.__wp.scale = CAM.zoom;
+    if (!camSnap()) {
+      var built = builtPx();
+      var span = camSpan();
+      CAM.x = built.x + (built.w - span.w) / 2;
+      CAM.y = built.y + (built.h - span.h) / 2;
+    }
   }
   camClamp();
   camApply();
@@ -824,10 +862,11 @@ function camAim() {
 
 function camSnap() {
   var aim = camAim();
-  if (!aim) return;
+  if (!aim) return false;
   CAM.x = aim.x;
   CAM.y = aim.y;
   camClamp();
+  return true;
 }
 
 function camStep(dt) {
@@ -947,11 +986,10 @@ function camApply() {
     if (rule || read) { SHOWN.step = CAM.step; SHOWN.read = word; }
   }
   var eye = document.querySelector(".wp-eye");
-  var mini = document.querySelector(".wp-mini");
-  if (eye && mini) {
+  if (eye && CAM.miniW && CAM.miniH) {
     var span = { w: CAM.vw / z, h: CAM.vh / z };
     var world = worldPx();
-    var mw = mini.clientWidth - 4, mh = mini.clientHeight - 4;
+    var mw = CAM.miniW, mh = CAM.miniH;
     var sx = mw / world.w, sy = mh / world.h;
     /* Clamped INTO the plan. Pulled back far enough that the frame is larger than the world,
        the camera sits at a negative offset and the unclamped box was drawn floating above the
@@ -1314,10 +1352,12 @@ function minimap(t) {
   if (t - DOT_AT < 160) return;
   DOT_AT = t;
   var host = document.querySelector(".wp-dots");
-  var mini = document.querySelector(".wp-mini");
-  if (!host || !mini) return;
-  var sx = (mini.clientWidth - 4) / (W.cols * W.tile);
-  var sy = (mini.clientHeight - 4) / (W.rows * W.tile);
+  /* Minimap geometry is owned by camFit's bind/resize layout boundary. Reading it again here,
+     after the active loop has written actor and camera styles, synchronously flushed the whole
+     scene every 160ms. An absent or zero-sized plan remains inert until a later fit measures it. */
+  if (!host || !CAM.miniW || !CAM.miniH) return;
+  var sx = CAM.miniW / (W.cols * W.tile);
+  var sy = CAM.miniH / (W.rows * W.tile);
   var seen = {};
   for (var id in BODIES) {
     var b = BODIES[id];
@@ -1345,6 +1385,7 @@ function minimap(t) {
 var QUEUE = [];
 var LIVE = 0;
 var MAX_ERRANDS = 3;
+var ENVIRONMENT_KEY = "";
 
 function errand(fromId, toId, text) {
   QUEUE.push({ f: fromId, t: toId, x: text });
@@ -1404,8 +1445,17 @@ function frame(ts) {
     if (b2.mode === "errand" || b2.mode === "delivering") LIVE++;
   }
   pumpErrands(ts);
-  lighting();
-  doors();
+  var environmentKey = HAND.on + ":" + HAND.tx.toFixed(1) + "," + HAND.ty.toFixed(1);
+  for (var id3 in BODIES) {
+    var b3 = BODIES[id3];
+    environmentKey += "|" + id3 + "@" + b3.x.toFixed(1) + "," + b3.y.toFixed(1) +
+      ":" + (b3.el ? b3.el.getAttribute("data-attention") : "");
+  }
+  if (environmentKey !== ENVIRONMENT_KEY) {
+    ENVIRONMENT_KEY = environmentKey;
+    lighting();
+    doors();
+  }
   speechLayout(ts);
   minimap(ts);
   window.__wp.walking = busy;

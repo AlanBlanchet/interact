@@ -224,13 +224,50 @@ test("only the bounded approval title may use emergency one-character wrapping",
   // layout about how narrow the column may be.
   const html = chatDocument({ nonce: "n", name: "g", status: "done", turns: [], run: RUN });
   const withoutApprovalTitleRule = html.replace(
-    /\.approval > b\s*\{[^}]*overflow-wrap:\s*anywhere;?[^}]*\}/,
+    /\.approval > h3\s*\{[^}]*overflow-wrap:\s*anywhere;?[^}]*\}/,
     "",
   );
   assert.equal(/overflow-wrap:\s*anywhere/.test(withoutApprovalTitleRule), false);
   assert.match(html, /\.approval\s*\{[^}]*min-width:\s*0/);
-  assert.match(html, /\.approval > b\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(html, /\.approval > h3\s*\{[^}]*overflow-wrap:\s*anywhere/);
   assert.match(html, /overflow-wrap:\s*break-word/);
+});
+
+test("approvals and structured input are distinct accessible requests without raw method titles", () => {
+  const interaction = (runId: string, kind: string, id: string, title: string, fields: unknown[]) => ({
+    run_id: runId, event: { kind: "interaction",
+      text: "The provider is waiting for your decision.", interaction: {
+      id, kind, title, fields, disclosure: ["bounded detail"],
+    } },
+  });
+  const html = chatDocument({ nonce: "n", name: "g", status: "waiting", turns: [], run: RUN,
+    console: { phase: "ready", approvals: [
+      interaction("run-a", "command_approval", "shared", "item/commandExecution/requestApproval", [
+        { key: "decision", kind: "choice", label: "Allow?", required: true,
+          options: ["accept", "decline"] },
+      ]),
+      interaction("run-b", "user_input", "shared", "item/tool/requestUserInput", [
+        { key: "choice", kind: "choice", label: "Choose", required: true, options: ["A", "B"] },
+        { key: "notes", kind: "text", label: "Explain", required: true, options: [] },
+      ]),
+    ] as never } });
+  assert.match(html, /class="approval[^\"]*approval-command/);
+  assert.match(html, /class="approval[^\"]*structured-input/);
+  assert.match(html, /aria-labelledby="[^"]+"/g);
+  const headings = [...html.matchAll(/<h3 id="([^"]+)"/g)].map((match) => match[1]);
+  const labels = [...html.matchAll(/aria-labelledby="([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(new Set(headings).size, 2, "run-scoped interactions must not duplicate DOM ids");
+  assert.deepEqual(labels, headings, "each request labels itself with its own local heading");
+  assert.match(html, /<fieldset[^>]*>.*<legend/s, "choice groups retain their accessible legend");
+  assert.ok(!html.includes("item/commandExecution/requestApproval"));
+  assert.ok(!html.includes("item/tool/requestUserInput"));
+  assert.ok(!html.includes("The provider is waiting for your decision."),
+    "the card purpose already says this; repeated filler is not content");
+  assert.match(html, />Approve command</);
+  assert.match(html, />Send details</);
+  const approvalRule = /\.approval\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
+  assert.ok(!approvalRule.includes("inputValidation-warning"),
+    "ordinary interaction cards use restrained VS Code surfaces, not a mustard warning slab");
 });
 
 test("the details panel remembers whether it was open", () => {

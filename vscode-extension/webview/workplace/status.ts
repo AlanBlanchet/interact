@@ -164,8 +164,8 @@ const BEHAVIOUR: Record<Attention, Behaviour> = {
   held: { posture: "slump", post: "desk", stamp: false },
   error: { posture: "stand", post: "desk", stamp: true },
   asked: { posture: "stand", post: "desk", stamp: true },
-  finished: { posture: "lounge", post: "rest", stamp: false },
-  "not-ours": { posture: "lounge", post: "rest", stamp: false },
+  finished: { posture: "sit", post: "rest", stamp: false },
+  "not-ours": { posture: "sit", post: "rest", stamp: false },
   /* Declared in the company, never asked: STANDING AT ITS DESK — no placard, no caption, no
      rest fade. Posture ALONE was measured imperceptible beside the loungers, so the distinction
      is position AND posture together, in the same wordless language every other state speaks:

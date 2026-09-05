@@ -1,4 +1,5 @@
-/** Deterministic newline-JSON host used only by conversationClient.test.ts.
+#!/usr/bin/env -S node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+/** Deterministic newline-JSON host used by conversation integration tests.
  *
  * It deliberately has no imports from the product client: crossing a real child-process/stdin
  * boundary is the integration evidence, and sharing its parser would make both sides fail alike.
@@ -6,15 +7,58 @@
 import * as readline from "node:readline";
 import * as fs from "node:fs";
 
-const mode = process.env.INTERACT_FAKE_CONVERSATION_MODE ?? "healthy";
+/** @typedef {"healthy" | "exit_before_initialize" | "controlled_post_catalog_exit" |
+ * "adversarial_error" | "incompatible" | "api_catalog" | "crash" | "malformed" |
+ * "malformed_cleanup" | "crash_on_start" | "same_chunk_terminal" | "cleanup"} Mode */
+const rawMode = process.env.INTERACT_FAKE_CONVERSATION_MODE ?? "healthy";
+/** @type {readonly Mode[]} */
+const MODES = ["healthy", "exit_before_initialize", "controlled_post_catalog_exit",
+  "adversarial_error", "incompatible", "api_catalog", "crash", "malformed", "malformed_cleanup",
+  "crash_on_start", "same_chunk_terminal", "cleanup"];
+if (!MODES.includes(rawMode)) throw new Error("unknown fake conversation mode");
+const mode = rawMode;
 const commandLog = process.env.INTERACT_FAKE_CONVERSATION_LOG;
+const launchLog = process.env.INTERACT_FAKE_LAUNCH_LOG;
+const readyMarker = process.env.INTERACT_FAKE_READY_MARKER;
+const releaseMarker = process.env.INTERACT_FAKE_RELEASE_MARKER;
+
+if (process.argv.includes("--version")) {
+  if (process.env.INTERACT_FAKE_VERSION_MODE === "malformed") {
+    process.stdout.write("interact development\n");
+    process.exit(0);
+  }
+  if (process.env.INTERACT_FAKE_VERSION_MODE === "failure") process.exit(1);
+  if (process.env.INTERACT_FAKE_VERSION_MODE === "timeout") {
+    setTimeout(() => process.exit(0), 4_000);
+  } else {
+    const versionPath = `${process.argv[1]}.version`;
+    let version = "0.39.0";
+    if (fs.existsSync(versionPath)) {
+      const metadata = fs.lstatSync(versionPath);
+      if (!metadata.isFile() || metadata.size < 1 || metadata.size > 32) process.exit(1);
+      const configured = fs.readFileSync(versionPath, "utf8").trim();
+      if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(configured)) process.exit(1);
+      version = configured;
+    }
+    process.stdout.write(`interact ${version}\n`);
+    process.exit(0);
+  }
+}
+if (launchLog) fs.appendFileSync(launchLog, "launch\n");
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
-function write(value: object): void {
+if (mode === "exit_before_initialize") {
+  process.stderr.write("private bridge diagnostic".padEnd(140, "!"));
+  process.exit(1);
+}
+
+/** @param {object} value */
+function write(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function writeAcrossUtf8Boundary(value: object, character: string): void {
+/** @param {object} value @param {string} character */
+function writeAcrossUtf8Boundary(value, character) {
   const line = Buffer.from(`${JSON.stringify(value)}\n`);
   const marker = Buffer.from(character);
   const offset = line.indexOf(marker);
@@ -114,6 +158,16 @@ input.on("line", (line) => {
         }] : [])],
       },
     });
+    if (mode === "controlled_post_catalog_exit") {
+      if (!readyMarker || !releaseMarker) throw new Error("controlled exit markers are required");
+      fs.writeFileSync(readyMarker, "ready");
+      const release = setInterval(() => {
+        if (!fs.existsSync(releaseMarker)) return;
+        clearInterval(release);
+        process.stderr.write("private bridge diagnostic".padEnd(140, "!"));
+        process.exit(1);
+      }, 5);
+    }
     if (mode === "crash") process.nextTick(() => process.exit(17));
     if (mode === "malformed" || mode === "malformed_cleanup") {
       process.nextTick(() => process.stdout.write("not-json\n"));

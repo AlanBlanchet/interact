@@ -68,7 +68,8 @@ export function renderWorkplace(state: TeamState, nonce: string, aside?: Workpla
 ${aside ? `<style>${aside.style}
 /* The company, two ways, in one surface: the room on the left, the roster on the right. The
    roster scrolls on its own so a long team never pushes the room off screen. */
-.wp-split { display: flex; align-items: stretch; height: 100vh; width: 100%; }
+.wp-split { display: flex; align-items: stretch; height: 100vh; width: 100%; position: relative;
+  container-type: inline-size; }
 .wp-split > .wp-room { flex: 1 1 auto; min-width: 0; position: relative; overflow: hidden; }
 /* The scene sizes itself to the VIEWPORT when it owns the page; inside the split it must size to
    its half, or — measured in the stacked layout — the room runs 894px tall in a 495px slot and
@@ -80,6 +81,7 @@ ${aside ? `<style>${aside.style}
   border-left: 1px solid var(--vscode-panel-border, transparent);
   background: var(--vscode-editor-background);
 }
+.wp-roster-toggle { display: none; }
 /* ONE owner per fact on the shared panel: the rail's header states the scope and the counts, so
    the world's HUD sheds its duplicate tallies and project sub-line here — standalone it keeps
    them, being the only header in the room. */
@@ -88,18 +90,27 @@ ${aside ? `<style>${aside.style}
    1280px laptop with both side bars open leaves roughly 630px here, so a 720px threshold stacked
    the split for most real windows and only flipped side-by-side above ~1440px. At 560 the roster
    still gets its 240px floor and the room keeps ~320px, which is a room rather than a slot. */
-@media (max-width: 560px) { .wp-split { flex-direction: column; }
-  .wp-split > .wp-list { flex: 0 0 auto; max-height: 45%; border-left: 0;
-    border-top: 1px solid var(--vscode-panel-border, transparent); } }
+@container (max-width: 560px) {
+  .wp-split > .wp-room { flex: 1 1 100%; }
+  .wp-split .wp-hud { padding-right: 64px; }
+  .wp-split > .wp-list { display: none; position: absolute; z-index: 800; inset: 30px 0 0;
+    border-left: 0; border-top: 1px solid var(--vscode-panel-border, transparent); }
+  .wp-split.roster-open > .wp-list { display: block; }
+  .wp-roster-toggle { display: block; position: absolute; z-index: 900; right: 6px; top: 4px;
+    min-height: 24px; color: var(--vscode-foreground); background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-focusBorder); }
+}
 </style>` : ""}
 </head>
 <body>
 ${aside
-  ? `<div class="wp-split"><div class="wp-room">${renderScene(state)}</div>` +
-    `<div class="wp-list">${aside.body}</div></div>`
+  ? `<div class="wp-split"><button class="wp-roster-toggle" type="button" aria-expanded="false" ` +
+    `aria-controls="wp-roster">Roster</button><div class="wp-room">${renderScene(state)}</div>` +
+    `<div class="wp-list" id="wp-roster">${aside.body}</div></div>`
   : renderScene(state)}
 <script nonce="${n}">${SCRIPT}</script>
 ${aside ? `<script nonce="${n}">${aside.script}</script>` : ""}
+${aside ? `<script nonce="${n}">document.querySelector('.wp-roster-toggle')?.addEventListener('click',function(){var split=this.closest('.wp-split');var open=split.classList.toggle('roster-open');this.setAttribute('aria-expanded',String(open));});</script>` : ""}
 </body>
 </html>`;
 }

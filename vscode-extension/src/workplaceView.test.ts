@@ -2,6 +2,10 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { ZONES } from "./team.ts";
 
@@ -78,4 +82,63 @@ test("the scene can be rendered on its own, for pushing into a live document", (
 
   if (html === null) return; // no bundle in this checkout; the panel falls back to rebuilding
   assert.ok(!/<html|<body|<script/i.test(html), "a fragment, not a document");
+});
+
+test("a narrow team panel keeps the world primary and makes the roster optional", () => {
+  const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
+  const html = renderWorkplace({ workers: [], links: [], zones: [] }, "n1", undefined, {
+    style: "", body: "<p>Roster</p>", script: "",
+  });
+  assert.match(html, /class="wp-roster-toggle"[^>]*aria-expanded="false"/);
+  assert.match(html, /@container \(max-width: 560px\)[\s\S]*\.wp-list \{ display: none/);
+  assert.match(html, /roster-open[\s\S]*\.wp-list \{ display: block/);
+});
+
+test("rendered narrow workplaces leave usable map space and contain their roster overlay", () => {
+  const chrome = process.env.CHROME_BIN ?? "/usr/bin/google-chrome";
+  assert.ok(fs.existsSync(chrome));
+  const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
+  for (const width of [207, 299, 458]) {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "out", "tests",
+      `workplace-${width}-contract`);
+    const page = path.join(root, "page.html");
+    const profile = path.join(root, `profile-${process.pid}-${Date.now()}`);
+    fs.mkdirSync(root, { recursive: true });
+    const html = renderWorkplace({ workers: STATE.workers, links: [], zones: [] }, "n1", undefined, {
+      style: "", body: "<p>Roster</p>", script: "",
+    }).replace("</body>", `<script nonce="n1">
+document.documentElement.style.width="${width}px"; document.body.style.width="${width}px";
+document.querySelector('.wp-split').style.width="${width}px";
+const room=document.querySelector('.wp-room'); const roster=document.querySelector('.wp-list');
+const toggle=document.querySelector('.wp-roster-toggle');
+const usable=room?.getBoundingClientRect().width>0;
+const noOverflow=document.body.scrollWidth<=${width};
+const contained=!roster || roster.getBoundingClientRect().right<=${width};
+const controlled=toggle && getComputedStyle(toggle).display!=="none" &&
+  toggle.getAttribute('aria-controls')==='wp-roster';
+const toggleRect=toggle?.getBoundingClientRect();
+const hudItems=[...document.querySelectorAll('.wp-hud > *')]
+  .filter((item)=>getComputedStyle(item).display!=="none");
+const overlapsHud=!!toggleRect && hudItems.some((item)=>{
+  const rect=item.getBoundingClientRect();
+  return toggleRect.left<rect.right && toggleRect.right>rect.left &&
+    toggleRect.top<rect.bottom && toggleRect.bottom>rect.top;
+});
+toggle?.click();
+const openRect=roster?.getBoundingClientRect();
+const openContained=!!openRect && openRect.width>0 && openRect.left>=0 &&
+  openRect.right<=${width} && openRect.top>=toggleRect.bottom;
+const expanded=toggle?.getAttribute('aria-expanded')==='true';
+const openNoOverflow=document.body.scrollWidth<=${width};
+document.body.dataset.narrowContract=usable && noOverflow && (contained || controlled) && !overlapsHud && openContained && expanded && openNoOverflow ?
+  'ok-map-'+room.getBoundingClientRect().width+'-roster-'+openRect.width+'-overflow-'+document.body.scrollWidth :
+  'failed-map-'+(room?.getBoundingClientRect().width ?? -1)+'-roster-'+(openRect?.width ?? -1)+'-overflow-'+document.documentElement.scrollWidth+'-hud-overlap-'+overlapsHud+'-expanded-'+expanded;
+</script></body>`);
+    fs.writeFileSync(page, html);
+    const rendered = execFileSync(chrome, ["--headless=new", "--no-sandbox", "--disable-gpu",
+      "--window-size=800,800", `--user-data-dir=${profile}`, "--dump-dom", `file://${page}`],
+    { encoding: "utf8" });
+    assert.match(rendered, new RegExp(`data-narrow-contract="ok-map-${width}-roster-${width}-overflow-${width}`),
+      `${width}px workplace must keep its map, separate its controls, and contain the open roster`);
+  }
 });

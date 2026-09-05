@@ -602,7 +602,15 @@ function hueOf(accent: string): number {
   return m ? Number(m[1]) : 1;
 }
 
-function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, rare: Map<string, number>): string {
+function actor(
+  w: Cast,
+  seat: Seat,
+  home: Room,
+  accent: string,
+  brain: boolean,
+  rare: Map<string, number>,
+  parent: Cast | undefined,
+): string {
   const stalled = isHeld(w) ? 1 : 0;
   const how = behaviourOf(attentionOf(w));
   /* A state cannot conjure furniture. Where the place has nothing to sit on — the path outside
@@ -620,10 +628,14 @@ function actor(w: Cast, seat: Seat, home: Room, accent: string, brain: boolean, 
      a new state. Standing at the station IS the sentence. */
   const resting = how.post === "rest" || attentionOf(w) === "ready";
   const say = !resting && w.activity ? clip(w.activity, 64) : "";
+  const lineage = parent ? "child" : "root";
+  const relation = parent ? `launched by ${parent.name}` : "main agent";
   const label =
-    `${w.name} — ${w.status}, ${LABELS.get(w.zone) ?? w.zone}` + (w.activity ? `: ${w.activity}` : "");
+    `${w.name}, ${relation} — ${w.status}, ${LABELS.get(w.zone) ?? w.zone}` +
+    (w.activity ? `: ${w.activity}` : "");
   return (
     `<div class="wp-actor${brain ? " is-brain" : ""}" data-run-id="${esc(w.run_id)}" ` +
+    `data-lineage="${lineage}" ` +
     `data-status="${esc(w.status)}" data-zone="${esc(w.zone)}" data-stalled="${stalled}" ` +
     // The state in the RAIL's words, so the room's light and the rail's stamp are one taxonomy
     // read by two renderers rather than two tables that happen to agree today.
@@ -788,6 +800,7 @@ export function renderActors(state: TeamState): string {
   const brain = brainOf(cast);
   const seats = seating(world, cast, brain);
   const rare = rarity(cast);
+  const byId = new Map(cast.map((worker) => [worker.run_id, worker]));
   const list: Post[] = posts(state);
   const mailbag = list.map((p) => ({
     f: p.from,
@@ -808,6 +821,7 @@ export function renderActors(state: TeamState): string {
           accentOf(w),
           w.run_id === brain,
           rare,
+          w.parent_run_id ? byId.get(w.parent_run_id) : undefined,
         ),
       )
       .join("") +

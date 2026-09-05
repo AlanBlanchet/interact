@@ -22,8 +22,9 @@ test("a file edit is a card with a preview, never the change dumped inline", () 
      is what a preview is), but the raw argument soup and the full payload stay out. */
   const html = renderTranscript([edit("/home/alan/dev/interact/src/interact/models.py")] as never[]);
   assert.ok(html.includes("models.py"), "the card must name the file");
-  assert.ok(!html.includes("old_string"), "the tool's raw argument soup does not belong here");
-  assert.ok(!html.includes("replace_all"), "none of it");
+  const summary = html.slice(0, html.indexOf("</summary>"));
+  assert.ok(!summary.includes("old_string"), "raw arguments do not belong in the resting row");
+  assert.ok(!summary.includes("replace_all"), "none of them compete with the gist");
 });
 
 test("clicking the file card opens the file", () => {
@@ -48,7 +49,8 @@ test("an edit and its result stay ONE card, result folded in quietly", () => {
   ] as never[]);
   const cards = html.match(/class="turn turn-tool/g) ?? [];
   assert.equal(cards.length, 1, "a card and its acknowledgement are one unit");
-  assert.ok(!html.includes("cat -n"), "a mechanical acknowledgement is noise, not evidence");
+  assert.match(html, /<template class="io-full" data-side="out">[\s\S]*cat -n/,
+    "the stored result remains available in the disclosure's full read-only output");
 });
 
 test("thinking is folded to a whisper, not a wall", () => {
@@ -75,6 +77,7 @@ test("a bash command keeps its IN and OUT box", () => {
   ] as never[]);
   assert.match(html, />IN</);
   assert.match(html, />OUT</);
+  assert.ok(html.indexOf(">IN<") < html.indexOf(">OUT<"), "the command comes before its answer");
 });
 
 test("file paths from outside are escaped like everything else", () => {
@@ -103,12 +106,51 @@ test("a tool call rests as ONE row; the text lives behind it", () => {
   assert.match(html, /class="tool-row"/);
   assert.match(html, /class="tool-gist">make</, "the command IS the row's identity");
   assert.match(html, /✓ 30 lines/, "the verdict and the size, at a glance");
-  assert.match(html, /<div class="tool-peek" hidden>/, "nothing of the body renders at rest");
+  assert.match(html, /<details class="turn turn-tool"/, "the browser owns one disclosure");
+  assert.ok(!/<details class="turn turn-tool"[^>]*open/.test(html), "collapsed at rest");
   const visible = html.replace(/<template[\s\S]*?<\/template>/g, "");
   assert.ok(visible.includes("line 5") && !visible.includes("line 7"),
     "the VISIBLE peek holds a head, never the wall — the template may hold it all");
   assert.match(html, /\+24 more lines in the tab/);
   assert.match(html, /data-io="out" data-toolid="toolu_7"/, "the whole thing is one click away");
+});
+
+test("tool ids pair one semantic disclosure across interleaved evidence", () => {
+  const hostile = `tool-\" onfocus=\"alert(1)`;
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+  const html = renderTranscript([
+    { kind: "tool", tool: "Bash", tool_input: "command='capture'", tool_id: hostile },
+    { kind: "tool", tool: "Bash", tool_input: "command='long'", tool_id: "long" },
+    { kind: "tool_result", text: long, tool_id: "long" },
+    { kind: "tool", tool: "Read", tool_input: "file_path='/x/report.md'", tool_id: "file" },
+    { kind: "tool_result", text: "file body", tool_id: "file" },
+    { kind: "tool_result", text: "Saved capture to /x/panel.png", tool_id: hostile },
+  ] as never[]);
+  assert.equal((html.match(/<details class="turn turn-tool/g) ?? []).length, 3,
+    "each call is exactly one native disclosure, including file and screenshot evidence");
+  assert.equal((html.match(/data-tool-id=/g) ?? []).length, 3,
+    "the stable identity belongs once on each disclosure, not on duplicated halves");
+  assert.ok(!html.includes('onfocus="alert(1)'), "hostile ids remain inert attributes");
+  const capture = html.slice(html.indexOf("capture"), html.indexOf("long"));
+  assert.ok(capture.includes("panel.png"), "an out-of-order result follows its id, not adjacency");
+  assert.match(html, /\+34 more lines/, "long output remains bounded inside the same disclosure");
+});
+
+test("expanded tools expose bounded IN and OUT before inert full IO at sidebar width", () => {
+  const html = renderTranscript([
+    { kind: "tool", tool: "Bash", tool_input: "command='brief'", tool_id: "t" },
+    { kind: "tool_result", text: Array.from({ length: 20 }, (_, i) => `out ${i}`).join("\n"), tool_id: "t" },
+  ] as never[]);
+  const summaryEnd = html.indexOf("</summary>");
+  const firstBody = html.indexOf('<pre class="io-body">');
+  const fullPayload = html.indexOf('<template class="io-full"');
+  assert.ok(summaryEnd < firstBody && firstBody < fullPayload,
+    "expanded bounded content precedes inert full-payload storage");
+  assert.ok(!html.slice(0, summaryEnd).includes("out 0"), "the resting summary stays concise");
+  assert.ok(!/<details class="turn turn-tool"[^>]*open/.test(html), "collapsed hides the body");
+  const document = chatDocument({ nonce: "n", turns: [], name: "agent", status: "running" });
+  assert.match(document, /\.turn-tool \.io\s*\{[^}]*grid-template-columns:\s*auto minmax\(0, 1fr\) auto/s,
+    "IN/OUT body receives the remaining width instead of being squeezed out at 299px");
 });
 
 test("a failed command wears its cross on the resting row", () => {
@@ -138,11 +180,6 @@ test("a harness injection folds as machinery, never as something HE said", () =>
     assert.ok(html.includes("harness"), `${kind}: machinery must be named as machinery`);
     assert.ok(!/>YOU</i.test(html), `${kind}: and never attributed to him`);
   }
-  const html = renderTranscript([
-    { kind: "message", from_run: "operator", text: "Stop hook feedback: [Review the turn...]" },
-  ] as never[]);
-  assert.ok(html.includes("harness"), "machinery must be named as machinery");
-  assert.ok(!/>YOU</i.test(html), "and never attributed to him");
 });
 
 test("the empty panel is a door, not a caption about a missing list", () => {

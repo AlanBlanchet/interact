@@ -376,25 +376,6 @@ function diffPreview(oldText: string | null, newText: string | null, cap = 3): s
   return body ? `<div class="diff">${body}</div>` : "";
 }
 
-function fileCard(call: Turn, path: string): string {
-  const verb = FILE_TOOLS[call.tool ?? ""] ?? "touched";
-  const base = escapeHtml(path.split("/").pop() ?? path);
-  const dir = escapeHtml(path.slice(0, path.length - (path.split("/").pop() ?? "").length));
-  const input = call.tool_input ?? "";
-  // Edits preview old→new; a write previews its opening lines as additions; a read changes
-  // nothing and previews nothing.
-  const preview = call.tool === "Read" ? "" : diffPreview(
-    argOf(input, "old_string"),
-    argOf(input, "new_string") ?? argOf(input, "content"),
-  );
-  return `<div class="turn turn-tool turn-file"><button class="file-open" data-open="${escapeHtml(path)}"` +
-    ` title="Open ${escapeHtml(path)}">` +
-    `<span class="file-verb">${escapeHtml(verb)}</span>` +
-    `<span class="file-name">${base}</span>` +
-    `<span class="file-dir">${dir}</span>` +
-    `</button>${preview}</div>`;
-}
-
 /** The arguments' one telling fact — the command, the path, the pattern — for the resting row.
  *  Python already leads the summary with it; this pulls the value out of the quotes. */
 function gistOf(input: string): string {
@@ -414,7 +395,7 @@ function gistOf(input: string): string {
  *  WHOLE thing in its own read-only tab — exactly the Claude Code gesture — served from the raw
  *  stream by the vendor's tool id, so nothing is clipped there.
  */
-function toolBox(call: Turn, answer: Turn | undefined): string {
+function toolBox(call: Turn, answer: Turn | undefined, path: string | null = null): string {
   const name = escapeHtml(call.tool || "tool");
   const input = (call.tool_input ?? "").trim();
   const out = (answer?.text ?? "").trim();
@@ -451,17 +432,30 @@ function toolBox(call: Turn, answer: Turn | undefined): string {
   const shots = imagePathsOf(out).map((p) =>
     `<button class="file-open io-shot" data-open="${escapeHtml(p)}" title="Open ${escapeHtml(p)}">` +
     `<span class="file-verb">captured</span><span class="file-name">${escapeHtml(p.split("/").pop() ?? p)}</span></button>`).join("");
-  return `<div class="turn turn-tool">` +
-    `<button class="tool-row" aria-expanded="false">` +
+  const file = path ? (() => {
+    const leaf = path.split("/").pop() ?? path;
+    const directory = path.slice(0, path.length - leaf.length);
+    const verb = FILE_TOOLS[call.tool ?? ""] ?? "touched";
+    return `<span class="file-open" data-open="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">` +
+      `<span class="file-verb">${escapeHtml(verb)}</span>` +
+      `<span class="file-name">${escapeHtml(leaf)}</span>` +
+      `<span class="file-dir">${escapeHtml(directory)}</span></span>`;
+  })() : "";
+  const preview = path && call.tool !== "Read" ? diffPreview(
+    argOf(input, "old_string"), argOf(input, "new_string") ?? argOf(input, "content"),
+  ) : "";
+  return `<details class="turn turn-tool${path ? " turn-file" : ""}"` +
+    ` data-tool-id="${escapeHtml(call.tool_id ?? "")}">` +
+    `<summary class="tool-row">` +
     `<span class="tool-glyph">⌕</span><span class="tool-name">${name}</span>` +
-    `<span class="tool-gist">${escapeHtml(gistOf(input))}</span>${note}</button>` +
-    `<div class="tool-peek" hidden>` +
+    `<span class="tool-gist">${escapeHtml(gistOf(input))}</span>${note}${file}</summary>` +
+    `<div class="tool-peek">${preview}` +
     (input ? half("IN", input, "in", 4) : "") +
     // No OUT until there IS one: a command still running has no answer, and drawing an empty one
     // would claim it finished.
     (out ? half("OUT", out, "out", 6) : "") +
     shots +
-    `</div></div>`;
+    `</div></details>`;
 }
 
 export function renderTurn(turn: Turn): string {
@@ -527,19 +521,38 @@ export function renderTranscript(turns: Turn[]): string {
   // A tool result belongs to the call above it, so they are rendered TOGETHER and the result is
   // not emitted again on its own. An orphan result (a truncated transcript) still renders, because
   // dropping output nobody can explain is worse than showing it unattached.
+  const answers = new Map<number, Turn>();
+  const consumed = new Set<number>();
+  const results = new Map<string, number[]>();
+  turns.forEach((turn, index) => {
+    if (turn.kind === "tool_result" && turn.tool_id) {
+      const queue = results.get(turn.tool_id) ?? [];
+      queue.push(index);
+      results.set(turn.tool_id, queue);
+    }
+  });
+  turns.forEach((turn, index) => {
+    if (turn.kind !== "tool") return;
+    let answerIndex: number | undefined;
+    if (turn.tool_id) answerIndex = results.get(turn.tool_id)?.shift();
+    else if (turns[index + 1]?.kind === "tool_result" && !turns[index + 1].tool_id) {
+      answerIndex = index + 1;
+    }
+    if (answerIndex !== undefined) {
+      answers.set(index, turns[answerIndex]);
+      consumed.add(answerIndex);
+    }
+  });
   const parts: string[] = [];
   for (let i = 0; i < turns.length; i++) {
     const turn = turns[i];
     if (turn.kind === "tool") {
-      const next = turns[i + 1];
-      const answer = next && next.kind === "tool_result" ? next : undefined;
-      if (answer) i++;
+      const answer = answers.get(i);
       const path = turn.tool && FILE_TOOLS[turn.tool] ? filePathOf(turn.tool_input ?? "") : null;
-      // A file tool's card swallows its acknowledgement: "The file has been updated" is not
-      // information, and the change itself lives behind the click, in the editor.
-      parts.push(path ? fileCard(turn, path) : toolBox(turn, answer));
+      parts.push(toolBox(turn, answer, path));
       continue;
     }
+    if (consumed.has(i)) continue;
     parts.push(renderTurn(turn));
   }
   const html = parts.filter(Boolean).join("\n");
@@ -922,7 +935,8 @@ function consolePicker(state: ConversationConsoleState): string {
     return '<section class="console-state loading" role="status">Loading available routes…</section>';
   }
   if (state.error && !state.catalog) {
-    return `<section class="console-state error" role="alert">${escapeHtml(state.error)}</section>`;
+    return `<section class="console-state error" role="alert"><span>${escapeHtml(state.error)}</span>` +
+      '<button type="button" data-action="reload-conversation">Reload bridge</button></section>';
   }
   if ((state.phase === "starting" || state.phase === "pending") && !state.catalog) {
     const message = state.phase === "starting" ? "Starting the conversation…" : "The agent is answering…";
@@ -975,6 +989,14 @@ function approvalCards(approvals: ConversationConsoleState["approvals"]): string
   const cards = approvals.flatMap(({ run_id, event }) => {
     const interaction = event.interaction;
     if (!interaction) return [];
+    const structured = interaction.kind === "user_input";
+    const heading = structured ? "Input requested" : interaction.kind === "file_change_approval"
+      ? "File change approval" : interaction.kind === "permission_approval"
+        ? "Permission approval" : "Command approval";
+    const action = structured ? "Send details" : interaction.kind === "file_change_approval"
+      ? "Approve file change" : interaction.kind === "permission_approval"
+        ? "Approve permissions" : "Approve command";
+    const headingId = `interaction-${run_id.length}-${run_id}-${interaction.id}`;
     let unanswerable = false;
     const fields = interaction.fields.map((field, index) => {
       const required = field.required !== false;
@@ -1001,15 +1023,17 @@ function approvalCards(approvals: ConversationConsoleState["approvals"]): string
       ? `<ul class="interaction-disclosure">${interaction.disclosure?.map((item) =>
         `<li><code>${escapeHtml(item)}</code></li>`).join("")}</ul>`
       : "";
-    return [`<article class="approval" data-run="${escapeHtml(run_id)}">
-      <b>${escapeHtml(interaction.title)}</b>
-      <p>${escapeHtml(event.text || "The provider is waiting for your decision.")}</p>
+    return [`<article class="approval ${structured ? "structured-input" : "approval-command"}"` +
+      ` data-run="${escapeHtml(run_id)}" aria-labelledby="${escapeHtml(headingId)}">
+      <h3 id="${escapeHtml(headingId)}">${heading}</h3>
+      ${event.text && event.text !== "The provider is waiting for your decision."
+        ? `<p>${escapeHtml(event.text)}</p>` : ""}
       ${disclosure}
       <form class="interaction-form" data-interaction="${escapeHtml(interaction.id)}"
             data-run="${escapeHtml(run_id)}">
         <div class="interaction-fields">${fields}</div>
         <p class="interaction-error" role="alert" hidden>Complete every required field.</p>
-        <button class="interaction-submit" type="submit"${unanswerable ? " disabled" : ""}>Submit response</button>
+        <button class="interaction-submit" type="submit"${unanswerable ? " disabled" : ""}>${action}</button>
       </form>
     </article>`];
   });
@@ -1235,11 +1259,6 @@ const vscode = acquireVsCodeApi();
                              text: tpl && tpl.content.textContent ? tpl.content.textContent : "" });
         return;
       }
-      const row = t.closest(".tool-row");
-      if (row) {
-        const peek = row.parentElement.querySelector(".tool-peek");
-        if (peek) { peek.hidden = !peek.hidden; row.setAttribute("aria-expanded", String(!peek.hidden)); }
-      }
     });
     // One rule for every card: a thing with data-open opens where it points. Delegated, because
     // the transcript is re-rendered live and per-element bindings would go stale.
@@ -1445,6 +1464,13 @@ if (form) {
     if (notice && typeof msg.message === "string") {
       notice.hidden = !msg.message;
       notice.textContent = msg.message || "";
+      if (msg.error && msg.message) {
+        const reload = document.createElement("button");
+        reload.type = "button";
+        reload.dataset.action = "reload-conversation";
+        reload.textContent = "Reload bridge";
+        notice.append(reload);
+      }
       notice.className = "console-state " + (msg.error ? "error" : "pending");
       notice.setAttribute("role", msg.error ? "alert" : "status");
     }
@@ -1541,9 +1567,11 @@ if (form) {
 // A webview cannot open a workspace file itself, so a file button asks the extension to.
 // Delegated from the document: the transcript is re-rendered on every registry change, and
 // per-node listeners attached at load are lost the moment that happens.
-document.addEventListener("click", (event) => {
-  const target = event.target;
-  const button = target && target.closest ? target.closest(".file") : null;
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      const reload = target && target.closest ? target.closest('[data-action="reload-conversation"]') : null;
+      if (reload) { vscode.postMessage({ type: "reload-conversation" }); return; }
+      const button = target && target.closest ? target.closest(".file") : null;
   if (!button) return;
   event.preventDefault();
   vscode.postMessage({ type: "open", path: button.getAttribute("data-path") });
@@ -1761,11 +1789,11 @@ const STYLE = `
   .console-state.empty b { color: var(--wp-fg); }
   .approvals { display: grid; gap: .55em; margin: .5em 0 .8em; }
   .approval {
-    min-width: 0; padding: .65em;
-    border: 1px solid var(--vscode-inputValidation-warningBorder, var(--wp-line));
-    border-radius: var(--wp-r); background: var(--vscode-inputValidation-warningBackground, var(--wp-wall));
+    min-width: 0; padding: .5em .55em;
+    border: 1px solid var(--wp-line);
+    border-radius: var(--wp-r); background: var(--vscode-editorWidget-background, var(--wp-wall));
   }
-  .approval > b { display: block; max-width: 100%; overflow-wrap: anywhere; }
+  .approval > h3 { display: block; max-width: 100%; margin: 0; font-size: 1em; overflow-wrap: anywhere; }
   .approval p { margin: .35em 0 .55em; overflow-wrap: break-word; }
   .interaction-disclosure { margin: .35em 0 .55em; padding-left: 1.25em; overflow-wrap: break-word; }
   .interaction-fields { display: grid; gap: .55em; }
@@ -1849,9 +1877,12 @@ const STYLE = `
   .tool-bad { color: var(--vscode-charts-red, #f48771); font-weight: 700; }
   .tool-live { color: var(--wp-dim); animation: blink 1.2s steps(1) infinite; }
   .tool-peek { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
-  .turn-tool .io { display: flex; align-items: flex-start; gap: .55em; padding: .55em .7em .6em; }
+  .turn-tool .io {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start; gap: .45em; padding: .5em .6em;
+  }
   .turn-tool .io + .io { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
-  .turn-tool .io-body { line-height: 1.5; }
+  .turn-tool .io-body { min-width: 0; max-height: 14em; overflow: auto; line-height: 1.45; }
   /* The whole thing, one click away — the Claude Code gesture. */
   .io-open {
     font: inherit; flex: none; cursor: pointer; line-height: 1;

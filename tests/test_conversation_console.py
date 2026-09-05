@@ -1129,6 +1129,10 @@ async def test_collaboration_is_discrete_idempotent_and_enriched_out_of_order(
                    for event in transcript)
         assert any(event["kind"] == "tool" and event["tool"] == "commandExecution"
                    for event in transcript)
+        tool_pair = [event for event in transcript
+                     if event["kind"] in ("tool", "tool_result")]
+        assert [event["kind"] for event in tool_pair] == ["tool", "tool_result"]
+        assert tool_pair[0]["tool_id"] == tool_pair[1]["tool_id"] == "child-command"
         root_transcript = [
             json.loads(line)
             for line in (root / "home" / ".interact" / "out" / "agents" / "thread-root.jsonl")
@@ -1142,6 +1146,38 @@ async def test_collaboration_is_discrete_idempotent_and_enriched_out_of_order(
                    for event in root_transcript)
     finally:
         await _stop_console(process)
+
+
+@pytest.mark.parametrize(
+    ("started_id", "completed_id"),
+    [("tool-a", "tool-b"), ("tool-a", 7)],
+    ids=["uncorrelated", "malformed"],
+)
+def test_codex_tool_identity_never_correlates_different_or_malformed_items(
+    tmp_path: Path, started_id: str, completed_id: object,
+) -> None:
+    transport = _CodexTransport(provider=CodexProvider(), workspace_root=tmp_path)
+    run = reg.AgentRun(run_id="run", provider="codex", name="run", cwd=str(tmp_path))
+    started = transport._normalize_item(run, "thread", {
+        "turnId": "turn", "startedAtMs": 1,
+        "item": {"type": "commandExecution", "id": started_id, "command": "first"},
+    }, "turn", "item/started")[0].event
+    if not isinstance(completed_id, str):
+        with pytest.raises(TypeError, match="malformed"):
+            transport._normalize_item(run, "thread", {
+                "turnId": "turn", "completedAtMs": 2,
+                "item": {"type": "commandExecution", "id": completed_id,
+                         "aggregatedOutput": "result"},
+            }, "turn", "item/completed")
+        return
+    completed = transport._normalize_item(run, "thread", {
+        "turnId": "turn", "completedAtMs": 2,
+        "item": {"type": "commandExecution", "id": completed_id,
+                 "aggregatedOutput": "result"},
+    }, "turn", "item/completed")[0].event
+    assert started.tool_id == started_id
+    assert completed.tool_id == completed_id
+    assert started.tool_id != completed.tool_id
 
 
 async def test_provider_run_identity_collisions_never_overwrite_existing_records(

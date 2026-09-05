@@ -9,7 +9,6 @@ import { test } from "node:test";
 const require_ = createRequire(import.meta.url);
 const {
   CONVERSATION_SHUTDOWN_GRACE_MS,
-  conversationHostArgs,
   createConversationClient,
   usesConversationTransport,
 } = require_("../out/conversationClient.js");
@@ -27,13 +26,9 @@ function fake(mode = "healthy") {
   };
 }
 
-test("the host command is workspace-bound and only conversation runs use its continuation", () => {
+test("only conversation runs use the stateful transport", () => {
   // The extension has two delivery contracts: historical process runs retain the established CLI
   // send path, while provider conversations stay on their one typed host process.
-  assert.deepEqual(
-    conversationHostArgs(["run", "interact", "mcp"], "/workspace/project"),
-    ["run", "interact", "agents", "console", "--workspace-root", "/workspace/project"],
-  );
   for (const [kind, expected] of [
     [undefined, false],
     ["process", false],
@@ -196,7 +191,7 @@ test("incompatible, crashed and malformed hosts fail visibly without reconnectin
     });
     try {
       if (mode === "incompatible") {
-        await assert.rejects(client.catalog(), /does not support/i);
+        await assert.rejects(client.catalog(), /incompatible/i);
       } else if (mode === "crash_on_start") {
         await client.catalog();
         await assert.rejects(client.start({
@@ -223,4 +218,39 @@ test("incompatible, crashed and malformed hosts fail visibly without reconnectin
       client.dispose();
     }
   }
+});
+
+test("pre-initialize launch failures are distinct, safe, terminal, and explicitly reloadable", async (context) => {
+  const cases = [
+    {
+      name: "exit 1 with private stderr",
+      spec: fake("exit_before_initialize"),
+      expected: /exited before initialization \(exit 1; 140 stderr bytes\).*reload/i,
+    },
+    {
+      name: "missing executable",
+      spec: { command: path.join(path.dirname(fakeHost), "absent-interact"), args: [], cwd: path.dirname(fakeHost) },
+      expected: /not installed.*reload/i,
+    },
+    { name: "incompatible methods", spec: fake("incompatible"), expected: /incompatible.*reload/i },
+  ] as const;
+  for (const scenario of cases) await context.test(scenario.name, async () => {
+    const visible: string[] = [];
+    const states: string[] = [];
+    const client = createConversationClient(scenario.spec, {
+      onError: (message) => visible.push(message), onState: (state) => states.push(state),
+    });
+    try {
+      await assert.rejects(client.catalog(), scenario.expected);
+      assert.equal(client.state(), "crashed");
+      await assert.rejects(client.catalog(), scenario.expected, "a terminal client must not retry");
+      assert.equal(states.filter((state) => state === "connecting").length, 1);
+      assert.equal(visible.length, 1);
+      assert.doesNotMatch(visible[0], /private bridge diagnostic|!{3}/,
+        "stderr content must never cross into the UI");
+    } finally {
+      client.dispose();
+      assert.equal(client.state(), "closed", "dispose must leave the failed bridge terminal");
+    }
+  });
 });

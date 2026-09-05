@@ -1924,6 +1924,41 @@ def test_nonapproved_review_is_a_valid_terminal_and_only_authorizes_red(
     assert ledger.read_bytes() == ledger_before
 
 
+@pytest.mark.parametrize(
+    ("case", "expected_returncode"),
+    [
+        ("nonzero-red", 0),
+        ("zero-exit", 1),
+        ("malformed", 1),
+        ("candidate-context", 1),
+        ("unrelated-transition", 1),
+    ],
+)
+def test_approved_review_accepts_only_a_bound_typed_nonzero_red(
+    git_repo: Path, case: str, expected_returncode: int
+) -> None:
+    events = valid_events(git_repo, "REVIEWED")
+    ledger = write_ledger(git_repo, events)
+    proposed = red_event()
+    if case == "zero-exit":
+        proposed["evidence"]["exit_code"] = 0
+    elif case == "malformed":
+        proposed["evidence"].pop("failing_assertion")
+    elif case == "candidate-context":
+        proposed["iteration_id"] = "different-candidate"
+    elif case == "unrelated-transition":
+        proposed = implemented_event()
+    proposed_path = git_repo / "out" / "tests" / f"approved-review-{case}.json"
+    proposed_path.parent.mkdir(parents=True)
+    proposed_path.write_text(json.dumps(proposed, separators=(",", ":")))
+
+    result = run_gate(
+        git_repo, "validate-append", "--ledger", str(ledger), "--event", str(proposed_path)
+    )
+
+    assert result.returncode == expected_returncode, result.stderr
+
+
 @pytest.mark.parametrize("follower", ["RED", "VERIFIED"])
 def test_nonapproved_review_only_authorizes_immediate_red(
     git_repo: Path, follower: str
@@ -2713,7 +2748,7 @@ def test_auto_discovery_rejects_symlinked_iterations_directory(git_repo: Path):
     )
     (memory / "iterations").symlink_to(target, target_is_directory=True)
 
-    result = run_gate(git_repo, "verify-ledger")
+    result = run_gate(git_repo, "hook")
 
     assert result.returncode == 1
     assert "policy root component" in result.stderr.lower()
@@ -2866,20 +2901,106 @@ def test_red_remediation_invalidates_old_candidate_before_refreeze(git_repo: Pat
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("count", [0, 2])
-def test_active_ledger_discovery_requires_exactly_one(git_repo: Path, count: int):
-    for index in range(count):
-        events = valid_events(git_repo, "BASELINED")
-        events[0]["iteration_id"] = f"{ITERATION_ID}-{index}"
-        directory = git_repo / ".github" / "memory" / "iterations"
-        directory.mkdir(parents=True, exist_ok=True)
-        ledger = directory / f"{ITERATION_ID}-{index}.md"
-        ledger.write_text("```workflow-event\n" + json.dumps(events[0]) + "\n```\n")
-
+def test_active_ledger_discovery_rejects_zero(git_repo: Path):
     result = run_gate(git_repo, "verify-ledger")
 
     assert result.returncode == 1
     assert "active ledger" in result.stderr.lower()
+
+
+def write_named_ledger(root: Path, iteration_id: str, events: list[dict[str, object]]) -> Path:
+    copied = json.loads(json.dumps(events))
+    for item in copied:
+        item["iteration_id"] = iteration_id
+    directory = root / ".github" / "memory" / "iterations"
+    directory.mkdir(parents=True, exist_ok=True)
+    ledger = directory / f"{iteration_id}.md"
+    ledger.write_bytes(workflow_document(iteration_id, copied))
+    return ledger
+
+
+def test_two_verified_active_ledgers_authorize_auto_verify_and_real_hook(git_repo: Path):
+    scripts = git_repo / "scripts"
+    scripts.mkdir()
+    shutil.copy2(GATE, scripts / GATE.name)
+    subprocess.run(["git", "add", "scripts/repository_gate.py"], cwd=git_repo, check=True)
+    events = valid_events(git_repo, "VERIFIED")
+    for iteration_id in ("lineage-z", "lineage-a"):
+        write_named_ledger(git_repo, iteration_id, events)
+
+    automatic = run_gate(git_repo, "verify-ledger")
+    hooked = subprocess.run(
+        ["bash", str(REPO_ROOT / ".githooks" / "pre-commit")],
+        cwd=git_repo,
+        text=True,
+        capture_output=True,
+        env={"PATH": os.environ["PATH"], "UV_OFFLINE": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+        check=False,
+    )
+
+    assert automatic.returncode == 0, automatic.stderr
+    assert hooked.returncode == 0, hooked.stdout + hooked.stderr
+
+
+@pytest.mark.parametrize(
+    ("peer", "safe_category"),
+    [
+        ("BASELINED", "every active candidate must be REVIEWED and VERIFIED"),
+        ("CANDIDATE_FROZEN", "every active candidate must be REVIEWED and VERIFIED"),
+        ("NONAPPROVED", "every active candidate must be REVIEWED and VERIFIED"),
+        ("DIVERGENT", "review or verification does not match candidate"),
+        ("MALFORMED", "ledger event envelope is malformed"),
+    ],
+)
+def test_one_invalid_active_peer_rejects_hook_authorization(
+    git_repo: Path, peer: str, safe_category: str
+):
+    hostile = "private-hostile-peer-sentinel"
+    write_named_ledger(git_repo, "lineage-valid", valid_events(git_repo, "VERIFIED"))
+    events = valid_events(git_repo, "REVIEWED" if peer == "NONAPPROVED" else
+                          "VERIFIED" if peer in {"DIVERGENT", "MALFORMED"} else peer)
+    if peer == "NONAPPROVED":
+        reviewer = events[-1]["evidence"]["reviewers"][0]
+        reviewer["disposition"] = "changes_requested"
+        reviewer["findings"] = [{"claim": "candidate", "detail": hostile}]
+    if peer == "DIVERGENT":
+        events[4]["evidence"]["tree"] = "b" * 40
+    ledger = write_named_ledger(git_repo, "lineage-peer", events)
+    if peer == "MALFORMED":
+        ledger.write_text(f"```workflow-event\n{{not json {hostile}}}\n```\n")
+
+    result = run_gate(git_repo, "hook")
+
+    assert result.returncode == 1
+    assert hostile not in result.stderr
+    assert result.stderr == f"[repository-gate] FAIL: {safe_category}\n"
+
+
+def test_explicit_verification_is_isolated_from_malformed_active_peer(git_repo: Path):
+    selected = write_named_ledger(git_repo, "lineage-selected", valid_events(git_repo, "VERIFIED"))
+    malformed = selected.parent / "lineage-malformed.md"
+    malformed.write_text("```workflow-event\n{not json}\n```\n")
+
+    result = run_gate(git_repo, "verify-ledger", "--ledger", str(selected))
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("entry_kind", ["symlink", "nonregular"])
+def test_automatic_discovery_rejects_unsafe_ledger_entries(
+    git_repo: Path, entry_kind: str
+):
+    selected = write_named_ledger(git_repo, "lineage-selected", valid_events(git_repo, "VERIFIED"))
+    unsafe = selected.parent / f"unsafe-{entry_kind}.md"
+    if entry_kind == "symlink":
+        unsafe.symlink_to(selected)
+    else:
+        unsafe.mkdir()
+
+    result = run_gate(git_repo, "hook")
+
+    assert result.returncode == 1
+    assert result.stderr == "[repository-gate] FAIL: active ledger entry must be a regular non-symlink\n"
 
 
 def test_active_discovery_selects_latest_unsuperseded_recovery_epoch(git_repo: Path):

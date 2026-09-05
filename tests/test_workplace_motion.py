@@ -9,10 +9,13 @@ The harness is the extension's own preview build (the same document, CSP and the
 panel ships), so a pass here is a pass on what the panel renders.
 """
 
+import json
+import math
 import os
 import shutil
 import subprocess
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -133,6 +136,573 @@ def test_saying_something_makes_the_sender_walk(page):
     assert moved["travelled"] > 0, (
         f"{moved['from']} said something to {moved['to']} and never left its tile "
         f"({moved['before']} -> {moved['after']}) — interaction has to cause movement")
+
+
+def test_reduced_motion_never_starts_a_frame_loop_or_mutates_actor_coordinates(scene, browser):
+    """Reduced motion is a stopped simulation, not CSS hiding a running one."""
+    pg = browser.new_page(viewport={"width": 1100, "height": 800}, reduced_motion="reduce")
+    pg.add_init_script(
+        """
+          window.__raf_requests = 0;
+          const native = window.requestAnimationFrame.bind(window);
+          window.requestAnimationFrame = (callback) => {
+            window.__raf_requests += 1;
+            return native(callback);
+          };
+        """
+    )
+    pg.goto((scene / "live.html").as_uri())
+    before = pg.evaluate(
+        """() => ({
+          requests: window.__raf_requests,
+          actors: [...document.querySelectorAll('.wp-actor')].map((el) => ({
+            id: el.dataset.runId,
+            style: el.getAttribute('style'),
+            transform: getComputedStyle(el).transform,
+          })),
+        })"""
+    )
+    pg.wait_for_timeout(400)
+    after = pg.evaluate(
+        """() => ({
+          requests: window.__raf_requests,
+          actors: [...document.querySelectorAll('.wp-actor')].map((el) => ({
+            id: el.dataset.runId,
+            style: el.getAttribute('style'),
+            transform: getComputedStyle(el).transform,
+          })),
+        })"""
+    )
+    pg.close()
+
+    assert before["requests"] == 0 and after["requests"] == 0, (
+        "prefers-reduced-motion started an endless animation-frame chain: "
+        f"{before['requests']} requests at first paint, {after['requests']} after 400ms"
+    )
+    assert after["actors"] == before["actors"], (
+        "actor coordinates mutated while reduced motion promised a still workplace"
+    )
+
+
+def test_same_position_cast_replacement_reapplies_label_rows(page):
+    """A cached layout belongs to actor elements, not only their unchanged coordinates."""
+    missing = page.evaluate(
+        """() => {
+          window.__wp.run(false);
+          window.__wp.step(performance.now());
+          const cast = document.querySelector('.wp-cast').cloneNode(true);
+          for (const actor of cast.querySelectorAll('.wp-actor')) actor.removeAttribute('data-ph');
+          window.__wpApply(cast.outerHTML);
+          window.__wp.step(performance.now() + 16);
+          const missing = [...document.querySelectorAll('.wp-actor')]
+            .filter((actor) => !actor.hasAttribute('data-ph'))
+            .map((actor) => actor.dataset.runId);
+          window.__wp.run(true);
+          return missing;
+        }"""
+    )
+    assert not missing, f"replacement actors skipped cached label layout: {missing}"
+
+
+def test_empty_team_camera_opens_on_the_building_not_empty_terrain(scene, browser):
+    pg = browser.new_page(viewport={"width": 700, "height": 800})
+    pg.goto((scene / "empty.html").as_uri())
+    camera = pg.evaluate("() => ({x: window.__wp.cam.x, y: window.__wp.cam.y})")
+    pg.close()
+    assert camera["x"] > 0 and camera["y"] > 0, (
+        f"empty team opened over unused terrain instead of its building: {camera}"
+    )
+
+
+def test_terminal_actors_settle_without_looking_fallen_or_stuck(page):
+    """Terminal is calm and settled; a quarter-turn reads as fallen or broken."""
+    terminal = page.evaluate(
+        """() => {
+          const actor = document.querySelector('.wp-actor[data-status="done"]');
+          if (!actor) return null;
+          const doll = actor.querySelector('.wp-doll');
+          const box = doll.getBoundingClientRect();
+          return {
+            posture: actor.dataset.posture,
+            transform: getComputedStyle(doll).transform,
+            width: box.width,
+            height: box.height,
+          };
+        }"""
+    )
+    assert terminal is not None, "the realistic scene has no terminal actor to inspect"
+    matrix = [float(part) for part in terminal["transform"][7:-1].split(",")]
+    quarter_turned = (
+        abs(matrix[0]) < 0.01
+        and abs(matrix[3]) < 0.01
+        and abs(matrix[1]) > 0.99
+        and abs(matrix[2]) > 0.99
+    )
+    assert terminal["posture"] != "lounge" and not quarter_turned, (
+        "terminal actor looks fallen or stuck at a quarter-turn: " + str(terminal)
+    )
+
+
+def test_people_are_primary_and_lineage_survives_without_names_or_colour(page):
+    """The workplace must read as people before it reads as floor or labels.
+
+    The reported scene made every regular actor a 32px interchangeable token, then put the only
+    parent/child distinction in a seven-pixel nameplate that children hide at rest.  This measures
+    the rendered bodies at the readable opening camera and inspects the body-level silhouettes
+    with every nameplate hidden and every accent forced to the same colour.  A relationship cue
+    that disappears under those conditions is still nameplate- or colour-dependent.
+    """
+    measured = page.evaluate(
+        """() => {
+          const actors = [...document.querySelectorAll('.wp-actor')];
+          const regular = actors.filter((actor) => !actor.classList.contains('is-brain'));
+          for (const actor of actors) {
+            actor.style.setProperty('--accent', '#888');
+            const tag = actor.querySelector('.wp-tag');
+            if (tag) tag.style.display = 'none';
+          }
+          const body = (actor) => actor.querySelector('.wp-body').getBoundingClientRect();
+          const cue = (actor) => {
+            const style = getComputedStyle(actor.querySelector('.wp-body'), '::before');
+            return {
+              content: style.content,
+              width: parseFloat(style.width) || 0,
+              height: parseFloat(style.height) || 0,
+              opacity: parseFloat(style.opacity) || 0,
+              border: style.borderStyle,
+            };
+          };
+          const root = actors.find((actor) => actor.dataset.lineage === 'root');
+          const child = actors.find((actor) => actor.dataset.lineage === 'child');
+          return {
+            regular: regular.map((actor) => ({
+              id: actor.dataset.runId,
+              width: body(actor).width,
+              height: body(actor).height,
+            })),
+            rootCue: root && cue(root),
+            childCue: child && cue(child),
+          };
+        }"""
+    )
+    assert measured["regular"], "the realistic workplace has no regular actors to measure"
+    undersized = [actor for actor in measured["regular"] if min(actor["width"], actor["height"]) < 40]
+    assert not undersized, f"regular actors are still tiny/interchangeable: {undersized[:4]}"
+    for role in ("rootCue", "childCue"):
+        cue = measured[role]
+        assert cue and cue["content"] != "none", f"{role} has no body-level shape"
+        assert cue["width"] >= 6 and cue["height"] >= 6 and cue["opacity"] >= 0.7, (
+            f"{role} disappears without the nameplate or pod colour: {cue}"
+        )
+
+
+def test_forty_eight_actors_hold_frame_budget_and_input_reaches_the_next_paint(scene, browser):
+    """Renderer work stays cheap even when the host cannot deliver every frame on time."""
+    workers = [
+        {
+            "run_id": f"volume-{index}",
+            "name": f"worker {index}",
+            "agent": "frontend" if index % 2 else "backend",
+            "status": "running",
+            "zone": "code",
+            "activity": "reviewing the production workspace",
+            "parent_run_id": None if index % 6 == 0 else f"volume-{index - index % 6}",
+            "project": "interact",
+            "cost_usd": None,
+            "input_tokens": None,
+            "idle_seconds": index % 60,
+            "department": f"production-{index % 4}",
+            "room": f"Production {index % 4}",
+        }
+        for index in range(48)
+    ]
+    render = subprocess.run(
+        [
+            "node",
+            "-e",
+            (
+                "const workplace=require(process.argv[1]);"
+                "process.stdout.write(workplace.renderActors(JSON.parse(process.argv[2])))"
+            ),
+            str(EXT / "out" / "workplace.js"),
+            json.dumps({"workers": workers, "links": [], "at": 0}),
+        ],
+        cwd=EXT,
+        capture_output=True,
+        text=True,
+    )
+    assert render.returncode == 0, render.stderr
+    renderer_jank_ms = int(os.environ.get("WORKPLACE_TEST_RENDERER_JANK_MS", "0"))
+    assert 0 <= renderer_jank_ms <= 100, "the test-only renderer delay must be 0..100ms"
+    input_jank_ms = int(os.environ.get("WORKPLACE_TEST_INPUT_JANK_MS", "0"))
+    assert 0 <= input_jank_ms <= 100, "the test-only input delay must be 0..100ms"
+    page = browser.new_page(
+        viewport={"width": 1100, "height": 800}, reduced_motion="no-preference"
+    )
+    page.add_init_script(
+        f"""
+        (() => {{
+          const nativeFrame = window.requestAnimationFrame.bind(window);
+          const probe = window.__workplaceFrameProbe = {{
+            control: '',
+            enabled: false,
+            flushes: 0,
+            geometryHooks: 0,
+            geometryReads: 0,
+            inputJankMs: {input_jank_ms},
+            rendererJankMs: {renderer_jank_ms},
+            sequence: 0,
+            samples: [],
+          }};
+          window.addEventListener('keydown', (event) => {{
+            if (event.key !== 'f' || !probe.inputJankMs) return;
+            const jankEnds = performance.now() + probe.inputJankMs;
+            while (performance.now() < jankEnds) {{}}
+          }}, {{capture: true}});
+          for (const property of ['clientWidth', 'clientHeight']) {{
+            const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, property);
+            if (!descriptor || !descriptor.configurable || !descriptor.get) continue;
+            Object.defineProperty(Element.prototype, property, {{
+              ...descriptor,
+              get() {{
+                if (probe.enabled && this.classList?.contains('wp-mini')) {{
+                  probe.geometryReads += 1;
+                }}
+                return descriptor.get.call(this);
+              }},
+            }});
+            probe.geometryHooks += 1;
+          }}
+          window.requestAnimationFrame = (callback) => nativeFrame((at) => {{
+            if (callback.name !== 'frame' || !probe.enabled) {{ callback(at); return; }}
+            const active = Boolean(window.__wp && window.__wp.tick && window.__wp.tick.on);
+            // Bring unrelated browser-owned animation/style work current before the renderer's
+            // envelope begins. The second read stays INSIDE the envelope, so any style/layout
+            // dirtied by `frame` itself is still paid for by the renderer measurement.
+            const calibrationStarted = performance.now();
+            void document.documentElement.offsetWidth;
+            probe.flushes += 1;
+            const calibration = performance.now() - calibrationStarted;
+            const sequence = ++probe.sequence;
+            console.timeStamp(
+              `wp-self|start|${{probe.control}}|${{sequence}}|${{active ? 1 : 0}}`
+            );
+            const started = performance.now();
+            callback(at);
+            if (active && probe.rendererJankMs) {{
+              const jankEnds = performance.now() + probe.rendererJankMs;
+              while (performance.now() < jankEnds) {{}}
+            }}
+            // Any renderer-owned layout read remains inside callback(at). The calibration flush
+            // above prevents unrelated pending browser style work from entering that envelope;
+            // a second harness-owned flush here would instead charge the renderer for work the
+            // browser normally batches after every requestAnimationFrame callback has returned.
+            console.timeStamp(
+              `wp-self|end|${{probe.control}}|${{sequence}}|${{active ? 1 : 0}}`
+            );
+            probe.samples.push({{
+              at,
+              active,
+              calibration,
+              duration: performance.now() - started,
+            }});
+          }});
+        }})();
+        """
+    )
+    page.goto((scene / "dark.html").as_uri())
+    cdp = page.context.new_cdp_session(page)
+    trace_events = []
+    trace_complete = Event()
+    cdp.on("Tracing.dataCollected", lambda event: trace_events.extend(event["value"]))
+    cdp.on("Tracing.tracingComplete", lambda _: trace_complete.set())
+    cdp.send(
+        "Tracing.start",
+        {
+            "categories": "devtools.timeline,blink.console",
+            "options": "sampling-frequency=10000",
+        },
+    )
+    try:
+        result = page.evaluate(
+            """async (actors) => {
+          window.__wpApply(actors);
+          const wp = window.__wp;
+          const probe = window.__workplaceFrameProbe;
+          const quantile = (values, q) => {
+            const sorted = values.slice().sort((a, b) => a - b);
+            return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+          };
+          const nextPaint = () => new Promise((painted) => requestAnimationFrame(painted));
+          // Let the replacement cast finish its first minimap/layout pass before measuring the
+          // camera transition. Initial construction is not a frame-loop cost.
+          while (document.querySelectorAll('.wp-dots i').length < 48) await nextPaint();
+
+          const sample = async (name, contentionMs) => {
+            wp.run(false);
+            wp.follow(false);
+            wp.zoom(2);
+            await nextPaint();
+            probe.flushes = 0;
+            probe.geometryReads = 0;
+            probe.samples.length = 0;
+            probe.control = name;
+            probe.enabled = true;
+
+            let contend = contentionMs > 0;
+            const hostContention = () => {
+              if (!contend) return;
+              const ends = performance.now() + contentionMs;
+              while (performance.now() < ends) {}
+              requestAnimationFrame(hostContention);
+            };
+            if (contend) requestAnimationFrame(hostContention);
+
+            wp.run(true);
+            wp.whole();
+            let previous = 0;
+            let active = true;
+            const schedule = [];
+            await new Promise((done) => {
+              const tick = (at) => {
+                if (previous) schedule.push({active, duration: at - previous});
+                if (schedule.length >= 160) { done(); return; }
+                previous = at;
+                active = !active;
+                wp.run(active);
+                requestAnimationFrame(tick);
+              };
+              requestAnimationFrame(tick);
+            });
+            probe.enabled = false;
+
+            wp.run(true);
+            const view = document.querySelector('.wp-view');
+            const observeInput = async (key, expectsFollow) => {
+              // Every observation starts at the same boundary: immediately after one calibration
+              // frame, then exactly one key dispatch, then the next animation frame. There is no
+              // retry or post-hoc sample selection.
+              wp.follow(false);
+              await nextPaint();
+              const started = performance.now();
+              view.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true}));
+              const applied = wp.cam.follow;
+              if (applied !== expectsFollow) {
+                throw new Error(
+                  `${key} synchronously left camera follow=${applied}; expected ${expectsFollow}`
+                );
+              }
+              await nextPaint();
+              const duration = performance.now() - started;
+              if (expectsFollow) wp.follow(false);
+              return {duration, applied};
+            };
+            const controlPaint = [];
+            const inputToPaint = [];
+            const inputPaintExcess = [];
+            const inputApplied = [];
+            const inputPairOrder = [];
+            for (let pairIndex = 0; pairIndex < 24; pairIndex++) {
+              const order = pairIndex % 2
+                ? [['input', 'f', true], ['control', 'q', false]]
+                : [['control', 'q', false], ['input', 'f', true]];
+              inputPairOrder.push(order.map((item) => item[0]).join('-'));
+              const pair = {};
+              for (const [kind, key, expectsFollow] of order) {
+                pair[kind] = await observeInput(key, expectsFollow);
+              }
+              controlPaint.push(pair.control.duration);
+              inputToPaint.push(pair.input.duration);
+              inputPaintExcess.push(pair.input.duration - pair.control.duration);
+              inputApplied.push(pair.input.applied);
+            }
+            wp.run(false);
+            contend = false;
+
+            const activeSchedule = schedule.filter((item) => item.active).map((item) => item.duration);
+            const pausedSchedule = schedule.filter((item) => !item.active).map((item) => item.duration);
+            const activeWork = probe.samples.filter((item) => item.active).map((item) => item.duration);
+            const pausedWork = probe.samples.filter((item) => !item.active).map((item) => item.duration);
+            const calibrations = probe.samples.map((item) => item.calibration);
+            // Wall time around a callback can include browser/host work that is independent of
+            // the workplace. The loop alternates live and paused frames in one run, so adjacent
+            // frames share that condition. This copy remains as a diagnostic; the assertions use
+            // the same adjacent pairs on Chromium's renderer thread clock below.
+            const selfWork = [];
+            for (let i = 1; i < probe.samples.length; i += 2) {
+              const pair = probe.samples.slice(i - 1, i + 1);
+              const activeItem = pair.find((item) => item.active);
+              const pausedItem = pair.find((item) => !item.active);
+              if (activeItem && pausedItem) {
+                selfWork.push(Math.max(0, activeItem.duration - pausedItem.duration));
+              }
+            }
+            const slowAt = quantile(pausedSchedule, 0.5) * 1.5;
+            const activeSlow = activeSchedule.filter((duration) => duration > slowAt).length;
+            const pausedSlow = pausedSchedule.filter((duration) => duration > slowAt).length;
+            return {
+              name,
+              contentionMs,
+              scheduleFrames: schedule.length,
+              activeScheduleP95: quantile(activeSchedule, 0.95),
+              pausedScheduleP95: quantile(pausedSchedule, 0.95),
+              scheduleP95Delta: quantile(activeSchedule, 0.95) - quantile(pausedSchedule, 0.95),
+              activeSlow,
+              pausedSlow,
+              slowExcess: activeSlow - pausedSlow,
+              activeWorkCount: activeWork.length,
+              pausedWorkCount: pausedWork.length,
+              rawActiveWorkP95: quantile(activeWork, 0.95),
+              rawPausedWorkP95: quantile(pausedWork, 0.95),
+              selfWorkCount: selfWork.length,
+              selfWorkP95: quantile(selfWork, 0.95),
+              selfWorkMax: Math.max(...selfWork),
+              calibrationP95: quantile(calibrations, 0.95),
+              geometryReads: probe.geometryReads,
+              layoutFlushes: probe.flushes,
+              inputControl: controlPaint,
+              inputToPaint,
+              inputPaintExcess,
+              inputApplied,
+              inputPairOrder,
+            };
+          };
+
+          const controls = [await sample('idle', 0), await sample('host-contention', 8)];
+          wp.run(true);
+          return {
+            actors: document.querySelectorAll('.wp-actor').length,
+            boundActors: Object.keys(wp.bodies).length,
+            geometryHooks: probe.geometryHooks,
+            inputJankMs: probe.inputJankMs,
+            rendererJankMs: probe.rendererJankMs,
+            controls,
+          };
+            }""",
+            render.stdout,
+        )
+    finally:
+        cdp.send("Tracing.end")
+        while not trace_complete.is_set():
+            page.wait_for_timeout(25)
+        cdp.detach()
+
+    markers = {}
+    for event in trace_events:
+        if event.get("name") != "TimeStamp" or "tts" not in event:
+            continue
+        message = event.get("args", {}).get("data", {}).get("message", "")
+        if not message.startswith("wp-self|"):
+            continue
+        _prefix, edge, control_name, sequence, active = message.split("|")
+        key = (control_name, int(sequence), active == "1", event["tid"])
+        markers.setdefault(key, {})[edge] = event["tts"]
+
+    thread_samples = {control["name"]: [] for control in result["controls"]}
+    for (control_name, sequence, active, _thread), edges in markers.items():
+        if set(edges) != {"start", "end"}:
+            continue
+        thread_samples[control_name].append(
+            {
+                "sequence": sequence,
+                "active": active,
+                "duration": (edges["end"] - edges["start"]) / 1000,
+            }
+        )
+
+    def quantile(values, fraction):
+        ordered = sorted(values)
+        return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+
+    def nearest_rank_p95(values):
+        ordered = sorted(values)
+        return ordered[math.ceil(0.95 * len(ordered)) - 1] if ordered else None
+
+    for control in result["controls"]:
+        samples = sorted(thread_samples[control["name"]], key=lambda item: item["sequence"])
+        self_work = []
+        for index in range(1, len(samples), 2):
+            pair = samples[index - 1:index + 1]
+            active_sample = next((item for item in pair if item["active"]), None)
+            paused_sample = next((item for item in pair if not item["active"]), None)
+            if active_sample and paused_sample:
+                self_work.append(
+                    max(0, active_sample["duration"] - paused_sample["duration"])
+                )
+        assert self_work, f"CDP produced no complete renderer thread-clock pairs: {markers}"
+        control["wallSelfWorkP95"] = control.pop("selfWorkP95")
+        control["wallSelfWorkMax"] = control.pop("selfWorkMax")
+        control["selfWorkCount"] = len(self_work)
+        control["selfWorkP95"] = quantile(self_work, 0.95)
+        control["selfWorkMax"] = max(self_work)
+        control["inputControlP95"] = nearest_rank_p95(control["inputControl"])
+        control["inputP95"] = nearest_rank_p95(control["inputToPaint"])
+        control["pairedExcessP95"] = nearest_rank_p95(control["inputPaintExcess"])
+        control["inputAppliedCount"] = sum(control["inputApplied"])
+    page.close()
+    if os.environ.get("WORKPLACE_PERF_REPORT"):
+        print("workplace_performance=" + json.dumps(result, sort_keys=True))
+    paired_excess_failures = {
+        control["name"]: control["pairedExcessP95"]
+        for control in result["controls"]
+        if control["pairedExcessP95"] > 20
+    }
+    assert not paired_excess_failures, (
+        f"paired input excess p95 exceeds 20ms: {paired_excess_failures}; all metrics: {result}"
+    )
+    assert result["actors"] == 48, result
+    assert result["boundActors"] == 48, (
+        f"only {result['boundActors']} of 48 rendered actors participate in the active loop"
+    )
+    assert result["geometryHooks"] == 2, "the browser exposed no minimap geometry-read seam"
+    for control in result["controls"]:
+        assert control["geometryReads"] == 0, (
+            f"{control['name']} active frames synchronously read minimap geometry: {control}"
+        )
+        assert control["scheduleFrames"] == 160, control
+        assert control["activeWorkCount"] >= 80 and control["pausedWorkCount"] >= 80, control
+        assert control["selfWorkCount"] >= 80, control
+        assert control["layoutFlushes"] == (
+            control["activeWorkCount"] + control["pausedWorkCount"]
+        ), f"renderer timing omitted its pre-frame layout calibration: {control}"
+        assert control["selfWorkP95"] <= 8, (
+            f"{control['name']} renderer-work p95 {control['selfWorkP95']:.2f}ms exceeds 8ms; "
+            f"all metrics: {result}"
+        )
+        assert control["selfWorkMax"] <= 20, (
+            f"{control['name']} renderer work blocked one frame for "
+            f"{control['selfWorkMax']:.2f}ms; all metrics: {result}"
+        )
+        assert control["scheduleP95Delta"] <= 8, (
+            f"{control['name']} active scheduling added {control['scheduleP95Delta']:.2f}ms "
+            f"over interleaved paused frames; all metrics: {result}"
+        )
+        assert control["slowExcess"] <= max(1, control["scheduleFrames"] * 0.02), (
+            f"{control['name']} produced {control['slowExcess']} more visibly late active "
+            f"frames than interleaved paused frames; all metrics: {result}"
+        )
+        assert len(control["inputControl"]) == 24, control
+        assert len(control["inputToPaint"]) == 24, control
+        assert len(control["inputPaintExcess"]) == 24, control
+        assert control["inputPairOrder"] == [
+            "control-input" if index % 2 == 0 else "input-control" for index in range(24)
+        ], control
+        assert len(control["inputApplied"]) == 24, control
+        assert control["inputAppliedCount"] == 24, (
+            f"{control['name']} applied only {control['inputAppliedCount']} of 24 inputs"
+        )
+        for input_latency, control_latency, signed_delta in zip(
+            control["inputToPaint"],
+            control["inputControl"],
+            control["inputPaintExcess"],
+            strict=True,
+        ):
+            assert signed_delta == pytest.approx(input_latency - control_latency), control
+        input_limit = min(100, max(33.4, control["inputControlP95"]) + 20)
+        assert control["inputP95"] <= input_limit, (
+            f"{control['name']} input p95 {control['inputP95']:.2f}ms exceeds its "
+            f"{input_limit:.2f}ms calibrated limit; all metrics: {result}"
+        )
 
 
 # --- The chat panel's reliability, in a real browser -----------------------------------------

@@ -42,7 +42,6 @@ import {
   type ConversationConsoleState,
 } from "./conversationFormat";
 import {
-  conversationHostArgs,
   createConversationClient,
   usesConversationTransport,
   type ConversationClient,
@@ -51,7 +50,7 @@ import {
 import { sessionTabs } from "./sessionTabs";
 import { IO_SCHEME, ioTarget } from "./ioDocument";
 import { agentsDir } from "./paths";
-import { resolveCommand } from "./shared";
+import { conversationExtensionVersion, resolveConversationBackend } from "./conversationBackend";
 import type {
   AgentEvent,
   AgentRun,
@@ -117,6 +116,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private conversationProjection: ReturnType<typeof setTimeout> | undefined;
   private conversationClient: ConversationClient | undefined;
+  private conversationGeneration = 0;
   private consoleState: ConversationConsoleState = { phase: "loading" };
   private readonly liveRuns = new Map<string, ConversationRun>();
   private readonly approvals = new Map<string, { run_id: string; event: AgentEvent }>();
@@ -131,6 +131,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public dispose(): void {
     process.off("exit", this.disposeOnProcessExit);
     this.stopWatching();
+    this.conversationGeneration += 1;
     this.conversationClient?.dispose();
     this.conversationClient = undefined;
   }
@@ -219,6 +220,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true, enableCommandUris: true };
     view.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === "ready") this.replayConversationView();
+      if (msg?.type === "reload-conversation") {
+        this.conversationClient?.dispose();
+        this.conversationClient = undefined;
+        this.consoleState = { phase: "loading" };
+        this.rendered = undefined;
+        this.render();
+        void this.loadConversationConsole();
+      }
       if (msg?.type === "send" && typeof msg.text === "string") void this.send(msg.text);
       if (msg?.type === "start" && typeof msg.text === "string"
           && typeof msg.routeId === "string"
@@ -317,23 +326,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** Start one local host through the same executable resolver as the MCP server.  Replacing the
-   * final `mcp` subcommand keeps dev checkout, uvx version pinning and release behavior aligned. */
+  /** Start through the conversation backend: an explicit dev checkout or a same-version local
+   * `interact` executable from PATH. It does not consult the general server resolver or network. */
   private async loadConversationConsole(): Promise<void> {
     if (this.conversationClient) return;
+    const generation = ++this.conversationGeneration;
+    let client: ConversationClient | undefined;
     try {
-      const [command, resolvedArgs] = resolveCommand(this.log);
       const workspaceRoot = this.workspaceRoot();
-      this.conversationClient = createConversationClient({
-        command,
-        args: conversationHostArgs(resolvedArgs, workspaceRoot),
+      const backend = await resolveConversationBackend({
+        projectPath: vscode.workspace.getConfiguration("interact").get<string>("projectPath")
+          || process.env.INTERACT_PROJECT_PATH,
+        extensionVersion: conversationExtensionVersion(),
+        workspaceRoot,
+      });
+      if (!backend.available) throw new Error(backend.reason);
+      client = createConversationClient({
+        command: backend.command,
+        args: backend.args,
         cwd: workspaceRoot,
       }, {
-        onEvent: (run, event) => this.onConversationEvent(run, event),
-        onError: (message) => this.conversationBridgeFailed(message),
-        onState: (state) => this.conversationClientStateChanged(state),
+        onEvent: (run, event) => {
+          if (this.conversationGeneration === generation && this.conversationClient === client) {
+            this.onConversationEvent(run, event);
+          }
+        },
+        onError: (message) => {
+          if (this.conversationGeneration === generation && this.conversationClient === client) {
+            this.conversationBridgeFailed(message);
+          }
+        },
+        onState: (state) => {
+          if (this.conversationGeneration === generation && this.conversationClient === client) {
+            this.conversationClientStateChanged(state);
+          }
+        },
       });
-      const catalog = await this.conversationClient.catalog();
+      this.conversationClient = client;
+      const catalog = await client.catalog();
+      if (this.conversationGeneration !== generation || this.conversationClient !== client) return;
       this.consoleState = {
         phase: catalog.routes.some((route) => route.availability === "available") ? "ready" : "empty",
         catalog,
@@ -341,6 +372,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.rendered = undefined;
       this.render();
     } catch (error) {
+      if (this.conversationGeneration !== generation
+          || (client !== undefined && this.conversationClient !== client)) return;
       this.conversationBridgeFailed(
         error instanceof Error ? error.message : "The local conversation bridge could not start.",
       );
@@ -354,6 +387,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private conversationBridgeFailed(message: string): void {
     const visible = message || "The local conversation bridge stopped unexpectedly.";
+    const repaintColdDocument = !this.consoleState.catalog;
     this.consoleState = {
       ...this.consoleState,
       phase: "error",
@@ -362,7 +396,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     this.postConsoleState(visible, true, false);
     this.postConversationActivity();
-    if (this.rendered === undefined) this.render();
+    if (repaintColdDocument) {
+      this.rendered = undefined;
+      this.render();
+    }
   }
 
   private postConsoleState(message: string, error: boolean, canSend: boolean): void {
@@ -575,6 +612,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.view?.visible) return;
     if (this.agentId) { this.renderAgent(this.agentId); return; }
     const current = this.run();
+    if (!current && this.rendered === null) return;
     if (current && this.rendered === current.run_id) {
       // Same agent, more to say: patch the transcript and leave the rest of the view alone.
       const turns = activityOf(current, 300);

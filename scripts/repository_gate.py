@@ -579,7 +579,24 @@ class RepositoryGate(BaseModel):
 
     def verify_ledger(self, ledger: Path | None = None):
         recoveries = self._validate_quarantines()
-        path = self._active_ledger(recoveries) if ledger is None else self._explicit_ledger(ledger)
+        if ledger is not None:
+            return self._verify_ledger(self._explicit_ledger(ledger), recoveries)
+        return self._verify_active_ledgers(recoveries)[-1]
+
+    def _verify_active_ledgers(
+        self,
+        recoveries: dict[str, tuple[_QuarantineManifest, ...]],
+    ) -> tuple[State, ...]:
+        return tuple(
+            self._verify_ledger(path, recoveries)
+            for path in self._active_ledgers(recoveries)
+        )
+
+    def _verify_ledger(
+        self,
+        path: Path,
+        recoveries: dict[str, tuple[_QuarantineManifest, ...]],
+    ):
         predecessors = {
             manifest.predecessor_iteration_id
             for recovery in recoveries.values()
@@ -641,8 +658,9 @@ class RepositoryGate(BaseModel):
 
     def run_hook(self):
         self.scan_staged()
-        if self.verify_ledger() != "VERIFIED":
-            raise _GateError("current candidate must be REVIEWED and VERIFIED")
+        recoveries = self._validate_quarantines()
+        if any(state != "VERIFIED" for state in self._verify_active_ledgers(recoveries)):
+            raise _GateError("every active candidate must be REVIEWED and VERIFIED")
 
     def _git(self, *arguments: bytes, allowed_failure: bool = False):
         command = [b"git", *arguments]
@@ -770,10 +788,10 @@ class RepositoryGate(BaseModel):
         terms = [line for line in content.splitlines() if len(line) >= 4]
         return terms
 
-    def _active_ledger(
+    def _active_ledgers(
         self,
         recoveries: dict[str, tuple[_QuarantineManifest, ...]],
-    ):
+    ) -> tuple[Path, ...]:
         directory = self._policy_directory(required=False)
         active: list[Path] = []
         predecessors = {
@@ -784,15 +802,15 @@ class RepositoryGate(BaseModel):
         if directory is not None:
             for path in sorted(directory.glob("*.md")):
                 if path.is_symlink() or not path.is_file():
-                    continue
+                    raise _GateError("active ledger entry must be a regular non-symlink")
                 if path.stem in predecessors:
                     continue
                 events = self._parse_events(path, recoveries.get(path.stem))
                 if events[-1].state != "CLOSED":
                     active.append(path)
-        if len(active) != 1:
-            raise _GateError("exactly one active ledger is required")
-        return active[0]
+        if not active:
+            raise _GateError("at least one active ledger is required")
+        return tuple(active)
 
     def _explicit_ledger(self, ledger: Path):
         directory = self._policy_directory(required=True)

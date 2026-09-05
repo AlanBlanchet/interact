@@ -55,23 +55,6 @@ export interface ConversationClient {
   dispose(): void;
 }
 
-/** Replace only the executable resolver's MCP leaf, retaining its uv/uvx/dev prefix exactly. */
-export function conversationHostArgs(
-  resolvedArgs: readonly string[],
-  workspaceRoot: string,
-): string[] {
-  if (resolvedArgs.at(-1) !== "mcp") {
-    throw new Error("The configured interact command does not expose the MCP entrypoint.");
-  }
-  return [
-    ...resolvedArgs.slice(0, -1),
-    "agents",
-    "console",
-    "--workspace-root",
-    workspaceRoot,
-  ];
-}
-
 /** Existing supervised processes keep the established one-shot CLI send contract. */
 export function usesConversationTransport(run: Pick<AgentRun, "kind">): boolean {
   return run.kind === "conversation";
@@ -259,11 +242,16 @@ export function createConversationClient(
     });
     process.stdout.on("data", accept);
     process.stderr.on("data", (chunk: Buffer | string) => { stderrBytes += Buffer.byteLength(chunk); });
-    process.on("error", () => fail("The conversation bridge could not start."));
+    process.on("error", (error) => fail((error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "Interact is not installed. Install the matching version, then reload the window."
+      : "The conversation bridge could not start. Reload the window to try again."));
     process.on("exit", (code, signal) => {
       if (currentState === "closed") return;
       const ending = code === null ? `signal ${boundedProtocolDetail(signal) || "unknown"}` : `exit ${code}`;
-      fail(`The conversation bridge stopped unexpectedly (${ending}; ${stderrBytes} stderr bytes).`);
+      const beforeInitialization = currentState === "connecting";
+      fail(beforeInitialization
+        ? `The conversation bridge exited before initialization (${ending}; ${stderrBytes} stderr bytes). Reload the window to try again.`
+        : `The conversation bridge stopped unexpectedly (${ending}; ${stderrBytes} stderr bytes). Reload the window to try again.`);
     });
     return process;
   };
@@ -313,7 +301,8 @@ export function createConversationClient(
         const methods = new Set(response.methods);
         const missing = REQUIRED_METHODS.filter((method) => !methods.has(method));
         if (missing.length) {
-          throw new Error(`The conversation bridge does not support: ${missing.join(", ")}.`);
+          throw new Error("The conversation bridge is incompatible with this extension. " +
+            `Missing methods: ${missing.join(", ")}. Update interact, then reload the window.`);
         }
         setState("ready");
       })

@@ -78,6 +78,8 @@ export const SCRIPT =
        observable as the gap between where the camera is and what is on screen. */
     window.__wp.view = VIEW;
     camFit();
+    DECLUTTER_KEY = "";
+    declutter();
     lighting();
     speechLayout(TICK.t + 9999);
   }
@@ -394,9 +396,12 @@ export const SCRIPT =
       /* The clock runs even with motion reduced: it is what places the speech and holds the
          camera. Every ANIMATION is off in that mode, and decide() never sends anybody anywhere
          because the stylesheet is what would show it. */
-      TICK.on = true;
-      requestAnimationFrame(function (ts) { TICK.t = ts; frame(ts); });
-      window.__wp.run = function (on) { TICK.on = !!on; return TICK.on; };
+      TICK.on = !still;
+      if (!still) requestAnimationFrame(function (ts) { TICK.t = ts; frame(ts); });
+      window.__wp.run = function (on) {
+        TICK.on = !still && !!on;
+        return TICK.on;
+      };
     }
     window.__wp.mode = (load(POST) || []).length ? "reloaded" : "cold";
     postRound(!(load(POST) || []).length);
