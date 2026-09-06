@@ -154,7 +154,10 @@ class GroundingLeaderboardJS(UpstreamSource):
                 cur = cur[key]
             if isinstance(cur, (int, float)):
                 entries.append(
-                    PublishedEntry(model_name=str(name), score=float(cur) * self.score_scale)
+                    PublishedEntry(
+                        model_name=str(name), score=float(cur) * self.score_scale,
+                        status="eligible",
+                    )
                 )
         entries.sort(key=lambda e: e.score, reverse=True)
         return PublishedTable(
@@ -200,7 +203,9 @@ class SeeClickReadme(UpstreamSource):
             if not nums or not name or name.lower() in {"method", "model"}:
                 continue
             # Use last numeric column (typically "Avg" / overall).
-            entries.append(PublishedEntry(model_name=name, score=nums[-1] / 100.0))
+            entries.append(PublishedEntry(
+                model_name=name, score=nums[-1] / 100.0, status="eligible",
+            ))
         entries.sort(key=lambda e: e.score, reverse=True)
         return PublishedTable(
             source_url=self.url,

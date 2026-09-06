@@ -381,7 +381,7 @@ class TestBenchmarkRecommend:
         by_cat: dict[str, set[str]] = {}
         for b in Benchmark.registry():
             by_cat.setdefault(b.category, set()).add(b.id)
-        assert "mmmu" in by_cat.get("image", set())
+        assert "mmmu_pro" in by_cat.get("image", set())
         assert "video_mme" in by_cat.get("video", set())
         assert {"screenspot", "screenspot_pro"} <= by_cat.get("gui_grounding", set())
         # every benchmark explains its task and links out
@@ -428,20 +428,20 @@ class TestBenchmarkRecommend:
 
 
 class TestPublishedTable:
-    def test_lib_recommendation_model_substring_match(self):
+    def test_lib_recommendation_model_exact_identity_match(self):
         bench = Benchmark.by_id("screenspot_pro")
         assert bench is not None
-        # Published lib_recommendation comes from the upstream cache; substring-match
-        # using whatever model_name happens to top the leaderboard today.
+        # Published identity is normalized for punctuation, never shortened by substring.
         rec_name = bench.published.lib_recommendation if bench.published else None
         assert rec_name is not None
-        token = rec_name.split()[0].lower()
         assert bench.lib_recommendation_model() is None
         m = _make_model(
-            id=f"openai/{token}",
+            id=f"openai/{rec_name}",
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )
         _register_models(m)
+        bench.published.freshness = "current"
+        next(e for e in bench.published.entries if e.model_name == rec_name).status = "eligible"
         matched = bench.lib_recommendation_model()
         assert matched is not None
         assert matched.id == m.id
@@ -452,12 +452,13 @@ class TestPublishedTable:
         assert bench.published is not None
         # Pick any entry from the live cache and assert the bridge wires it through.
         entry = bench.published.entries[0]
-        token = entry.model_name.split()[0].lower()
         m = _make_model(
-            id=f"vendor/{token}",
+            id=f"vendor/{entry.model_name}",
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )
         _register_models(m)
+        bench.published.freshness = "current"
+        entry.status = "eligible"
         pairs = bench.published_models_in_registry()
         assert any(
             model.id == m.id and abs(score - entry.score) < 1e-9
@@ -468,7 +469,7 @@ class TestPublishedTable:
 class TestRecommendBoth:
     def test_recommend_prefer_both_includes_both_sources(self):
         m = _make_model(
-            id="openai/ui-tars-1.5-7b-vision",
+            id="openai/ui-tars-1.5",
             input_cost=1.0,
             output_cost=2.0,
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
@@ -476,6 +477,10 @@ class TestRecommendBoth:
         _register_models(m)
         bench = Benchmark.by_id("screenspot_pro")
         assert bench is not None
+        assert bench.published is not None
+        bench.published.freshness = "current"
+        for entry in bench.published.entries:
+            entry.status = "eligible"
         bench._measured[m.id] = 0.7
 
         with patch.object(Model, "is_available", return_value=True):
@@ -486,12 +491,16 @@ class TestRecommendBoth:
 
     def test_benchmark_recommendation_source_field(self):
         m = _make_model(
-            id="ui-tars-1.5-7b",
+            id="ui-tars-1.5",
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )
         _register_models(m)
         bench = Benchmark.by_id("screenspot_pro")
         assert bench is not None
+        assert bench.published is not None
+        bench.published.freshness = "current"
+        for entry in bench.published.entries:
+            entry.status = "eligible"
         with patch.object(Model, "is_available", return_value=True):
             published_recs = bench.recommend(prefer="published")
         assert published_recs

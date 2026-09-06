@@ -78,6 +78,16 @@ def test_groups_cover_every_setting_in_order():
     assert flattened == SETTINGS
 
 
+@pytest.mark.parametrize(
+    ("key", "word"),
+    [("media.criteria", "threshold"), ("media.criteriaWeights", "normalized")],
+)
+def test_media_selection_policy_is_editable_and_unit_safe(key: str, word: str) -> None:
+    setting = by_key(key)
+    assert setting.group == "Models" and setting.kind == "str"
+    assert word in setting.description.lower()
+
+
 @pytest.mark.asyncio
 async def test_tui_renders_a_widget_for_every_setting(tmp_path, monkeypatch):
     """The TUI's Config tab is generated from the schema — every setting must yield a control."""

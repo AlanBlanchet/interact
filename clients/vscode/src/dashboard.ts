@@ -60,13 +60,17 @@ const RECOMMENDATION_BENCHMARK = "screenspot_pro";
 
 interface PublishedEntryData {
   model_name: string;
+  model_id?: string | null;
   score: number;
+  normalized_score?: number | null;
+  status?: "eligible" | "unverified" | "missing" | "not_applicable" | "approximate" | "unmapped";
 }
 interface PublishedTableData {
   source_url: string;
   retrieved: string;
   lib_recommendation: string | null;
   entries: PublishedEntryData[];
+  freshness?: "current" | "stale" | "unknown";
 }
 interface BenchmarkData {
   id: string;
@@ -75,8 +79,14 @@ interface BenchmarkData {
   category: "image" | "gui_grounding" | "video";
   source: string;
   source_auth: string;
+  requires_auth?: boolean;
   url: string;
+  score_url?: string;
+  methodology_url?: string;
   metric: string;
+  score_range?: [number, number] | null;
+  higher_is_better?: boolean | null;
+  refresh_supported?: boolean;
   published: PublishedTableData | null;
   lib_recommendation_model_id: string | null;
   measured: Record<string, number>;
@@ -280,6 +290,9 @@ export class DashboardPanel {
     setting?: string;
     provider?: string;
     key?: string;
+    url?: string;
+    benchmarkId?: string;
+    sourceRole?: "evaluation" | "score" | "methodology";
   }): Promise<void> {
     switch (msg.type) {
       case "ready":
@@ -331,6 +344,17 @@ export class DashboardPanel {
         await this.keyManager.remove(msg.key);
         this.emitter.fire();
         this.refresh();
+        break;
+      }
+      case "openBenchmarkSource": {
+        const { trustedBenchmarkSource } = require("./benchmarkTables");
+        const benchmark = this.benchmarksData.benchmarks.find(
+          (candidate) => candidate.id === msg.benchmarkId,
+        );
+        const source = trustedBenchmarkSource(msg.sourceRole === "methodology"
+          ? benchmark?.methodology_url ?? ""
+          : msg.sourceRole === "score" ? benchmark?.score_url ?? "" : benchmark?.url ?? "");
+        if (source) await vscode.env.openExternal(vscode.Uri.parse(source));
         break;
       }
       case "changeCurrency": {
@@ -512,19 +536,18 @@ export class DashboardPanel {
    *  nudge: live scores let interact recommend the best current model. */
   private benchmarkDataCell(): CellUpdate {
     const content: CellContent[] = [
-      {
-        kind: "row",
-        label:
-          "interact ranks models from public benchmark scores. Add a source key below to fetch " +
-          "live data so it knows the best current model — optional; curated snapshots are used otherwise.",
-      },
+      { kind: "row", label: "Benchmark source availability and refresh controls." },
     ];
     for (const cat of BENCHMARK_CATEGORIES) {
       const benches = this.benchmarksData.benchmarks.filter((b) => b.category === cat.id);
       if (!benches.length) continue;
       content.push({ kind: "heading", text: cat.label });
       for (const b of benches) {
-        if (b.source_auth) {
+        if (!b.refresh_supported) {
+          content.push({ kind: "row", label: b.name,
+            value: `${b.source} · refresh unavailable · informational source`, dot: "missing",
+            tooltip: b.description });
+        } else if (b.requires_auth && b.source_auth) {
           const set = !!this.keyManager.get(b.source_auth);
           content.push({
             kind: "row",
@@ -542,7 +565,7 @@ export class DashboardPanel {
           content.push({
             kind: "row",
             label: b.name,
-            value: `${b.source} · auto · no key needed`,
+            value: `${b.source} · automatic refresh · no key needed`,
             dot: "ok",
             tooltip: b.description,
           });
@@ -908,28 +931,49 @@ export class DashboardPanel {
       for (const bench of benches) {
         // What the benchmark measures, and WHEN these scores are from. The date used to live in
         // the tooltip only, so a months-old leaderboard read as today's truth until you hovered.
-        const { provenanceLabel } = require("./benchmarkTables");
+        const { provenanceLabel, selectionExplanation, trustedBenchmarkSource } = require("./benchmarkTables");
         const asOf = provenanceLabel(bench.published?.retrieved);
+        const source = trustedBenchmarkSource(bench.url);
+        const scoreReceipt = trustedBenchmarkSource(bench.score_url ?? "");
+        const methodology = trustedBenchmarkSource(bench.methodology_url ?? "");
+        const scoreMeaning = bench.score_range && bench.higher_is_better !== undefined
+          ? `${bench.metric} ${bench.score_range[0]}–${bench.score_range[1]}; ${
+            bench.higher_is_better ? "higher" : "lower"
+          } is better`
+          : "score semantics unavailable";
         content.push({
           kind: "row",
           label: bench.name,
-          value: `${bench.description} · ${asOf}`,
+          value: `${bench.description} · ${scoreMeaning} · ${asOf}`,
           tooltip: `${bench.url} · ${asOf}`,
+          actions: [
+            ...(source ? [{ type: "openBenchmarkSource", label: "Open evaluation",
+              data: { benchmarkId: bench.id, sourceRole: "evaluation" } }] : []),
+            ...(scoreReceipt ? [{ type: "openBenchmarkSource", label: "Score receipt",
+              data: { benchmarkId: bench.id, sourceRole: "score" } }] : []),
+            ...(methodology ? [{ type: "openBenchmarkSource", label: "Methodology",
+              data: { benchmarkId: bench.id, sourceRole: "methodology" } }] : []),
+          ],
         });
         const rows: string[][] = [];
         for (const e of (bench.published?.entries ?? []).slice(0, 5)) {
-          rows.push([e.model_name, e.score.toFixed(3)]);
+          const authority = selectionExplanation(e.status ?? "unmapped");
+          const freshness = bench.published?.freshness === "current"
+            ? "" : ` ${selectionExplanation("stale")}`;
+          rows.push([e.model_name, e.score.toFixed(3), `${authority}${freshness}`]);
         }
         for (const [modelId, score] of Object.entries(bench.measured)) {
           rows.push([modelId, score.toFixed(3)]);
         }
         if (rows.length) {
-          content.push({ kind: "table", headers: ["Best models", "Score"], rows });
+          content.push({ kind: "table", headers: ["Models", "Score", "Eligibility"], rows });
         } else {
           content.push({
             kind: "row",
             label: "  ↳ scores",
-            value: "no live scores yet — add this source's key in Configuration → Benchmark data",
+            value: bench.refresh_supported && bench.source_auth
+              ? `${selectionExplanation("missing")} Configure ${bench.source_auth} in Configuration → Benchmark data.`
+              : `${selectionExplanation("missing")} Current data unavailable; this source is informational only.`,
           });
         }
       }
@@ -955,14 +999,14 @@ export class DashboardPanel {
     for (const info of Object.values(this.modelsData.providers)) {
       for (const name of Object.keys(info.models)) knownModels.add(name);
     }
-    const top = bench.recommendations
-      .filter((r) => knownModels.has(r.model_id))
-      .slice(0, 3);
+    const eligible = bench.recommendations.filter((r) => knownModels.has(r.model_id));
+    const excluded = bench.recommendations.filter((r) => !knownModels.has(r.model_id));
+    const top = eligible.slice(0, 3);
     if (!top.length) {
       return {
         id: "recommendations",
         title: "Recommendations",
-        content: [{ kind: "empty", message: "No matching models in registry" }],
+        content: [{ kind: "empty", message: "No matching models in registry; unmapped identities are excluded, never guessed." }],
       };
     }
     const tableRows = top.map((r) => [
@@ -972,16 +1016,24 @@ export class DashboardPanel {
       r.cost_per_million != null ? `$${r.cost_per_million.toFixed(2)}` : "—",
       r.quality_per_dollar != null ? r.quality_per_dollar.toFixed(3) : "—",
     ]);
+    const content: CellContent[] = [
+      {
+        kind: "table",
+        headers: ["Model", "Score", "Source", "$/M", "Quality/$"],
+        rows: tableRows,
+      },
+    ];
+    if (excluded.length) {
+      const { selectionExplanation } = require("./benchmarkTables");
+      content.push({
+        kind: "row", label: "Excluded",
+        value: `${excluded.map((item) => item.model_id).join(", ")} — ${selectionExplanation("unmapped")}`,
+      });
+    }
     return {
       id: "recommendations",
       title: `Recommendations (${bench.name})`,
-      content: [
-        {
-          kind: "table",
-          headers: ["Model", "Score", "Source", "$/M", "Quality/$"],
-          rows: tableRows,
-        },
-      ],
+      content,
     };
   }
 

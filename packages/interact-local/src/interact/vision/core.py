@@ -12,7 +12,9 @@ import litellm
 import openai
 from pydantic import BaseModel
 
+from interact.agents.providers import MEDIA_PROVIDERS
 from interact.config import Config
+from interact.criteria import Criteria
 from interact.models import ModelRole, supports_native_video_inline
 from interact.processes import run_isolated_process
 from interact.runtime import breaker
@@ -308,6 +310,7 @@ async def _vision_completion(
     max_tokens: int | None = None,
     response_format: type[BaseModel] | dict[str, Any] | None = None,
     usage_config: Config | None = None,
+    _dispatch_state: list[bool] | None = None,
 ) -> VLMResult:
     _, provider, _, _ = litellm.get_llm_provider(model)
     kwargs: dict[str, Any] = {
@@ -335,6 +338,8 @@ async def _vision_completion(
 
     t0 = time.monotonic()
     try:
+        if _dispatch_state is not None:
+            _dispatch_state.append(True)
         with _provider_faults(model):
             response: Any = await litellm.acompletion(**kwargs)
     except (asyncio.CancelledError, KeyboardInterrupt):
@@ -411,6 +416,7 @@ async def _api_media_completion(
     max_tokens: int | None | _Unset,
     response_format: type[BaseModel] | dict[str, Any] | None,
     model: str,
+    _dispatch_state: list[bool] | None = None,
 ) -> VLMResult:
     if not litellm.validate_environment(model)["keys_in_environment"]:
         return VLMResult(
@@ -421,6 +427,9 @@ async def _api_media_completion(
             provider=model.split("/", 1)[0] if "/" in model else "",
             billing="none",
             incremental_cost_usd=0,
+            dispatch_eligible=False,
+            dispatch_attempted=False,
+            dispatch_status="unavailable",
         )
     tok: int | None = config.max_tokens if isinstance(max_tokens, _Unset) else max_tokens
     media_parts, sent_native_video = await _build_media_content(media, model, config)
@@ -429,6 +438,7 @@ async def _api_media_completion(
         result = await _vision_completion(
             messages, model, max_tokens=tok, response_format=response_format,
             usage_config=config,
+            _dispatch_state=_dispatch_state,
         )
     except (
         litellm.exceptions.BadRequestError,
@@ -443,6 +453,7 @@ async def _api_media_completion(
         result = await _vision_completion(
             messages, model, max_tokens=tok, response_format=response_format,
             usage_config=config,
+            _dispatch_state=_dispatch_state,
         )
         result.video_sampled = any(item.media_type == "video" for item in media) or None
         return result
@@ -468,11 +479,12 @@ async def _api_media_with_fallback(
     role: ModelRole,
     requested_model: str,
     resolved_model: str,
+    _dispatch_state: list[bool] | None = None,
 ) -> VLMResult:
     """One breaker-aware API chain shared by every caller, after at most one session pass."""
     primary = resolved_model or config.resolve_model(role, requested_model, breaker)
     chain = config.chain_for(role)
-    fallbacks = [
+    fallbacks = [] if requested_model else [
         candidate
         for candidate in chain.preferences
         if candidate.id != primary
@@ -494,6 +506,7 @@ async def _api_media_with_fallback(
                 max_tokens,
                 response_format,
                 candidate,
+                _dispatch_state,
             )
             result = result.validated(response_format)
             if index:
@@ -528,6 +541,7 @@ async def analyze_media(
     model: str = "",
     role: ModelRole = "image",
     _api_model: str = "",
+    _dispatch_state: list[bool] | None = None,
 ) -> VLMResult:
     """Analyze media through subscription sessions or LiteLLM under one hard billing policy.
 
@@ -536,6 +550,37 @@ async def analyze_media(
     CLI use its configured/default model and resolves the role model only if an API path is allowed.
     """
     _compile_response_schema(response_format)
+    criterion_text = model if model.startswith(("cap.", "aa.", "gui.", "oc.", "price.")) else (
+        config.media_criteria if not model else ""
+    )
+    if criterion_text:
+        criterion = Criteria.parse(criterion_text)
+        criterion.validate_weights(config.media_criteria_weights)
+        confirmed = set(config.media_session_no_extra_usage_confirmed_for)
+        session_providers = [
+            MEDIA_PROVIDERS[name]
+            for name in config.media_provider_order
+            if name in confirmed
+            and MEDIA_PROVIDERS[name].available()
+            and MEDIA_PROVIDERS[name].supports_session_media(role)
+        ] if config.media_sessions_enabled() else []
+        selected = criterion.choose(
+            available_only=False,
+            runnable=lambda candidate: any(
+                provider.can_run(candidate, {}) for provider in session_providers
+            ),
+            weights=config.media_criteria_weights,
+        ) if session_providers else None
+        if selected is None and config.media_api_enabled():
+            selected = criterion.choose(
+                available_only=True, weights=config.media_criteria_weights,
+            )
+        if selected is None:
+            raise RuntimeError(
+                f"no candidate qualifies after capability, transport, and billing filters: "
+                f"{criterion.explain(available_only=False, runnable=lambda candidate: any(provider.can_run(candidate, {}) for provider in session_providers))}"
+            )
+        model = selected.id
     MediaItem.validate_collection(
         media,
         max_items=config.media_max_items,
@@ -560,6 +605,7 @@ async def analyze_media(
             role=role,
             requested_model=model,
             resolved_model=_api_model,
+            _dispatch_state=_dispatch_state,
         )
 
     sessions_enabled = config.media_sessions_enabled()
@@ -572,7 +618,7 @@ async def analyze_media(
     if sessions_enabled:
         try:
             result = await subscription_media_completion(
-                media, context, config, prompt, response_format, model
+                media, context, config, prompt, response_format, model, _dispatch_state
             )
             return result
         except (asyncio.CancelledError, KeyboardInterrupt):
@@ -594,6 +640,7 @@ async def analyze_media(
         role=role,
         requested_model=model,
         resolved_model=_api_model,
+        _dispatch_state=_dispatch_state,
     )
 
 

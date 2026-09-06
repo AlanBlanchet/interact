@@ -9,6 +9,7 @@ or result hierarchy; generic agent providers are not media-capable by inheritanc
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import stat
@@ -17,6 +18,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import jsonschema
 from jsonschema.exceptions import SchemaError, ValidationError
@@ -113,6 +115,7 @@ async def _sample_video(
     fps: int,
     frame_cap: int,
     deadline: float,
+    _truncation: list[bool] | None = None,
 ) -> list[tuple[Path, float]]:
     source = item.stage(stage / f"source-{media_index:03d}.{item.extension()}")
     pattern = stage / f"sample-{media_index:03d}-%06d.jpg"
@@ -133,6 +136,8 @@ async def _sample_video(
         if probe_code:
             raise RuntimeError("video frame sampling failed")
         duration = float(probe_out.decode(errors="replace").strip())
+        if _truncation is not None:
+            _truncation.append(math.ceil(duration * fps) > max(1, frame_cap))
         try:
             selected_indices = video_sample_indices(duration, fps, frame_cap)
         except ValueError as exc:
@@ -173,6 +178,8 @@ async def sample_video_frames(
     *,
     fps: int,
     frame_cap: int,
+    _truncation: list[bool] | None = None,
+    _timestamp_basis: list[Literal["source_pts", "derived_cadence"]] | None = None,
 ) -> list[tuple[bytes, float]]:
     """Sample an API/session clip through the same private, cancellable staging boundary."""
     deadline = time.monotonic() + config.media_timeout
@@ -185,7 +192,10 @@ async def sample_video_frames(
             fps=max(1, fps),
             frame_cap=frame_cap if frame_cap > 0 else 12,
             deadline=deadline,
+            _truncation=_truncation,
         )
+        if _timestamp_basis is not None:
+            _timestamp_basis.append("derived_cadence")
         return [(path.read_bytes(), timestamp) for path, timestamp in paths]
 
 
@@ -347,6 +357,7 @@ async def subscription_media_completion(
     prompt: str | None,
     response_format: type[BaseModel] | dict | None,
     explicit_model: str,
+    _dispatch_state: list[bool] | None = None,
 ) -> VLMResult:
     """Try configured subscription providers in order and return the first valid final result."""
     schema = _compile_response_schema(response_format)
@@ -454,6 +465,8 @@ async def subscription_media_completion(
             output_tokens = 0
             reported_cost = None
             try:
+                if _dispatch_state is not None:
+                    _dispatch_state.append(True)
                 events = await provider.run_media_process(
                     argv,
                     cwd=stage,

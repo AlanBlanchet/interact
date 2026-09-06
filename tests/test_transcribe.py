@@ -29,6 +29,8 @@ class _FakeConfig:
         self.media_max_items = 16
         self.media_max_total_bytes = 50 * 1024 * 1024
         self.media_max_context_chars = 32 * 1024
+        self.media_criteria = ""
+        self.media_criteria_weights = ""
 
     def refresh(self):
         return self
@@ -146,7 +148,7 @@ async def test_transcribe_query_with_audio_chat_model_hears_the_clip(monkeypatch
     monkeypatch.setattr(srv.vlm, "config", fake_config)
     captured: dict = {}
 
-    async def api(media, context, config, prompt, max_tokens, response_format, model):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         captured.update(
             media_type=media[0].media_type,
             query=prompt,
@@ -181,7 +183,9 @@ async def test_transcribe_query_with_transcription_only_model_answers_over_trans
     async def fake_transcribe(data, *, model, mime_type="audio/mpeg", config=None):
         return VLMResult(text="quarterly revenue grew 12 percent", elapsed=0.3, model=model)
 
-    async def session(media, context, config, prompt=None, *args, **kwargs):
+    async def session(
+        media, context, config, prompt, response_format, explicit_model, _dispatch_state,
+    ):
         captured.update(
             media=media,
             context=context,

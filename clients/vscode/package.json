@@ -69,6 +69,16 @@
           "enum": ["session_only", "api_allowed"],
           "description": "Session only prevents interact's metered API fallback; vendor CLI account credits are separate."
         },
+        "interact.media.criteria": {
+          "type": "string",
+          "default": "",
+          "description": "Capability and normalized benchmark thresholds models must clear; missing, stale, or unmapped values exclude a model rather than counting as zero."
+        },
+        "interact.media.criteriaWeights": {
+          "type": "string",
+          "default": "",
+          "description": "Optional weights over normalized unit-safe criteria only; raw accuracy, index, latency, and price units cannot be combined."
+        },
         "interact.media.noExtraUsageConfirmedFor": {
           "type": "string",
           "default": "",

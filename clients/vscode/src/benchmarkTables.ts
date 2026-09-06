@@ -11,8 +11,16 @@ import * as os from "os";
 import * as path from "path";
 
 export interface LiveTable {
+  source_url?: string;
   retrieved?: string;
-  entries: { model_name: string; score: number }[];
+  freshness?: "current" | "stale" | "unknown";
+  entries: {
+    model_name: string;
+    model_id?: string | null;
+    score: number;
+    normalized_score?: number | null;
+    status?: "eligible" | "unverified" | "missing" | "not_applicable" | "approximate" | "unmapped";
+  }[];
 }
 
 export function tablesPath(): string {
@@ -36,7 +44,12 @@ export function readLiveTables(): Record<string, LiveTable> {
 export function mergeLiveTables(bundled: any, live: Record<string, LiveTable>): any {
   // An empty live table is not an answer — an upstream can return 200 with zero rows, and
   // letting that win would blank a row that at least had an honest, dated snapshot in it.
-  const usable = Object.entries(live).filter(([, t]) => t?.entries?.length);
+  const usable = Object.entries(live).filter(([id, t]) =>
+    t?.entries?.length && !(
+      id === "mmmu_pro" && t.source_url === "https://mmmu-benchmark.github.io/"
+      || id === "video_mme" && t.source_url === "https://video-mme.github.io/"
+    ),
+  );
   if (!usable.length) return bundled;
   const byId = Object.fromEntries(usable);
   return {
@@ -65,4 +78,26 @@ function isFresher(fetched: string | undefined, bundled: string | undefined): bo
  *  defect: the number looks like today's truth until you hover it. */
 export function provenanceLabel(retrieved: string | undefined): string {
   return retrieved ? `as of ${retrieved}` : "date unknown";
+}
+
+export function selectionExplanation(status: string): string {
+  const labels: Record<string, string> = {
+    eligible: "Eligible for routing.",
+    unverified: "Unverified benchmark value; visible for context but excluded from routing.",
+    missing: "Missing benchmark value; excluded, never imputed as zero.",
+    not_applicable: "Not applicable to this model capability; excluded.",
+    approximate: "Approximate benchmark value; excluded from routing.",
+    stale: "Stale benchmark value; excluded until refreshed.",
+    unmapped: "Unmapped model identity; excluded to prevent a wrong-provider match.",
+  };
+  return labels[status] ?? "Unsupported benchmark status; excluded.";
+}
+
+export function trustedBenchmarkSource(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
 }

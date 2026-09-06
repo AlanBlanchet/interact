@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from interact.data import PackageData  # noqa: E402
+from interact.benchmarks.upstream import UpstreamSource  # noqa: E402
 from interact.models import Benchmark, Model  # noqa: E402
 
 # Benchmark scores come from published online leaderboards; optional measured scores
@@ -44,15 +45,20 @@ for bench in Benchmark.registry():
             "category": bench.category,
             "source": bench.source,
             "source_auth": bench.source_auth,
+            "requires_auth": bench.requires_auth,
             "url": bench.url,
+            "score_url": bench.score_url or (pub.source_url if pub else ""),
+            "methodology_url": bench.methodology_url,
             "metric": bench.metric,
+            "score_range": bench.score_range,
+            "higher_is_better": bench.higher_is_better,
+            "refresh_supported": bool(UpstreamSource.for_benchmark(bench.id)),
             "published": {
                 "source_url": pub.source_url,
                 "retrieved": pub.retrieved,
-                "lib_recommendation": pub.lib_recommendation,
-                "entries": [
-                    {"model_name": e.model_name, "score": e.score} for e in pub.entries
-                ],
+                "lib_recommendation": pub.lib_recommendation if lib_rec_model else None,
+                "freshness": pub.freshness,
+                "entries": [e.model_dump(mode="json") for e in pub.entries],
             }
             if pub is not None
             else None,

@@ -1,8 +1,10 @@
 """Refresh the live external data the front ends read.
 
 Three sources age the same way: the model catalog (prices, from OpenRouter/litellm), the overall
-benchmark board (Artificial Analysis), and the per-benchmark leaderboard tables (OpenVLM and
-friends — the vision / video / audio numbers AA does not publish). Each keeps a TTL cache on a
+benchmark board (the current Artificial Analysis API adapter), and the per-benchmark leaderboard
+tables (OpenVLM and friends). The current Artificial Analysis API adapter does not expose
+per-benchmark MMMU Pro; Artificial Analysis also publishes evaluation results on its public web
+pages. Each runtime source keeps a TTL cache on a
 fixed path under ``~/.interact/out/`` that the CLI dashboard AND the VS Code extension READ
 directly.
 

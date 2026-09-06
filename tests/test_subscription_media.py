@@ -27,6 +27,7 @@ from jsonschema.exceptions import SchemaError
 from PIL import Image
 
 import interact.processes as isolated_processes
+import interact.benchmark_tables as benchmark_tables
 import interact.server.vlm as server_vlm
 import interact.vision.core as vision
 import interact.vision.session as vision_session
@@ -39,7 +40,9 @@ from interact.agents.providers import (
     _MediaResult,
 )
 from interact.config import Config
-from interact.models import CircuitBreaker, Model, ModelCapability, ModelChain
+from interact.benchmarks.published import PublishedEntry, PublishedTable
+from interact.benchmarks.upstream import GroundingLeaderboardJS, UpstreamSource
+from interact.models import Benchmark, CircuitBreaker, Model, ModelCapability, ModelChain
 from interact.vision import MediaItem, analyze_media, transcribe_audio
 from interact.vision.core import VLMResult
 
@@ -298,6 +301,32 @@ async def test_invalid_json_schema_fails_before_session_preflight(monkeypatch) -
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("criterion", "configured"),
+    [("cap.vlm and gui.screenspot >", False), ("cap.video and aa.intelligence > 10000", True)],
+    ids=["malformed", "no-candidate"],
+)
+async def test_invalid_or_empty_media_criteria_never_start_a_provider(
+    monkeypatch, criterion: str, configured: bool,
+) -> None:
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("ineligible selection reached provider authentication")
+
+    monkeypatch.setattr(ClaudeCodeProvider, "subscription_authenticated", forbidden)
+    config = Config(
+        media_backend="session", media_billing="session_only",
+        media_criteria=criterion if configured else "",
+        media_provider_order=("claude",),
+        media_session_no_extra_usage_confirmed_for=("claude",),
+    )
+    with pytest.raises((ValueError, RuntimeError), match="criterion|qualif|candidate"):
+        await analyze_media(
+            [MediaItem.from_bytes(_png())], "context", config,
+            model="" if configured else criterion, role="video",
+        )
+
+
 def test_failure_diagnostics_are_bounded_without_following_symlinks(
     media_output_root: Path, monkeypatch
 ) -> None:
@@ -388,10 +417,10 @@ async def test_auto_session_fallback_keeps_the_breaker_resolved_api_model(monkey
     local_breaker.trip(primary.id)
     seen: list[str] = []
 
-    async def session(*args, **kwargs):
+    async def session(media, context, config, prompt, response_format, explicit_model, _dispatch_state):
         raise RuntimeError("session unavailable")
 
-    async def api(media, context, config, prompt, max_tokens, response_format, model):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         seen.append(model)
         return VLMResult(text="api", elapsed=0, backend="api", billing="metered_api")
 
@@ -427,7 +456,7 @@ async def test_direct_interaction_sequence_uses_the_central_api_fallback_chain(
     local_breaker = CircuitBreaker()
     calls: list[str] = []
 
-    async def api(media, context, config, prompt, max_tokens, response_format, model):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         calls.append(model)
         if model == primary.id:
             raise RuntimeError("primary failed")
@@ -464,11 +493,11 @@ async def test_session_runs_once_before_an_api_only_fallback_chain(monkeypatch) 
     local_breaker = CircuitBreaker()
     calls: list[str] = []
 
-    async def session(*args, **kwargs):
+    async def session(media, context, config, prompt, response_format, explicit_model, _dispatch_state):
         calls.append("session")
         raise RuntimeError("sessions exhausted")
 
-    async def api(media, context, config, prompt, max_tokens, response_format, model):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         calls.append(model)
         if model == primary.id:
             raise RuntimeError("primary API failed")
@@ -533,10 +562,12 @@ async def test_session_credit_attestation_fails_closed_before_dispatch(
 ) -> None:
     calls: list[str] = []
 
-    async def forbidden_session(*args, **kwargs):
+    async def forbidden_session(
+        media, context, config, prompt, response_format, explicit_model, _dispatch_state,
+    ):
         raise AssertionError("unattested session reached a subscription CLI")
 
-    async def api(*args, **kwargs):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         calls.append("api")
         return VLMResult(text="api", elapsed=0, backend="api", billing="metered_api")
 
@@ -584,13 +615,13 @@ async def test_backend_and_billing_policy_selects_only_permitted_transport(
 ) -> None:
     calls: list[str] = []
 
-    async def session(*args, **kwargs):
+    async def session(media, context, config, prompt, response_format, explicit_model, _dispatch_state):
         calls.append("session")
         if session_fails:
             raise RuntimeError("session unavailable")
         return VLMResult(text="session", elapsed=0, backend="session")
 
-    async def api(*args, **kwargs):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         calls.append("api")
         return VLMResult(text="api", elapsed=0, backend="api", billing="metered_api")
 
@@ -610,10 +641,10 @@ async def test_backend_and_billing_policy_selects_only_permitted_transport(
 async def test_session_failure_never_falls_through_when_api_is_not_permitted(
     monkeypatch, backend, billing
 ) -> None:
-    async def session(*args, **kwargs):
+    async def session(media, context, config, prompt, response_format, explicit_model, _dispatch_state):
         raise RuntimeError("session unavailable")
 
-    async def forbidden(*args, **kwargs):
+    async def forbidden(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         raise AssertionError("API fallback violated the media policy")
 
     monkeypatch.setattr(vision, "subscription_media_completion", session)
@@ -1079,7 +1110,7 @@ def test_session_media_capability_is_positive_for_claude() -> None:
 async def test_api_schema_invalid_primary_falls_through_to_valid_fallback(monkeypatch) -> None:
     calls: list[str] = []
 
-    async def api(media, context, config, prompt, max_tokens, response_format, model):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         calls.append(model)
         text = "not-json" if model == "openai/example-primary" else AgentEvent(
             kind="done", text="ok"
@@ -1113,6 +1144,253 @@ async def test_api_schema_invalid_primary_falls_through_to_valid_fallback(monkey
 
     assert calls == [primary.id, fallback.id]
     assert result.model == fallback.id
+
+
+@pytest.mark.asyncio
+async def test_explicit_media_pin_failure_never_dispatches_a_fallback(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
+        calls.append(model)
+        raise RuntimeError("pinned model failed")
+
+    primary = Model(
+        id="openai/example-primary", provider="openai", capabilities={ModelCapability.VLM}
+    )
+    fallback = Model(
+        id="openai/example-fallback", provider="openai", capabilities={ModelCapability.VLM}
+    )
+    monkeypatch.setattr(vision, "_api_media_completion", api)
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    monkeypatch.setattr(
+        Config,
+        "chain_for",
+        lambda self, role: ModelChain(role="image", preferences=[primary, fallback]),
+    )
+    cfg = Config(media_backend="api", media_billing="api_allowed")
+
+    with pytest.raises(RuntimeError, match="pinned model failed"):
+        await analyze_media(
+            [MediaItem.from_bytes(_png())], "context", cfg, model=primary.id, role="image"
+        )
+
+    assert calls == [primary.id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("weights", "expected"),
+    [("aa.mmmu_pro=0.8,gui.screenspot=0.2", "openai/visual-a"),
+     ("aa.mmmu_pro=0.2,gui.screenspot=0.8", "openai/visual-b")],
+)
+async def test_normalized_weights_flip_the_actual_configured_media_route(
+    monkeypatch, weights: str, expected: str,
+) -> None:
+    first = Model(id="openai/visual-a", provider="openai", capabilities={ModelCapability.VLM})
+    second = Model(id="openai/visual-b", provider="openai", capabilities={ModelCapability.VLM})
+    scores = {"mmmu_pro": (0.9, 0.6), "screenspot": (0.5, 0.95)}
+    monkeypatch.setattr(Model, "catalog", lambda: [first, second])
+    monkeypatch.setattr(Model, "_registry", [first, second])
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    monkeypatch.setattr(
+        "interact.criteria.benchmark_tables.load_tables",
+        lambda: {
+            benchmark_id: PublishedTable(
+                source_url="https://example.test", retrieved="2026-09-06", freshness="current",
+                entries=[PublishedEntry(model_name=first.id.split("/", 1)[1], model_id=first.id,
+                                        score=values[0], status="eligible"),
+                         PublishedEntry(model_name=second.id.split("/", 1)[1], model_id=second.id,
+                                        score=values[1], status="eligible")],
+            )
+            for benchmark_id, values in scores.items()
+        },
+    )
+    calls: list[str] = []
+
+    async def api(
+        media, context, config, prompt, max_tokens, response_format, model, _dispatch_state,
+    ):
+        calls.append(model)
+        return VLMResult(text="selected", elapsed=0, model=model, backend="api")
+
+    monkeypatch.setattr(vision, "_api_media_completion", api)
+    await analyze_media(
+        [MediaItem.from_bytes(_png())], "context",
+        Config(media_backend="api", media_billing="api_allowed", media_criteria="cap.vlm",
+               media_criteria_weights=weights),
+        role="image",
+    )
+    assert calls == [expected]
+
+
+@pytest.mark.asyncio
+async def test_refreshed_published_table_changes_actual_media_dispatch(monkeypatch) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/refreshed_published_table.json").read_text()
+    )
+    models = [
+        Model(id=model_id, provider="openai", capabilities={ModelCapability.VLM})
+        for model_id in ("openai/visual-a", "openai/visual-b")
+    ]
+    monkeypatch.setattr(Model, "catalog", lambda: models)
+    monkeypatch.setattr(Model, "_registry", models)
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    calls: list[str] = []
+
+    async def api(
+        media, context, config, prompt, max_tokens, response_format, model, _dispatch_state,
+    ):
+        calls.append(model)
+        return VLMResult(text="selected", elapsed=0, model=model, backend="api")
+
+    monkeypatch.setattr(vision, "_api_media_completion", api)
+    config = Config(
+        media_backend="api", media_billing="api_allowed", media_criteria="cap.vlm",
+        media_criteria_weights="aa.mmmu_pro=1",
+    )
+    for revision in ("before", "after"):
+        table = PublishedTable.model_validate(fixture[revision])
+        monkeypatch.setattr(
+            "interact.criteria.benchmark_tables.load_tables", lambda table=table: {"mmmu_pro": table},
+        )
+        await analyze_media([MediaItem.from_bytes(_png())], "context", config, role="image")
+
+    assert calls == ["openai/visual-a", "openai/visual-b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["missing", "stale", "approximate", "unverified"])
+async def test_shared_non_authoritative_table_stops_before_media_dispatch(
+    monkeypatch, state: str,
+) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/refreshed_published_table.json").read_text()
+    )
+    model = Model(id="openai/visual-a", provider="openai", capabilities={ModelCapability.VLM})
+    monkeypatch.setattr(Model, "catalog", lambda: [model])
+    monkeypatch.setattr(Model, "_registry", [model])
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    table = (
+        PublishedTable(
+            source_url="https://example.test", retrieved="2026-09-06", freshness="current",
+            entries=[PublishedEntry(model_name="visual-a", model_id=model.id, score=0.99)],
+        )
+        if state == "unverified"
+        else PublishedTable.model_validate(fixture["excluded"][state])
+    )
+    monkeypatch.setattr(
+        "interact.criteria.benchmark_tables.load_tables", lambda: {"mmmu_pro": table},
+    )
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("non-authoritative score reached provider")
+
+    monkeypatch.setattr(vision, "_api_media_completion", forbidden)
+    with pytest.raises(RuntimeError, match="no candidate qualifies"):
+        await analyze_media(
+            [MediaItem.from_bytes(_png())], "context",
+            Config(media_backend="api", media_billing="api_allowed",
+                   media_criteria="aa.mmmu_pro > 0.5"),
+            role="image",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("producer_status", "dispatches"),
+    [("approximate", False), ("unverified", False), ("eligible", True)],
+)
+async def test_source_authority_survives_cache_recommendation_and_media_dispatch(
+    monkeypatch, producer_status: str, dispatches: bool,
+) -> None:
+    model = Model(id="openai/exact", provider="openai", capabilities={ModelCapability.VLM})
+    monkeypatch.setattr(Model, "catalog", lambda: [model])
+    monkeypatch.setattr(Model, "_registry", [model])
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    source = GroundingLeaderboardJS(
+        id="authority-test", name="authority test", url="https://example.test/table",
+        benchmark_id="mmmu_pro",
+    )
+    produced = PublishedTable(
+        source_url=source.url, retrieved="2026-09-06", freshness="current",
+        entries=[PublishedEntry(model_name="exact", score=0.91, status=producer_status)],
+    )
+    monkeypatch.setattr(GroundingLeaderboardJS, "fetch", lambda self: produced)
+    monkeypatch.setattr(UpstreamSource, "_registry", [source])
+
+    loaded = benchmark_tables.load_tables(refresh=True)["mmmu_pro"]
+    benchmark = Benchmark.by_id("mmmu_pro").model_copy(update={"published": loaded})
+    assert bool(benchmark.recommend(available_only=False)) is dispatches
+    calls: list[str] = []
+
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
+        calls.append(model)
+        return VLMResult(text="selected", elapsed=0, model=model, backend="api")
+
+    monkeypatch.setattr(vision, "_api_media_completion", api)
+    config = Config(media_backend="api", media_billing="api_allowed",
+                    media_criteria="aa.mmmu_pro > 0.5")
+    if dispatches:
+        await analyze_media([MediaItem.from_bytes(_png())], "context", config, role="image")
+    else:
+        with pytest.raises(RuntimeError, match="no candidate qualifies"):
+            await analyze_media([MediaItem.from_bytes(_png())], "context", config, role="image")
+    assert bool(calls) is dispatches
+
+
+@pytest.mark.asyncio
+async def test_expired_cached_table_reloads_stale_and_stops_before_dispatch(monkeypatch) -> None:
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/refreshed_published_table.json").read_text()
+    )
+    model = Model(id="openai/visual-b", provider="openai", capabilities={ModelCapability.VLM})
+    monkeypatch.setattr(Model, "catalog", lambda: [model])
+    monkeypatch.setattr(Model, "_registry", [model])
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    now = 2_000_000_000.0
+    monkeypatch.setattr(benchmark_tables.time, "time", lambda: now)
+    benchmark_tables._CACHE.write({
+        "schema_version": 1,
+        "fetched_at": now - benchmark_tables.TTL_SECONDS - 1,
+        "tables": {"mmmu_pro": fixture["after"]},
+    })
+
+    def unavailable():
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr("interact.benchmarks.upstream.fetch_all", unavailable)
+    loaded = benchmark_tables.load_tables()
+    assert loaded["mmmu_pro"].freshness == "stale"
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("expired score reached provider")
+
+    monkeypatch.setattr(vision, "_api_media_completion", forbidden)
+    with pytest.raises(RuntimeError, match="no candidate qualifies"):
+        await analyze_media(
+            [MediaItem.from_bytes(_png())], "context",
+            Config(media_backend="api", media_billing="api_allowed",
+                   media_criteria="aa.mmmu_pro > 0.5"),
+            role="image",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weights", ["price.in=1", "aa.mmmu_pro=-1", "aa.mmmu_pro=nan"])
+async def test_invalid_or_raw_unit_weights_stop_before_provider(monkeypatch, weights: str) -> None:
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("invalid weights reached provider")
+
+    monkeypatch.setattr(ClaudeCodeProvider, "subscription_authenticated", forbidden)
+    with pytest.raises(ValueError, match="weight|normalized"):
+        await analyze_media(
+            [MediaItem.from_bytes(_png())], "context",
+            Config(media_backend="session", media_billing="session_only",
+                   media_criteria="cap.vlm", media_criteria_weights=weights,
+                   media_provider_order=("claude",),
+                   media_session_no_extra_usage_confirmed_for=("claude",)),
+            role="image",
+        )
 
 
 @pytest.mark.asyncio
@@ -1347,7 +1625,9 @@ async def test_server_screenshot_job_reaches_session_seam_without_any_litellm_en
 ) -> None:
     calls: list[str] = []
 
-    async def session(media, context, config, prompt, response_format, explicit_model):
+    async def session(
+        media, context, config, prompt, response_format, explicit_model, _dispatch_state,
+    ):
         calls.append(media[0].media_type)
         return VLMResult(
             text="session saw screenshot",
@@ -1383,10 +1663,12 @@ async def test_audio_media_uses_the_retained_api_transport_even_with_visual_sess
 ) -> None:
     calls: list[str] = []
 
-    async def forbidden_session(*args, **kwargs):
+    async def forbidden_session(
+        media, context, config, prompt, response_format, explicit_model, _dispatch_state,
+    ):
         raise AssertionError("audio must not be sent to a visual subscription session")
 
-    async def api(media, *args, **kwargs):
+    async def api(media, context, config, prompt, max_tokens, response_format, model, _dispatch_state):
         calls.append(media[0].media_type)
         return VLMResult(
             text="heard directly",
@@ -1782,11 +2064,15 @@ async def test_untrusted_media_context_is_bounded_and_json_framed_before_dispatc
 ) -> None:
     captured: dict[str, str] = {}
 
-    async def fake_session(media, context, config, prompt, response_format, explicit_model):
+    async def fake_session(
+        media, context, config, prompt, response_format, explicit_model, _dispatch_state,
+    ):
         captured["context"] = context
         return VLMResult(text="ok", elapsed=0, backend="session", provider="claude")
 
-    async def fake_api(media, context, config, prompt, max_tokens, response_format, model):
+    async def fake_api(
+        media, context, config, prompt, max_tokens, response_format, model, _dispatch_state,
+    ):
         captured["context"] = context
         return VLMResult(text="ok", elapsed=0, backend="api", provider="openai")
 

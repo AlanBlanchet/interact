@@ -173,9 +173,14 @@ export interface Benchmark {
   category?: "image" | "gui_grounding" | "video" | "audio";
   source?: string;
   source_auth?: string;
+  requires_auth?: boolean;
   namespace?: string;
   metric?: string;
   url?: string;
+  score_url?: string;
+  methodology_url?: string;
+  score_range?: [unknown, unknown] | null;
+  higher_is_better?: boolean | null;
   published?: PublishedTable | null;
 }
 /**
@@ -186,6 +191,7 @@ export interface PublishedTable {
   retrieved: string;
   lib_recommendation?: string | null;
   entries?: PublishedEntry[];
+  freshness?: "current" | "stale" | "unknown";
 }
 /**
  * A single published benchmark score for a model.
@@ -195,7 +201,10 @@ export interface PublishedTable {
  */
 export interface PublishedEntry {
   model_name: string;
+  model_id?: string | null;
   score: number;
+  normalized_score?: number | null;
+  status?: "eligible" | "unverified" | "missing" | "not_applicable" | "approximate" | "unmapped";
 }
 /**
  * A ranked model recommendation for a specific benchmark.

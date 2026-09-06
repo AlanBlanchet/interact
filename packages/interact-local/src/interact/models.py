@@ -317,11 +317,11 @@ class Model(RegistryMixin, BaseModel):
 
     @classmethod
     def match_published(cls, name: str) -> "Model | None":
-        """Case-insensitive substring match of a published model name against the registry."""
-        needle = name.lower()
+        """Match only an exact normalized model identity; substrings silently misroute models."""
+        needle = re.sub(r"[^a-z0-9]", "", name.lower())
         for m in cls.registry():
-            bare = m.id.split("/", 1)[-1].lower()
-            if needle in bare or bare in needle:
+            bare = re.sub(r"[^a-z0-9]", "", m.id.split("/", 1)[-1].lower())
+            if needle == bare:
                 return m
         return None
 
@@ -718,6 +718,7 @@ class Benchmark(RegistryMixin, BaseModel):
     # Surfaced in the config so the user can supply an optional key per source — no CLI needed.
     source: str = ""
     source_auth: str = ""
+    requires_auth: bool = False
     #: The variable namespace this benchmark's score is addressed by — "aa" for Artificial
     #: Analysis, "gui" for the grounding leaderboard, and so on. A NAMESPACE IS THE SOURCE: a
     #: bare `screenspot` hides who measured it, and two leaderboards rarely agree. Derived from
@@ -726,6 +727,10 @@ class Benchmark(RegistryMixin, BaseModel):
     namespace: str = ""
     metric: str = "accuracy"
     url: str = ""
+    score_url: str = ""
+    methodology_url: str = ""
+    score_range: tuple[float, float] | None = None
+    higher_is_better: bool | None = None
     published: PublishedTable | None = None
 
     _measured: dict[str, float] = PrivateAttr(default_factory=dict)
@@ -754,6 +759,8 @@ class Benchmark(RegistryMixin, BaseModel):
             return []
         out: list[tuple[Model, float]] = []
         for entry in self.published.entries:
+            if not entry.qualifies(self.published.freshness):
+                continue
             m = Model.match_published(entry.model_name)
             if m is not None:
                 out.append((m, entry.score))
@@ -761,6 +768,12 @@ class Benchmark(RegistryMixin, BaseModel):
 
     def lib_recommendation_model(self) -> "Model | None":
         if self.published is None or not self.published.lib_recommendation:
+            return None
+        if not any(
+            entry.model_name == self.published.lib_recommendation
+            and entry.qualifies(self.published.freshness)
+            for entry in self.published.entries
+        ):
             return None
         return Model.match_published(self.published.lib_recommendation)
 
@@ -776,6 +789,8 @@ class Benchmark(RegistryMixin, BaseModel):
 
         if prefer in ("published", "both") and self.published is not None:
             for entry in self.published.entries:
+                if not entry.qualifies(self.published.freshness):
+                    continue
                 m = Model.match_published(entry.model_name)
                 if m is None:
                     continue
@@ -969,17 +984,24 @@ Benchmark._register(
 # Image understanding — "how well does the model reason over a static image?"
 Benchmark._register(
     Benchmark(
-        id="mmmu",
-        name="MMMU",
+        id="mmmu_pro",
+        name="MMMU Pro",
         category="image",
-        source="Artificial Analysis",
-        source_auth="ARTIFICIAL_ANALYSIS_API_KEY",
+        source="Artificial Analysis public evaluation",
+        namespace="aa",
+        source_auth="",
         description=(
-            "College-exam-level multi-discipline reasoning over diagrams, charts and figures "
-            "(14 disciplines) — the headline image-understanding benchmark."
+            "Artificial Analysis MMMU Pro visual-understanding accuracy; this is not the "
+            "MMMU or MMBench benchmark."
         ),
-        url="https://mmmu-benchmark.github.io/",
-        published=PublishedTable.load("mmmu"),
+        url="https://artificialanalysis.ai/evaluations/mmmu-pro",
+        score_url="https://artificialanalysis.ai/evaluations/mmmu-pro",
+        methodology_url=(
+            "https://artificialanalysis.ai/methodology/intelligence-benchmarking#mmmu-pro"
+        ),
+        score_range=(0.0, 1.0),
+        higher_is_better=True,
+        published=PublishedTable.load("mmmu_pro"),
     )
 )
 Benchmark._register(
@@ -987,13 +1009,16 @@ Benchmark._register(
         id="mmbench",
         name="MMBench",
         category="image",
-        source="Artificial Analysis",
-        source_auth="ARTIFICIAL_ANALYSIS_API_KEY",
+        source="OpenCompass",
+        namespace="oc",
+        source_auth="",
         description=(
             "Broad multiple-choice perception + reasoning over images (EN/CN), with "
             "robustness checks — a wide general image-understanding measure."
         ),
         url="https://github.com/open-compass/MMBench",
+        score_range=(0.0, 1.0),
+        higher_is_better=True,
         published=PublishedTable.load("mmbench"),
     )
 )

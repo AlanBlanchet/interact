@@ -10,15 +10,20 @@ imported by their own path (``interact.vision.critique`` etc.).
 
 from interact.vision.core import (  # noqa: F401
     _UNSET,
-    MediaItem,
     VisionError,
-    VLMResult,
     _Unset,
     _audio_content,
     _build_media_content,
     _extract_frames,
     analyze_media,
     analyze_screenshot,
-    evenly_sampled,
     transcribe_audio,
+)
+from interact.vision.types import (  # noqa: F401
+    MediaAnalysis as MediaAnalysis,
+    MediaItem as MediaItem,
+    RecordingCapture as RecordingCapture,
+    RecordingResult as RecordingResult,
+    VLMResult as VLMResult,
+    evenly_sampled as evenly_sampled,
 )

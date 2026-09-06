@@ -8,16 +8,15 @@ from dataclasses import dataclass
 
 from interact.server import core
 from interact.server.core import config
-from interact.vision import (
+from interact.vision.core import (
     _UNSET,
-    MediaItem,
     VisionError,
-    VLMResult,
     _Unset,
     analyze_media,
     analyze_screenshot,
 )
 from interact.vision.measure import blank_frame_reason
+from interact.vision.types import MediaItem, VLMResult
 
 _log = logging.getLogger("interact")
 def _describe(err: Exception) -> str:
@@ -83,8 +82,9 @@ async def _vlm(
         item if isinstance(item, MediaItem) else MediaItem.from_bytes(item)
         for item in (extra_images or [])
     ]
+    dispatch_state: list[bool] = []
     try:
-        return await analyze_media(
+        result = await analyze_media(
             media,
             context,
             config,
@@ -94,14 +94,26 @@ async def _vlm(
             model=model_override or "",
             role=routing,
             _api_model=_api_model_override or "",
+            _dispatch_state=dispatch_state,
         )
+        if result.dispatch_status != "not_requested":
+            return result
+        return result.model_copy(update={
+            "dispatch_eligible": True,
+            "dispatch_attempted": True,
+            "dispatch_status": "completed",
+        })
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as exc:
+        attempted = bool(dispatch_state)
         return VLMResult(
             text=f"ERROR: media analysis failed — {_describe(exc)}",
             elapsed=0,
             model=model_override or "",
+            dispatch_eligible=attempted,
+            dispatch_attempted=attempted,
+            dispatch_status="failed" if attempted else "unavailable",
         )
 
 

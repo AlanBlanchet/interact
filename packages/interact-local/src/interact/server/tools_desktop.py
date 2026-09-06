@@ -3,18 +3,100 @@ record tool and its per-surface halves (desktop vs browser) live here beside the
 surfaces that own the sandbox."""
 
 import asyncio
+import json
 import shlex
 from pathlib import Path
+from typing import Literal, cast
 
+from mcp.types import CallToolResult, ContentBlock, TextContent
+from mcp.server.fastmcp.utilities.types import Image
 from interact import desktop
 from interact.browser import BrowserManager
+from interact.config.settings import Config
 from interact.desktop import DesktopWindow
 from interact.launch import (
     _resolve_nested_size, apply_launch_rewrites, needs_shell, split_env_assignments,
 )
+from interact.models import supports_native_video_inline
 from interact.server import core, sandbox, targets, vlm
 from interact.server.core import _DEFAULT_SESSION, _NO_WINDOWS_MSG, _session_response, config, mcp
-from interact.vision.core import supports_native_video_inline
+from interact.vision import MediaAnalysis, MediaItem, RecordingCapture, RecordingResult
+from interact.vision.types import VLMResult
+from interact.vision.session import sample_video_frames
+
+
+async def _record_response(
+    video: bytes, *, fps: int, mime: str, path: str | None, context: str, query: str | None
+) -> RecordingResult:
+    dest = core._save_to_path(path, video) if path else None
+    truncation: list[bool] = []
+    timestamp_basis: list[Literal["source_pts", "derived_cadence"]] = []
+    sampled: list[tuple[bytes, float]] = []
+    try:
+        sampled = await sample_video_frames(
+            MediaItem.from_bytes(video, "video", mime), cast(Config, config),
+            fps=fps, frame_cap=config.video_max_frames,
+            _truncation=truncation,
+            _timestamp_basis=timestamp_basis,
+        )
+        timestamps = [timestamp for _, timestamp in sampled]
+        gaps = [right - left for left, right in zip(timestamps, timestamps[1:])]
+        observation = "observed" if len({data for data, _ in sampled}) > 1 else "not_observed"
+        capture = RecordingCapture(
+            status="captured", artifact=str(dest) if dest else None, requested_fps=fps,
+            max_frame_gap=max(gaps) if gaps else None,
+            timestamp_basis=timestamp_basis[0] if timestamp_basis else "derived_cadence",
+            observation=observation,
+            frames_truncated=truncation[0] if truncation else False,
+            frame_timestamps=timestamps,
+        )
+    except Exception:
+        capture = RecordingCapture(
+            status="captured", artifact=str(dest) if dest else None, requested_fps=fps,
+            timestamp_basis="derived_cadence", observation="indeterminate",
+        )
+    if not query:
+        response = RecordingResult(capture=capture, analysis=MediaAnalysis(
+            status="not_requested", eligible=None, attempted=False, input_kind="none",
+            sample_timestamps=[],
+        ))
+        response._frame_bytes = [data for data, _ in sampled]
+        return response
+    result = await vlm._vlm(video, context, query, "video", mime)
+    analysis = MediaAnalysis(
+        status=result.dispatch_status,
+        eligible=result.dispatch_eligible,
+        attempted=result.dispatch_attempted,
+        input_kind=(
+            "native_video" if result.video_sampled is False
+            else "sampled_frames" if result.dispatch_status == "completed" else "none"
+        ),
+        sample_timestamps=result.video_sample_timestamps, text=result.text,
+    )
+    response = RecordingResult(capture=capture, analysis=analysis)
+    response._frame_bytes = [data for data, _ in sampled]
+    return response
+
+
+def _record_tool_result(result: RecordingResult) -> RecordingResult:
+    frame_bytes = result._frame_bytes
+    if len(frame_bytes) != len(result.capture.frame_timestamps):
+        frame_bytes = []
+        result = result.model_copy(update={
+            "capture": result.capture.model_copy(update={
+                "frame_timestamps": [], "observation": "indeterminate",
+            }),
+        })
+    content: list[ContentBlock] = [
+        TextContent(type="text", text=json.dumps(result.model_dump(mode="json")))
+    ]
+    content.extend(
+        Image(data=frame, format="jpeg").to_image_content()
+        for frame in frame_bytes
+    )
+    return cast(RecordingResult, CallToolResult(
+        content=content, structuredContent=result.model_dump(mode="json"), isError=False,
+    ))
 
 
 def _video_model() -> str:
@@ -27,7 +109,7 @@ def _video_model() -> str:
 
 
 def _sampling_caveat(
-    model: str | None = None, result: vlm.VLMResult | None = None
+    model: str | None = None, result: VLMResult | None = None
 ) -> str:
     """The resolution floor of a video verdict, stated as part of the verdict itself.
 
@@ -298,7 +380,7 @@ async def record(
     path: str | None = None,
     target: str | None = None,
     session: str = _DEFAULT_SESSION,
-) -> str:
+) -> RecordingResult:
     """Record actions as video and optionally analyze with vision.
 
     Browser (target unset): Two-step — record(start=True), perform actions, then record(start=False).
@@ -333,10 +415,20 @@ async def record(
     """
     win, mgr, err = targets._resolve_target(target, session)
     if err:
-        return err
+        return _record_tool_result(RecordingResult(
+            capture=RecordingCapture(
+                status="unavailable", requested_fps=fps or config.video_fps,
+                timestamp_basis="derived_cadence", observation="indeterminate",
+            ),
+            analysis=MediaAnalysis(
+                status="unavailable", eligible=False, attempted=False, input_kind="none", text=err,
+            ),
+        ))
     if win:
-        return await _record_desktop(win, query, start, duration, fps, path)
-    return await _record_browser(mgr, start, query, path, session)
+        result = await _record_desktop(win, query, start, duration, fps, path)
+    else:
+        result = await _record_browser(mgr, start, query, path, session)
+    return _record_tool_result(result)
 
 
 async def _record_desktop(
@@ -346,7 +438,7 @@ async def _record_desktop(
     duration: float | None,
     fps: int | None,
     path: str | None,
-) -> str:
+) -> RecordingResult:
     """Desktop/nested recording. An explicit ``duration`` is a blocking one-shot clip (backward
     compatible). Otherwise it's the browser-style two-step session: ``start=True`` begins capture and
     returns at once so actions can run during it; ``start=False`` stops and analyzes (#61/#62)."""
@@ -355,44 +447,39 @@ async def _record_desktop(
     if duration is None:
         if start:
             win.start_video(actual_fps)
-            return (
-                f"Desktop recording started for '{win.name}'. Drive your actions now, then call "
-                f"record(start=False, target=...) to stop and analyze. (For a fixed clip with no "
-                f"interleaved actions, pass duration= instead.)"
+            return RecordingResult(
+                capture=RecordingCapture(
+                    status="started", requested_fps=actual_fps,
+                    timestamp_basis="derived_cadence", observation="indeterminate",
+                ),
+                analysis=MediaAnalysis(
+                    status="not_requested", eligible=None, attempted=False,
+                    input_kind="none",
+                    text="Recording started; call record(start=False) to stop it.",
+                ),
             )
         video_bytes = win.stop_video()
         if video_bytes is None:
-            return (
-                f"No recording in progress for '{win.name}'. Call record(start=True, target=...) "
-                f"first to begin a session, or pass duration= for a one-shot clip."
+            return RecordingResult(
+                capture=RecordingCapture(
+                    status="unavailable", requested_fps=actual_fps,
+                    timestamp_basis="derived_cadence", observation="indeterminate",
+                ),
+                analysis=MediaAnalysis(
+                    status="unavailable", eligible=False, attempted=False,
+                    input_kind="none",
+                    text="No recording in progress; call record(start=True), or pass duration.",
+                ),
             )
         dur_label = "session"
     else:
         video_bytes = win.capture_video(duration, actual_fps)
         dur_label = f"{duration}s"
 
-    if desktop.Motion.is_blank(video_bytes):
-        # x11grab read a uniform-black surface — same wall as a still capture, and the same two
-        # possible causes: an unreadable GPU surface, or a window whose process has died.
-        raise desktop.blank_capture_error(win.name, win.wid)
-    dest = core._save_to_path(path, video_bytes) if path else None
-    saved = f"\n{core._saved_note(dest, video_bytes)}" if dest is not None else ""
-
-    is_static = not desktop.Motion.detect(video_bytes)
-    if is_static and not query:
-        return (
-            f"Recording captured but no motion detected — frames are identical. "
-            f"The window content did not change during the {dur_label} recording.{saved}"
-        )
-
     context = f"Desktop window recording: {win.name} ({win.w}x{win.h}, {dur_label})"
-    if is_static:
-        context = (
-            "WARNING: Recording appears static — no significant motion was detected "
-            "between frames. Describe only what you actually observe.\n" + context
-        )
-    r = await vlm._vlm(video_bytes, context, query, "video", "video/mp4")
-    return vlm._fmt_timing(r) + _sampling_caveat(_video_model(), r) + saved
+    return await _record_response(
+        video_bytes, fps=actual_fps, mime="video/mp4", path=path, context=context, query=query,
+    )
 
 
 async def _record_browser(
@@ -401,25 +488,32 @@ async def _record_browser(
     query: str | None,
     path: str | None,
     session: str,
-) -> str:
+) -> RecordingResult:
     if start:
         url, trouble = await mgr.start_recording()
-        note = f" ({trouble})" if trouble else ""
-        return _session_response(session, f"Recording started. Current URL: {url}{note}")
+        return RecordingResult(
+            capture=RecordingCapture(
+                status="started", requested_fps=config.video_fps,
+                timestamp_basis="derived_cadence", observation="indeterminate",
+            ),
+            analysis=MediaAnalysis(
+                status="not_requested", eligible=None, attempted=False, input_kind="none", text=trouble,
+            ),
+        )
     video_bytes = await mgr.stop_recording()
     if not video_bytes:
-        return _session_response(session, "Recording stopped but no video data captured.")
-    response = await vlm._media_response(
-        video_bytes,
-        "Browser recording",
-        query,
-        path,
-        "video",
-        "video/webm",
+        return RecordingResult(
+            capture=RecordingCapture(
+                status="unavailable", requested_fps=config.video_fps,
+                timestamp_basis="derived_cadence", observation="indeterminate",
+            ),
+            analysis=MediaAnalysis(
+                status="unavailable", eligible=False, attempted=False,
+                input_kind="none",
+                text="No video data captured",
+            ),
+        )
+    return await _record_response(
+        video_bytes, fps=config.video_fps, mime="video/webm", path=path,
+        context="Browser recording", query=query,
     )
-    result, analysis = response.text, response.result
-    if result:  # analysis, or — path but no query — only the saved-file note (then no caveat)
-        caveat = _sampling_caveat(result=analysis) if query else ""
-        return _session_response(session, result + caveat)
-    size = len(video_bytes)
-    return _session_response(session, f"Recording stopped. Video captured ({size} bytes).")

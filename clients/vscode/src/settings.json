@@ -1,6 +1,30 @@
 {
   "settings": [
     {
+      "key": "media.criteria",
+      "field": "media_criteria",
+      "label": "Media selection criteria",
+      "description": "Capability and normalized benchmark thresholds models must clear; missing, stale, or unmapped values exclude a model rather than counting as zero.",
+      "group": "Models",
+      "kind": "str",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_CRITERIA",
+      "default": ""
+    },
+    {
+      "key": "media.criteriaWeights",
+      "field": "media_criteria_weights",
+      "label": "Media criteria weights",
+      "description": "Optional weights over normalized unit-safe criteria only; raw accuracy, index, latency, and price units cannot be combined.",
+      "group": "Models",
+      "kind": "str",
+      "role": null,
+      "options": null,
+      "env": "INTERACT_MEDIA_CRITERIA_WEIGHTS",
+      "default": ""
+    },
+    {
       "key": "media.backend",
       "field": "media_backend",
       "label": "Media backend",

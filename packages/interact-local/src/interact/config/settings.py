@@ -118,6 +118,8 @@ class Config(BaseSettings):
     # execution additionally requires an explicit operator attestation that those credits are off.
     media_backend: Literal["auto", "session", "api"] = "auto"
     media_billing: Literal["session_only", "api_allowed"] = "session_only"
+    media_criteria: str = ""
+    media_criteria_weights: str = ""
     media_session_no_extra_usage_confirmed_for: Annotated[tuple[str, ...], NoDecode] = ()
     media_provider_order: Annotated[tuple[str, ...], NoDecode] = Field(
         default_factory=_default_media_provider_order

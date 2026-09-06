@@ -11,7 +11,8 @@ Every variable is NAMESPACED BY ITS SOURCE, because a bare ``intelligence`` hide
 and two leaderboards rarely agree:
 
     aa.intelligence        Artificial Analysis' capability score
-    aa.mmmu, aa.mmbench    benchmarks Artificial Analysis publishes
+    aa.mmmu_pro            Artificial Analysis' MMMU Pro visual metric
+    oc.mmbench             the OpenCompass MMBench leaderboard
     gui.screenspot         the GUI-Agent grounding leaderboard
     oc.video_mme           the OpenCompass video leaderboard
     price.in / price.out   $ per million tokens, from the provider catalog
@@ -24,9 +25,11 @@ in a criterion the same day, and a model that ships tomorrow and clears the bar 
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass, field
 from typing import Callable
 
+from interact import benchmark_tables
 from interact.models import Benchmark, Model, ModelCapability
 
 
@@ -88,10 +91,24 @@ def _reader(attr: str) -> Callable[[Model], float | None]:
 
 def _bench_reader(bench: Benchmark) -> Callable[[Model], float | None]:
     def read(model: Model) -> float | None:
-        measured = bench.score_for(model)
-        if measured is not None:
-            return measured
-        for scored, value in bench.published_models_in_registry():
+        live = benchmark_tables.load_tables().get(bench.id)
+        published = (
+            live
+            if live is not None
+            and (bench.published is None or live.retrieved >= bench.published.retrieved)
+            else bench.published
+        )
+        if published is None:
+            return None
+        if published.freshness != "current":
+            return None
+        for entry in published.entries:
+            scored = Model.by_id(entry.model_id) if entry.model_id else None
+            value = entry.normalized_score
+            if entry.status != "eligible" or value is None:
+                continue
+            if scored is None:
+                continue
             if scored.id == model.id:
                 return value
         return None
@@ -119,6 +136,9 @@ _BARE = re.compile(r"^\s*([\w.-]+)\s*$")
 def _did_you_mean(name: str) -> str:
     """The namespaced variables whose tail matches what they typed — so a bare `intelligence`
     is answered with `aa.intelligence` rather than the whole catalogue."""
+    renamed = {"aa.mmmu": "aa.mmmu_pro", "aa.mmbench": "oc.mmbench"}
+    if replacement := renamed.get(name.lower()):
+        return f" This metric was corrected; use {replacement!r} and review its meaning."
     tail = name.rsplit(".", 1)[-1].lower()
     near = [n for n in Variables.names() if n.rsplit(".", 1)[-1].lower() == tail]
     return f" Did you mean: {', '.join(near)}?" if near else ""
@@ -227,12 +247,28 @@ class Criteria:
         return fit
 
     def choose(
-        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
+        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None,
+        weights: str = "",
     ) -> Model | None:
         """The one to use, or None. NEVER a fallback: a criterion that quietly resolves to some
         other model is worse than no criterion, because it looks like it worked."""
         fit = self.qualifying(available_only, runnable)
+        parsed = _parse_weights(weights)
+        if parsed:
+            weighted: list[tuple[float, Model]] = []
+            for model in fit:
+                values = [(Variables.by_name(name), weight) for name, weight in parsed.items()]
+                scores = [(variable.read(model) if variable else None, weight) for variable, weight in values]
+                numeric = [(score, weight) for score, weight in scores if score is not None]
+                if len(numeric) == len(scores) and all(0 <= score <= 1 for score, _ in numeric):
+                    weighted.append((sum(score * weight for score, weight in numeric), model))
+            weighted.sort(key=lambda pair: (-pair[0], pair[1].cost_score, pair[1].id))
+            return weighted[0][1] if weighted else None
         return fit[0] if fit else None
+
+    @staticmethod
+    def validate_weights(weights: str) -> None:
+        _parse_weights(weights)
 
     def explain(
         self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
@@ -261,3 +297,30 @@ class Criteria:
                 near = max(scored, key=lambda pair: pair[1] or 0)
                 lines.append(f"  {about}nobody passes; best is {near[0]} at {near[1]:g}")
         return "\n".join(lines)
+
+
+def _parse_weights(text: str) -> dict[str, float]:
+    if not text.strip():
+        return {}
+    weights: dict[str, float] = {}
+    benchmark_variables = {benchmark.variable for benchmark in Benchmark.registry()}
+    for clause in text.split(","):
+        name, separator, raw = clause.partition("=")
+        name = name.strip()
+        if not separator or name not in benchmark_variables:
+            raise CriteriaError(
+                f"{name!r} is not a normalized benchmark; raw price, latency, and index units cannot be weighted"
+            )
+        try:
+            value = float(raw)
+        except ValueError as exc:
+            raise CriteriaError(f"weight for {name!r} is not a number") from exc
+        if not math.isfinite(value) or value < 0:
+            raise CriteriaError(f"weight for {name!r} must be finite and non-negative")
+        if name in weights:
+            raise CriteriaError(f"duplicate weight for {name!r}")
+        weights[name] = value
+    total = sum(weights.values())
+    if total <= 0:
+        raise CriteriaError("criteria weights must have a positive total")
+    return {name: value / total for name, value in weights.items()}

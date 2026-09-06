@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal, Self
 
 import jsonschema
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from interact.state import bytes_to_b64
 
@@ -47,6 +47,9 @@ class VLMResult(BaseModel):
     request_id: str | None = None
     video_sampled: bool | None = None
     video_sample_timestamps: list[float] = Field(default_factory=list)
+    dispatch_eligible: bool | None = None
+    dispatch_attempted: bool = False
+    dispatch_status: Literal["not_requested", "completed", "unavailable", "failed"] = "not_requested"
 
     def validated(self, response_format: type[BaseModel] | dict[str, Any] | None) -> Self:
         """Compile and enforce one structured-output contract for every transport."""
@@ -78,6 +81,7 @@ class MediaItem(BaseModel):
         except (binascii.Error, ValueError) as exc:
             raise ValueError("media data is not valid base64") from exc
         return value
+
 
     @field_validator("timestamp_seconds")
     @classmethod
@@ -222,6 +226,36 @@ class MediaItem(BaseModel):
             path.unlink(missing_ok=True)
             raise
         return path
+
+
+class RecordingCapture(BaseModel):
+    status: Literal["started", "captured", "unavailable"]
+    artifact: str | None = None
+    requested_fps: int
+    measured_fps: float | None = None
+    duration: float | None = None
+    max_frame_gap: float | None = None
+    timestamp_basis: Literal["source_pts", "derived_cadence"]
+    observation: Literal["observed", "not_observed", "indeterminate"] = Field(
+        description="Change among returned samples only; bounded by max_frame_gap and frames_truncated.",
+    )
+    frames_truncated: bool = False
+    frame_timestamps: list[float] = Field(default_factory=list)
+
+
+class MediaAnalysis(BaseModel):
+    status: Literal["not_requested", "completed", "unavailable", "failed"]
+    eligible: bool | None
+    attempted: bool
+    input_kind: Literal["none", "native_video", "sampled_frames"]
+    sample_timestamps: list[float] = Field(default_factory=list)
+    text: str | None = None
+
+
+class RecordingResult(BaseModel):
+    capture: RecordingCapture
+    analysis: MediaAnalysis
+    _frame_bytes: list[bytes] = PrivateAttr(default_factory=list)
 
 
 def evenly_sampled(items: list, k: int) -> list:

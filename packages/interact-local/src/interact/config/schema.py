@@ -110,6 +110,16 @@ class Setting(BaseModel):
 SETTINGS: list[Setting] = [
     # ── Models ───────────────────────────────────────────────────────────────
     Setting(
+        key="media.criteria", field="media_criteria", group="Models", kind="str",
+        label="Media selection criteria",
+        description="Capability and normalized benchmark thresholds models must clear; missing, stale, or unmapped values exclude a model rather than counting as zero.",
+    ),
+    Setting(
+        key="media.criteriaWeights", field="media_criteria_weights", group="Models", kind="str",
+        label="Media criteria weights",
+        description="Optional weights over normalized unit-safe criteria only; raw accuracy, index, latency, and price units cannot be combined.",
+    ),
+    Setting(
         key="media.backend", field="media_backend", group="Models", kind="enum",
         label="Media backend",
         description="Where image and sampled-video analysis runs in an isolated sandbox. Auto follows the billing policy.",

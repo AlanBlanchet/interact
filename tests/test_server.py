@@ -743,7 +743,9 @@ async def test_vlm_rate_limit_triggers_fallback(srv):
 
     call_count = 0
 
-    async def _mock_analyze(media, context, cfg, query, max_tokens, response_format, model):
+    async def _mock_analyze(
+        media, context, cfg, query, max_tokens, response_format, model, _dispatch_state,
+    ):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -794,7 +796,9 @@ async def test_vlm_falls_back_on_error(srv, make_error):
 
     call_count = 0
 
-    async def _mock(media, context, cfg, query, max_tokens, response_format, model):
+    async def _mock(
+        media, context, cfg, query, max_tokens, response_format, model, _dispatch_state,
+    ):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -843,7 +847,7 @@ async def test_record_desktop_start_opens_a_session_not_a_fixed_clip(srv):
     out = await srv._record_desktop(win, query=None, start=True, duration=None, fps=12, path=None)
     win.start_video.assert_called_once_with(12)
     win.capture_video.assert_not_called()           # not the old forced clip
-    low = out.lower()
+    low = out.analysis.text.lower()
     assert "start=false" in low and "record" in low  # tells the agent how to stop
 
 
@@ -858,12 +862,15 @@ async def test_record_desktop_stop_analyzes_the_session_clip(srv, monkeypatch):
     monkeypatch.setattr(dt.Motion, "detect", staticmethod(lambda b: True))
 
     async def fake_vlm(media, context, query, role, mime):
-        return VLMResult(text="a token slides in", elapsed=0.1, model="m")
+        return VLMResult(
+            text="a token slides in", elapsed=0.1, model="m",
+            dispatch_eligible=True, dispatch_attempted=True, dispatch_status="completed",
+        )
 
     monkeypatch.setattr(srv.vlm, "_vlm", fake_vlm)
     out = await srv._record_desktop(win, query="what animates?", start=False, duration=None, fps=None, path=None)
     win.stop_video.assert_called_once()
-    assert "slides in" in out
+    assert out.analysis.status == "completed" and "slides in" in out.analysis.text
 
 
 def test_record_sampling_caveat_remains_for_gemini_on_a_session_backend(srv):
@@ -911,6 +918,9 @@ async def test_browser_record_caveat_uses_the_actual_native_api_result(srv, monk
             backend="api",
             provider="gemini",
             video_sampled=False,
+            dispatch_eligible=True,
+            dispatch_attempted=True,
+            dispatch_status="completed",
         )
 
     monkeypatch.setattr(srv.vlm, "_vlm", native_result)
@@ -919,7 +929,7 @@ async def test_browser_record_caveat_uses_the_actual_native_api_result(srv, monk
         mgr, start=False, query="what changes?", path=None, session="default"
     )
 
-    assert "native sequence" in out and "sampling floor" not in out
+    assert out.analysis.status == "completed" and "native sequence" in out.analysis.text
 
 
 @pytest.mark.asyncio
@@ -928,7 +938,7 @@ async def test_record_desktop_stop_without_a_session_explains(srv):
     win = _rec_win()
     win.stop_video.return_value = None
     out = await srv._record_desktop(win, query=None, start=False, duration=None, fps=None, path=None)
-    low = out.lower()
+    low = out.analysis.text.lower()
     assert "no recording" in low and "start=true" in low and "duration" in low
 
 
@@ -945,7 +955,8 @@ async def test_record_desktop_explicit_duration_stays_a_one_shot_clip(srv, monke
     out = await srv._record_desktop(win, query=None, start=True, duration=2.0, fps=None, path=None)
     win.capture_video.assert_called_once()
     win.start_video.assert_not_called()
-    assert "no motion" in out.lower()
+    assert out.capture.status == "captured"
+    assert out.capture.observation == "indeterminate"
 
 
 # --- #57: get_interactive_elements(fresh=True) force-invalidates before detecting -----------
@@ -1083,7 +1094,9 @@ async def test_vlm_exhausted_chain_is_an_ERROR_line_that_says_why(srv, make_erro
     from interact.config import Config
     from interact.models import Model, ModelCapability, ModelChain
 
-    async def _mock(media, context, cfg, query, max_tokens, response_format, model):
+    async def _mock(
+        media, context, cfg, query, max_tokens, response_format, model, _dispatch_state,
+    ):
         raise make_error(model)
 
     primary = Model(id="primary/model", provider="test", capabilities={ModelCapability.VLM})
