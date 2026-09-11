@@ -15,7 +15,7 @@ This file is the canonical project instruction source. Provider-specific files m
 
 The MCP tool docstrings and typed schemas are the API source of truth. Inspect them before changing or documenting a tool. Do not preserve an older parameter name or tool name merely because a provider instruction still mentions it.
 
-Generic capture and action tools select their surface through `target`: browser by default, a desktop window title, a screen selector, or a supported file target. Browser-only capabilities remain separate. Do not reintroduce the obsolete split `window`/`session` guidance for generic tools.
+Generic capture and action tools select their surface through `target`; the exact routing rules are canonical in `server/core.py`'s MCP instructions (`_instructions`) and each tool's own docstring — read them there, never restate them here. Browser-only capabilities remain separate. Do not reintroduce the obsolete split `window`/`session` guidance for generic tools.
 
 ## Prompt authoring and distribution
 
