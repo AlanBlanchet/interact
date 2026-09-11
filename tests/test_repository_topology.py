@@ -50,16 +50,16 @@ def test_protected_bytes_survive_the_cutover(
 
 
 def test_public_prompt_contracts_are_exported_to_schema_and_vscode() -> None:
-    package_root = ROOT / "packages/interact-contracts/src"
-    schema_path = ROOT / "packages/interact-contracts/schema/prompt-contracts.schema.json"
+    package_root = ROOT / "packages/interact-core/src"
+    schema_path = ROOT / "packages/interact-core/schema/prompt-contracts.schema.json"
     typescript_path = ROOT / "clients/vscode/src/generated/promptContracts.ts"
-    assert (package_root / "interact_contracts/prompts.py").is_file()
+    assert (package_root / "interact_core/prompts.py").is_file()
     assert schema_path.is_file()
     assert typescript_path.is_file()
 
     sys.path.insert(0, str(package_root))
     try:
-        package = __import__("interact_contracts", fromlist=list(PROMPT_CONTRACTS))
+        package = __import__("interact_core", fromlist=list(PROMPT_CONTRACTS))
     finally:
         sys.path.pop(0)
     assert all(getattr(package, name, None) is not None for name in PROMPT_CONTRACTS)
@@ -72,7 +72,7 @@ def test_public_prompt_contracts_are_exported_to_schema_and_vscode() -> None:
 def test_public_python_has_no_private_cloud_dependency() -> None:
     public_roots = (
         ROOT / "packages/interact-local/src",
-        ROOT / "packages/interact-contracts/src",
+        ROOT / "packages/interact-core/src",
     )
     assert all(root.is_dir() for root in public_roots)
     for root in public_roots:

@@ -7,7 +7,7 @@ import sqlite3
 import stat
 from pathlib import Path
 
-from interact_contracts import (
+from interact_core import (
     PromptCatalogPage,
     PromptChannelEntry,
     PromptExecutionRef,

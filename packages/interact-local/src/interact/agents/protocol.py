@@ -11,7 +11,7 @@ from pydantic import (
     StrictStr,
     model_validator,
 )
-from interact_contracts import PromptSelection
+from interact_core import PromptSelection
 
 from interact.agents.events import (
     AgentEvent,

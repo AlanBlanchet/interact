@@ -162,9 +162,9 @@ export interface PromptKey {
 /**
  * A benchmark for evaluating VLM capability.
  *
- * Scores come from published online leaderboards (:attr:`published`). Optional
- * measured scores — injected via ``INTERACT_GROUNDING_JSON`` (e.g. fetched from an
- * online source), never from our own paid eval — live in :attr:`_measured`.
+ * Scores come from published online leaderboards (:attr:`published`). Optional measured
+ * scores — injected via ``INTERACT_GROUNDING_JSON`` (e.g. fetched from an online source),
+ * never our own paid eval — live in :attr:`_measured`.
  */
 export interface Benchmark {
   id: string;

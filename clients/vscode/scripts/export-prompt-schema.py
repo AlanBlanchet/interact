@@ -5,7 +5,7 @@ from typing import Union
 
 from pydantic import TypeAdapter
 
-from interact_contracts import (
+from interact_core import (
     PromptCatalogPage,
     PromptChannelEntry,
     PromptExecutionRef,

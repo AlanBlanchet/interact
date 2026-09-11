@@ -29,10 +29,10 @@ uv run --directory "$REPO_DIR" pydantic2ts \
     --module interact.api_types \
     --output "$OUT"
 uv run --directory "$REPO_DIR" pydantic2ts \
-    --module interact_contracts.prompts \
+    --module interact_core.prompts \
     --output "$EXT_DIR/src/generated/promptContracts.ts"
 uv run --directory "$REPO_DIR" python "$HERE/export-prompt-schema.py" \
-    > "$REPO_DIR/packages/interact-contracts/schema/prompt-contracts.schema.json"
+    > "$REPO_DIR/packages/interact-core/schema/prompt-contracts.schema.json"
 SCHEMA_OUT="$EXT_DIR/out/generated/conversation-schemas.json"
 mkdir -p "$(dirname "$SCHEMA_OUT")"
 uv run --directory "$REPO_DIR" python "$HERE/export-runtime-schemas.py" > "$SCHEMA_OUT"

@@ -7,7 +7,7 @@ from pathlib import Path
 import urllib.request
 from uuid import NAMESPACE_URL, uuid5
 
-from interact_contracts import (
+from interact_core import (
     PromptCatalogPage,
     PromptKey,
     PromptPublicationRequest,

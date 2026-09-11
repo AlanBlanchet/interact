@@ -13,12 +13,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-import interact_contracts
+import interact_core
 from pydantic import ValidationError
 
 from interact.prompt_cache import _PromptCache
 from interact.prompt_client import _PromptClient
-from interact_contracts import PromptCatalogPage, PromptChannelEntry, PromptKey, PromptRevision
+from interact_core import PromptCatalogPage, PromptChannelEntry, PromptKey, PromptRevision
 
 
 def test_file_manifest_content_matches_its_declared_digest() -> None:
@@ -43,7 +43,7 @@ def test_contracts_reject_invalid_identity_and_content() -> None:
 
 
 def test_public_contracts_include_immutable_execution_prompt_binding() -> None:
-    assert hasattr(interact_contracts, "PromptExecutionRef")
+    assert hasattr(interact_core, "PromptExecutionRef")
 
 
 def test_cache_scopes_catalog_and_exact_revision_by_account(tmp_path: Path) -> None:
@@ -251,11 +251,13 @@ def test_complete_prompt_snapshot_is_atomic_and_removes_absent_channels(
         server_timestamp=datetime.now(UTC),
     )
     port_file = tmp_path / "prompt.port"
+    log_file = tmp_path / "prompt.log"
     fixture = Path(__file__).parent / "fixtures" / "agents" / "fake_prompt_server.py"
     command = [
         sys.executable,
         str(fixture),
         "--port-file", str(port_file),
+        "--log-file", str(log_file),
         "--content", "replacement system prompt",
         "--revision", str(uuid4()),
         "--second-content", (

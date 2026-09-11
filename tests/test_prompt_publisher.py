@@ -13,7 +13,7 @@ import pytest
 from interact.prompt_publisher import publish_projection
 from interact.prompt_projection import MANIFEST_NAME
 from interact.prompt_secret import read_prompt_token
-from interact_contracts import (
+from interact_core import (
     PromptCatalogPage,
     PromptChannelEntry,
     PromptKey,

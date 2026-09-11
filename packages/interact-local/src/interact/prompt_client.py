@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import quote
 
-from interact_contracts import (
+from interact_core import (
     PromptCatalogPage,
     PromptChannelEntry,
     PromptExecutionRef,

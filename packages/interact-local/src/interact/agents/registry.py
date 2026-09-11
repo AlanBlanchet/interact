@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import BinaryIO, Literal
 
 from pydantic import BaseModel, Field, PrivateAttr
-from interact_contracts import PromptExecutionRef
+from interact_core import PromptExecutionRef
 
 from interact.agents.events import AgentEvent
 from interact.agents.providers import PROVIDERS
@@ -67,14 +67,14 @@ class AgentRun(BaseModel):
     #: Without it a run knows its label but not what it actually IS, so nothing can link to it.
     agent: str | None = None
     #: Where that definition's system prompt actually lives, resolved at registration. The name
-    #: alone is only answerable by a caller that can import this module and ask the provider — and
-    #: the panel reads these records straight off disk, so a name it cannot resolve is a link it
-    #: cannot offer. Recorded, not derived on read, so it also survives the file being moved later.
+    #: alone is answerable only by a caller that can import this module and ask the provider —
+    #: and the panel reads these records straight off disk, so a name it can't resolve is a link
+    #: it can't offer. Recorded, not derived on read, so it survives the file being moved later.
     definition_path: str | None = None
     #: How much autonomy this run was GIVEN, when the choice was made explicitly. Recorded because
-    #: it is the answer to "why did that one stop to ask" and "why did that one just do it" — a
-    #: question about a run you are watching that nothing else on the record can answer. None
-    #: means nobody chose, so the CLI's own configured default applied.
+    #: it answers "why did that one stop to ask" / "why did that one just do it" — a question
+    #: about a run you're watching that nothing else on the record answers. None means nobody
+    #: chose, so the CLI's own configured default applied.
     permission_mode: str | None = None
     parent_run_id: str | None = None
     root_run_id: str | None = None
@@ -115,11 +115,11 @@ class AgentRun(BaseModel):
         The class owns its own construction because this shape was being built in two places —
         the listing and the CLI's `agents discovered`, which the VS Code panel parses — with the
         same nine fields, the same id fallback and the same millisecond division duplicated. A
-        field added here would have reached one and not the other, and the panel would never have
-        noticed the difference.
+        field added here would reach one and not the other, and the panel would never notice the
+        difference.
 
-        None when the payload carries no session id: there is nothing to address it by, so it is
-        not a run we can show, resume or stop.
+        None when the payload carries no session id: nothing to address it by, so it's not a run
+        we can show, resume or stop.
         """
         sid = raw.get("sessionId") or raw.get("id")
         if not sid:

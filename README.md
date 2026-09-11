@@ -10,11 +10,13 @@ This public repository is one release graph with explicit product homes:
 
 - `packages/interact-local` owns the `interact` Python import, CLI, MCP server, automation, local
   sessions, and explicit API routes.
-- `packages/interact-contracts` owns dependency-light prompt distribution contracts and their
+- `packages/interact-core` owns dependency-light prompt distribution contracts and their
   generated JSON Schema; `clients/vscode` consumes the generated TypeScript form.
 - `clients/vscode` owns the VS Code extension, and `site` owns the static public website boundary.
-- Librarian-edited Markdown under `prompts` is canonical source. Private tenant, authentication,
-  billing, secrets, queues, retention, and deployment code never enters this repository.
+- `prompts/` contains only distributable product defaults and their manifest. Personal prompt
+  source lives in the user's private Interact-managed Git worktree and never enters this repository.
+  Private tenant, authentication, billing, secrets, queues, retention, and deployment code never
+  enters this repository.
 
 The packages version together from root `pyproject.toml`. Local-session and local-compute routes
 remain distinct from separately billed `metered_api` routes; failure never silently crosses that
@@ -23,8 +25,11 @@ consume a released public schema version from their own repository and are never
 
 ### Prompt distribution foundation
 
-Librarians edit `prompts/manifest.json` and its referenced Markdown files; the manifest digest is
-validated before publication. Start the private sibling service locally with:
+Personal prompts are authored and versioned through `interact prompts` in the private local Git
+worktree at `${XDG_DATA_HOME:-~/.local/share}/interact/prompts`. A clean committed revision is
+compiled and installed into provider consumers as derived, read-only output. The public
+`prompts/manifest.json` and its referenced Markdown instead define shipped product defaults; their
+digests are validated before publication. Start the private sibling service locally with:
 
 ```bash
 cd ../interact-cloud
@@ -43,7 +48,7 @@ The executable local file-to-HTTP-to-cache control is:
 
 ```bash
 cd ../interact-cloud
-PYTHONPATH=../interact/packages/interact-local/src:../interact/packages/interact-contracts/src:src \
+PYTHONPATH=../interact/packages/interact-local/src:../interact/packages/interact-core/src:src \
   uv run pytest tests/test_http.py::test_real_http_process_enforces_tenant_non_disclosure -q
 ```
 

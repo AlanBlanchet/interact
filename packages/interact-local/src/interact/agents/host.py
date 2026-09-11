@@ -15,7 +15,7 @@ from pydantic import (
     PrivateAttr,
     ValidationError,
 )
-from interact_contracts import PromptExecutionRef
+from interact_core import PromptExecutionRef
 
 from interact.agents import registry as reg
 from interact.agents.assembly import _TransportRegistry, build_transport_registry
@@ -167,27 +167,17 @@ class _ConversationHost(BaseModel):
 
     async def _catalog(self) -> ConversationCatalog:
         now = time.time()
+        # Only routes that could actually carry a conversation. This used to MANUFACTURE two more
+        # — a Claude and a Gemini consumer session — for the sole purpose of refusing them, and
+        # the panel rendered all three side by side as "3 unavailable routes". Nothing the owner
+        # can do makes those available, so they weren't routes — a policy notice wearing a route's
+        # clothes, reading as a third broken feature next to a real "Codex CLI is not installed"
+        # (which names an action he can take).
+        #
+        # The policy itself is unchanged and lives where it's enforced: interact never drives a
+        # vendor's consumer session as a route. It spawns that vendor's own CLI, using his login
+        # legitimately — a different thing, and how every agent already runs.
         routes = [await self.transport_registry.session_route(now)]
-        for provider, label, reason in (
-            ("claude", "Claude consumer session", "Claude consumer sessions are policy-blocked."),
-            ("gemini", "Gemini consumer session", "Gemini consumer sessions are policy-blocked."),
-        ):
-            routes.append(ConversationRoute(
-                id=f"{provider}:local_session",
-                provider=provider,
-                connection="local_session",
-                label=label,
-                availability="policy_blocked",
-                reason=reason,
-                charge_path="unknown",
-                cost_certainty="unknown",
-                billing_note="No consumer-session request will be started by this route.",
-                authenticated=None,
-                capabilities=[],
-                models=[],
-                default_model=None,
-                cataloged_at=now,
-            ))
         routes.extend(self.transport_registry.completion_routes(now))
         return ConversationCatalog(routes=routes, criteria=Variables.names(), cataloged_at=now)
 

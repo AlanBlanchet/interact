@@ -15,7 +15,7 @@ import pytest
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import JsonValue, ValidationError
-from interact_contracts import PromptKey, PromptSelection
+from interact_core import PromptKey, PromptSelection
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
@@ -178,10 +178,12 @@ async def _open_prompt_server(
     body_revision: str | None = None,
 ):
     port_file = root / "prompt.port"
+    log_file = root / "prompt.log"
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         str(FIXTURES / "fake_prompt_server.py"),
         "--port-file", str(port_file),
+        "--log-file", str(log_file),
         "--content", content,
         "--revision", revision,
         "--token", token,
@@ -193,7 +195,7 @@ async def _open_prompt_server(
     assert stderr is not None
     for _ in range(100):
         if port_file.exists():
-            return process, int(port_file.read_text())
+            return process, int(port_file.read_text()), log_file
         if process.returncode is not None:
             detail = (await stderr.read()).decode(errors="replace")
             raise RuntimeError(f"fake prompt server exited: {detail}")
@@ -607,7 +609,7 @@ async def test_console_binds_server_prompt_before_starting_provider(
     revision = "00000000-0000-4000-8000-000000000002"
     token = "synthetic-test-token"
     digest = hashlib.sha256(trusted.encode()).hexdigest()
-    prompt_server, port = await _open_prompt_server(
+    prompt_server, port, _ = await _open_prompt_server(
         root,
         content=trusted,
         revision=revision,
@@ -821,12 +823,9 @@ async def test_explicit_api_route_executes_the_resolved_model_exactly_once(
             "version": 1, "request_id": "catalog", "method": "catalog",
         })
         routes = {item["id"]: item for item in catalog["catalog"]["routes"]}
-        for session_id in ("claude:local_session", "gemini:local_session"):
-            blocked = routes[session_id]
-            assert blocked["availability"] == "policy_blocked"
-            assert blocked["cost_certainty"] == "unknown"
-            assert blocked["models"] == []
-            assert blocked["reason"]
+        # The manufactured consumer-session rows are gone (see the route-list test): a policy
+        # notice is not a route. What this test is about — the API route — is unaffected.
+        assert not any(r["availability"] == "policy_blocked" for r in routes.values())
         assert routes["openai:api"]["connection"] == "api"
         route = next(route for route in catalog["catalog"]["routes"]
                      if route["id"] == "openai:api")
@@ -868,7 +867,7 @@ async def test_prompt_selected_api_keeps_instruction_separate_from_user_turn(
     revision = "00000000-0000-4000-8000-000000000004"
     token = "synthetic-test-token"
     digest = hashlib.sha256(instruction.encode()).hexdigest()
-    prompt_process, prompt_port = await _open_prompt_server(
+    prompt_process, prompt_port, prompt_log = await _open_prompt_server(
         root, content=instruction, revision=revision, token=token,
     )
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-value")
@@ -879,7 +878,9 @@ async def test_prompt_selected_api_keeps_instruction_separate_from_user_turn(
     monkeypatch.setenv("INTERACT_PROMPT_ENDPOINT", f"http://127.0.0.1:{prompt_port}")
     monkeypatch.setenv("INTERACT_PROMPT_ACCOUNT", "tenant-a")
     monkeypatch.setenv("INTERACT_PROMPT_TOKEN", token)
-    monkeypatch.setenv("INTERACT_PROMPT_CACHE", str((root / "prompts.sqlite3").resolve()))
+    monkeypatch.delenv("INTERACT_PROMPT_TOKEN_FILE", raising=False)
+    cache_path = (root / "prompts.sqlite3").resolve()
+    monkeypatch.setenv("INTERACT_PROMPT_CACHE", str(cache_path))
     process = await _open_console(workspace)
     try:
         started = await _exchange(process, {
@@ -898,7 +899,21 @@ async def test_prompt_selected_api_keeps_instruction_separate_from_user_turn(
                 "workspace_root": str(workspace),
             },
         })
-        assert started["ok"] is True, started
+        prompt_requests = (
+            [json.loads(line) for line in prompt_log.read_text().splitlines()]
+            if prompt_log.exists() else []
+        )
+        cache_stat = cache_path.stat() if cache_path.exists() else None
+        diagnostic = {
+            "response": started,
+            "prompt_requests": prompt_requests,
+            "console_returncode": process.returncode,
+            "api_request_count": len(api_log.read_text().splitlines()) if api_log.exists() else 0,
+            "cache_exists": cache_stat is not None,
+            "cache_size": cache_stat.st_size if cache_stat is not None else 0,
+            "cache_inode": cache_stat.st_ino if cache_stat is not None else 0,
+        }
+        assert started["ok"] is True, diagnostic
         await _event(process, "done")
         request = json.loads(api_log.read_text().splitlines()[0])
         assert request["messages"] == [
@@ -911,6 +926,10 @@ async def test_prompt_selected_api_keeps_instruction_separate_from_user_turn(
             "revision": revision,
             "digest": digest,
         }
+        assert prompt_requests == [
+            {"path": "/v1/catalog", "status": 200},
+            {"path": f"/v1/revisions/interact/system/{digest}", "status": 200},
+        ]
     finally:
         await _stop_console(process)
         for server in (api_process, prompt_process):
@@ -2300,6 +2319,48 @@ def test_cli_import_and_help_do_not_load_or_discover_conversation_dependencies()
     assert "agents" in helped.stdout and "console" not in helped.stderr
 
 
+@pytest.mark.asyncio
+async def test_console_initializes_before_media_cost_discovery(console_workspace) -> None:
+    """The real console must answer initialize without contacting the slow media-cost seam."""
+    _, workspace, _ = console_workspace
+    endpoint = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str((FIXTURES / "slow_cost_map_server.py").resolve()),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert endpoint.stdout is not None
+    port = (await asyncio.wait_for(endpoint.stdout.readline(), timeout=2)).decode().strip()
+    environment = dict(os.environ)
+    environment.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+    environment["LITELLM_MODEL_COST_MAP_URL"] = f"http://127.0.0.1:{port}/cost-map"
+    process = await asyncio.create_subprocess_exec(
+        "uv", "run", "--project", str(PROJECT_ROOT),
+        "interact", "agents", "console",
+        "--workspace-root", str(workspace),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=environment,
+        cwd=workspace,
+    )
+    try:
+        response = await _exchange(process, {
+            "version": 1,
+            "request_id": "startup",
+            "method": "initialize",
+        })
+        assert response["ok"] is True
+        assert endpoint.returncode is None
+        assert endpoint.stderr is not None
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(endpoint.stderr.readline(), timeout=0.1)
+    finally:
+        await _stop_console(process)
+        endpoint.terminate()
+        await endpoint.wait()
+
+
 @pytest.mark.parametrize(
     ("paths", "expected"),
     [
@@ -2320,3 +2381,28 @@ def test_billing_aggregation_preserves_every_charge_path(paths, expected) -> Non
     summary = reg.billing_summary(runs)
     assert summary.charge_path == expected
     assert set(summary.paths) == set(paths)
+
+
+async def test_a_route_that_can_never_work_is_not_offered_as_a_route(tmp_path: Path) -> None:
+    """"Why have the routes in vscode if i can't use them?"
+
+    Two of the three "unavailable" rows were MANUFACTURED — the catalog built them for the sole
+    purpose of refusing them. Nothing the owner can do makes a policy-blocked consumer session
+    available, so it is not a route in any useful sense; rendered beside a real one it reads as a
+    third broken feature. `codex · session` stays, because "Codex CLI is not installed" names an
+    action he can take.
+    """
+    host = _ConversationHost(
+        workspace_root=tmp_path,
+        transport_registry=_TransportRegistry(workspace_root=tmp_path),
+        config=Config(),
+    )
+    catalog = await host._catalog()
+    blocked = [route for route in catalog.routes if route.availability == "policy_blocked"]
+    assert not blocked, (
+        "a row nothing can ever make available belongs in the policy, not the route list: "
+        + ", ".join(route.id for route in blocked)
+    )
+    assert any(route.connection == "local_session" for route in catalog.routes), (
+        "the routes that CAN work are untouched"
+    )
