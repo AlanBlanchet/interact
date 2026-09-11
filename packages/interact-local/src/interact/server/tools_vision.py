@@ -15,7 +15,7 @@ from interact.desktop import DesktopElement
 from interact.models import is_audio_model, is_transcription_only_model
 from interact.server import capture, core, targets, vlm
 from interact.server.core import (
-    _DEFAULT_SESSION,
+    _AUTO_SESSION,
     _audio_mime,
     _session_response,
     config,
@@ -23,7 +23,8 @@ from interact.server.core import (
     mcp,
 )
 from interact.state import format_element_list
-from interact.vision import MediaItem, analyze_media, transcribe_audio
+from interact.vision import MediaItem
+from interact.vision.core import analyze_media, transcribe_audio
 from interact.vision.critique import (
     UIReview,
     VerifyReport,
@@ -51,17 +52,17 @@ async def screenshot(
     return_image: bool = False,
     debug_dir: str | None = None,
     target: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     model: str | None = None,
 ):
     """Capture the current page or a desktop window.
 
-    Default (target unset): operates on browser session "default".
+    Default (target unset): operates on your own browser session (named in the reply).
     target=<window title>: captures a desktop window. target="screen"/"screen:<index>": the whole
     desktop or one monitor (use list_desktop_windows to discover windows + monitor indexes).
     target="file:<path>": ANALYZE an existing image file (with query) instead of capturing — for an
     artifact produced out-of-band; this never writes, so it can't clobber the file.
-    A desktop target and a non-default session are mutually exclusive.
+    A desktop target and a session you named are mutually exclusive.
 
     Returns depend on parameters:
     - No selector/element, no query: page title + visible text content (browser) or, for a
@@ -115,7 +116,7 @@ async def screenshot(
         return err
     # If `path` already exists we're about to OVERWRITE it with this capture — surface that so the
     # result can't be mistaken for an analysis of the prior file (#44). To analyze a file, use
-    # target="file:<path>" above; `path` is an OUTPUT sink.
+    # target="file:<path>" above — `path` is an OUTPUT sink.
     overwrote_path = bool(path) and core._resolve_save_path(path).exists()
     img_bytes: bytes | None = None
     if win:
@@ -129,14 +130,14 @@ async def screenshot(
             geometry = f"({el.w}x{el.h} at {el.x},{el.y})"
             # The LABEL is what must not survive a screen change. Cropping the live frame at a
             # ref's coordinates is what was asked for; telling the model those pixels are a widget
-            # detected on a DIFFERENT frame hands it an image and a description that disagree,
-            # which is the setup for the confident wrong answer in #112. So on a changed frame the
-            # crop still goes, described only by where it was taken from, and the caller is warned.
+            # detected on a DIFFERENT frame hands it an image and a description that disagree — the
+            # setup for the confident wrong answer in #112. So on a changed frame the crop still
+            # goes, described only by where it was taken from, and the caller is warned.
             #
-            # A warning rather than a refusal, deliberately: the signature is a 16x16 hash of the
-            # frame, so a blinking caret or a clock flips it, and refusing there would make
-            # element queries unusable on any live window. That matches how this codebase already
-            # treats the geometry case (DesktopElement.detection_stale).
+            # A warning, not a refusal, deliberately: the signature is a 16x16 hash of the frame,
+            # so a blinking caret or a clock flips it, and refusing there would make element
+            # queries unusable on any live window — matches how this codebase already treats the
+            # geometry case (DesktopElement.detection_stale).
             stale = DesktopElement.stale_for(win.wid, _page_signature(raw))
             meta = geometry if stale else f"[{el.index}] {el.role}: {el.name!r} {geometry}"
             result = await vlm._media_response(img_bytes, meta, query, path, model_override=model)
@@ -151,10 +152,10 @@ async def screenshot(
             img_bytes, description = await capture._capture_desktop(win, query, path, model_override=model)
             text = f"{core._desktop_label(win)}\n{description}"
         else:
-            # No query → just capture. screenshot NEVER runs VLM grounding (that's
-            # get_interactive_elements' job, and a VLM call here would be slow + wrong). If a
-            # detection already exists for this window, surface those refs so the capture is
-            # actionable; otherwise return metadata and point the agent at the detect tool.
+            # No query → just capture. screenshot NEVER runs VLM grounding (get_interactive_elements'
+            # job; a VLM call here would be slow + wrong). If a detection already exists for this
+            # window, surface those refs so the capture is actionable; otherwise return metadata
+            # and point the agent at the detect tool.
             img_bytes = win.capture()
             dest = core._save_to_path(path, img_bytes) if path else None
             # Surface cached refs ONLY if they belong to the frame just captured — after a navigation
@@ -196,8 +197,8 @@ async def screenshot(
     if overwrote_path:
         text += "\n(note: overwrote existing file with this capture)"
     # An empty frame is indistinguishable from "still loading", so a caller retries and waits
-    # instead of looking. That is exactly what happened to a CRASHED window whose per-window
-    # capture came back black while target="screen" showed the crash modal (#113). One line.
+    # instead of looking — exactly what happened to a CRASHED window whose per-window capture
+    # came back black while target="screen" showed the crash modal (#113). One line.
     if img_bytes is not None and "nothing to analyse" not in text and (why := blank_frame_reason(img_bytes)):
         text += (
             f"\n(note: {why} — the window may be crashed, occluded or GPU-composited"
@@ -219,7 +220,7 @@ async def get_interactive_elements(
     tab: int | None = None,
     debug_dir: str | None = None,
     target: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     method: str = "default",
     model: str | None = None,
     fresh: bool = False,
@@ -227,12 +228,12 @@ async def get_interactive_elements(
     """List the interactive elements with numbered badges + their details; act on them by the
     returned `ref`/`element` in run_actions.
 
-    Default (target unset): browser session "default" — sets data-interact-ref attributes via a
+    Default (target unset): your own browser session — sets data-interact-ref attributes via a
     pure DOM scan (no VLM). get_page_state and screenshot return these refs too, so you often
     already have them without a separate call. target=<window title>: VLM-detects elements in a
     desktop window;
     target="screen"/"screen:<index>": VLM-detects across the whole desktop or one monitor.
-    A desktop target and a non-default session are mutually exclusive (list_desktop_windows lists them).
+    A desktop target and a session you named are mutually exclusive (list_desktop_windows lists them).
 
     Returns a numbered list with role/name for each element.
     Use element indices in subsequent click_element actions, or ref values for click/type_text/hover (browser only).
@@ -282,7 +283,7 @@ async def review_ui(
     focus: str | None = None,
     reference: str | None = None,
     target: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     scope: str | None = None,
     path: str | None = None,
     model: str | None = None,
@@ -331,7 +332,7 @@ async def verify_ui(
     target: str | None = None,
     reference: str | None = None,
     focus: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     scope: str | None = None,
     path: str | None = None,
     model: str | None = None,
@@ -377,7 +378,7 @@ async def measure_ui(
     target: str | None = None,
     region: str | None = None,
     point: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     scope: str | None = None,
     path: str | None = None,
 ) -> str:
@@ -433,10 +434,10 @@ def _asks_about_sound_quality(query: str | None) -> bool:
     """Is this query a judgement about how the audio SOUNDS (fidelity, artifacts, which is
     cleaner) rather than what it CONTAINS (words, speakers, language, timing)?
 
-    Such answers are the ones that proved unreliable: on one clean file the same model rated
-    fidelity, then claimed it had only received a transcript, then inverted an A/B comparison
-    against an objectively measured relationship (#94). The verdict is a caption, never a
-    measurement — so these queries get told so."""
+    Such answers proved unreliable: on one clean file the same model once rated fidelity, then
+    claimed it had only received a transcript, then inverted an A/B comparison against an
+    objectively measured relationship (#94). The verdict is a caption, never a measurement — so
+    these queries get told so."""
     return bool(query) and bool(_SOUND_QUALITY_RE.search(query))
 
 
@@ -502,9 +503,9 @@ async def transcribe(path: str, query: str | None = None, model: str | None = No
     if not query:
         return f"{transcript}\n(transcribed:{(' ' + r.model) if r.model else ''} {r.elapsed:.1f}s)"
 
-    # The model never heard the clip — it is reading the transcript. Say so, because a confident
+    # The model never heard the clip — it's reading the transcript. Say so: a confident
     # acoustic-sounding answer over text is exactly the failure reported in #94. A question about
-    # how it SOUNDS cannot be answered from a transcript at all, so refuse rather than invent one.
+    # how it SOUNDS can't be answered from a transcript at all, so refuse rather than invent one.
     if _asks_about_sound_quality(query):
         return (
             f"CANNOT ANSWER: {audio_model} is transcription-only, so this query was going to be "

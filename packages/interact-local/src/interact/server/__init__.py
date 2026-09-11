@@ -1,15 +1,15 @@
 """The ``interact`` MCP server, split by cohesion into a package.
 
 ``core`` owns the shared ``FastMCP`` instance, lifespan, instructions and the browser session
-registry; ``vlm`` / ``sandbox`` / ``targets`` / ``capture`` hold the private helpers; the
-``tools_*`` modules hold the ``@mcp.tool`` surfaces (importing them registers the tools). This
-``__init__`` imports them in dependency order and RE-EXPORTS the whole public + test-patched
-surface, so ``import interact.server as srv; srv._vlm`` and ``from interact.server import
-_scan_elements`` keep working exactly as when this was one module.
+registry; ``vlm`` / ``sandbox`` / ``targets`` / ``capture`` hold private helpers; ``tools_*``
+modules hold the ``@mcp.tool`` surfaces (importing them registers the tools). This ``__init__``
+imports them in dependency order and RE-EXPORTS the whole public + test-patched surface, so
+``import interact.server as srv; srv._vlm`` and ``from interact.server import _scan_elements``
+keep working exactly as when this was one module.
 
 Monkeypatch note: a helper is patched on the module that DEFINES it (``srv.vlm._vlm``,
 ``srv.targets._resolve_target``, ``srv.sandbox._get_sandbox``) — cross-module call sites are
-module-qualified so the patch is seen; the re-exports below are for direct import/read access.
+module-qualified so the patch is seen; re-exports below are for direct import/read access.
 """
 
 import asyncio  # noqa: F401 — re-exported: some tests patch interact.server.asyncio
@@ -24,6 +24,7 @@ from interact.server.core import (  # noqa: F401
     _AUDIO_MIME,
     _DBG_ACTIONS,
     _DBG_ELEMENTS,
+    _AUTO_SESSION,
     _DEFAULT_SESSION,
     _MAX_FALLBACKS,
     _NO_WINDOWS_MSG,
@@ -145,10 +146,9 @@ from interact.launch import (  # noqa: F401
     _resolve_nested_size,
     apply_launch_rewrites,
 )
-from interact.vision import (  # noqa: F401
+from interact.vision import MediaItem, VLMResult  # noqa: F401
+from interact.vision.core import (  # noqa: F401
     _UNSET,
-    MediaItem,
-    VLMResult,
     _Unset,
     analyze_media,
     analyze_screenshot,

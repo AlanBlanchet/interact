@@ -12,15 +12,16 @@ from interact.config import DEFAULT_LIMIT
 from interact.debug_utils import Debug
 from interact.actions.dispatch import _run_actions_browser, _run_actions_desktop
 from interact.server import capture, core, targets, vlm
-from interact.server.core import _DBG_ACTIONS, _DEFAULT_SESSION, _session_response, config, instrumented, mcp
+from interact.server.core import _AUTO_SESSION, _DBG_ACTIONS, _session_response, config, instrumented, mcp
 from interact.state import format_element_list
 
 
 def _recovered(mgr: BrowserManager | None, body: str) -> str:
     """Prefix any self-recovery note the session raised while serving this call (#89). A session
     that lost every tab (browser crash, or a concurrent caller closing the last tab on the SHARED
-    "default" session) heals itself in BrowserManager — but the heal must never be silent, or the
-    agent keeps acting as if its page state survived. Drained here, so it rides out on the result."""
+    "default" session) heals itself in BrowserManager — but the heal must never be silent, else
+    the agent keeps acting as if its page state survived. Drained here, so it rides out on the
+    result."""
     notes = mgr.drain_recovery_notes() if mgr else []
     return "\n".join([*notes, body]) if notes else body
 
@@ -34,7 +35,7 @@ async def navigate(
     wait: str | None = None,
     timeout: float | None = None,
     debug_dir: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     http_credentials: str | None = None,
 ) -> str:
     """Navigate to a URL and return page content. Browser-only — requires a session, not a window.
@@ -79,7 +80,7 @@ async def run_actions(
     wait: str | None = None,
     debug_dir: str | None = None,
     target: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
     record: bool = False,
     allow_self: bool = False,
 ) -> str:
@@ -87,12 +88,12 @@ async def run_actions(
 
     TARGET — the `target` param picks ONE surface:
     - A web page (the common case): leave `target` unset (or "browser"); actions run on browser
-      session "default" (or the named `session`). This is the default for all web automation.
+      your own session (or the named `session`). This is the default for all web automation.
     - A NATIVE desktop app (not a web page — e.g. a terminal, editor, Electron/GTK/Qt window):
       set `target=<window title substring>`. Call list_desktop_windows FIRST to discover titles.
     - The whole desktop: `target="screen"` (all monitors combined) or `target="screen:<index>"`
       for one monitor (list_desktop_windows shows the monitor indexes).
-    A desktop `target` and a non-default `session` are mutually exclusive. For a website, leave
+    A desktop `target` and a `session` you named are mutually exclusive. For a website, leave
     `target` unset.
 
     TARGETING a click/type_text/hover/drag/scroll — any of: `ref` (browser, from
@@ -171,18 +172,18 @@ async def run_actions(
     win, mgr, err = targets._resolve_target(target, session)
     if err:
         return err
-    # The blast radius of an action must never include the actor: typing into the editor that
-    # hosts this session can end the session issuing the command (a reload or a close kills the
-    # agent mid-task, with nothing left to notice or repair it). Observation stays allowed —
-    # this guards INPUT, not looking.
+    # The blast radius of an action must never include the actor: typing into the editor hosting
+    # this session can end the session issuing the command (a reload or close kills the agent
+    # mid-task, nothing left to notice or repair it). Observation stays allowed — this guards
+    # INPUT, not looking.
     from interact.desktop.selfguard import refusal_for
 
     refusal = refusal_for(win.name if win is not None else None, actions, allow_self=allow_self)
     if refusal:
         return refusal
     # When recording, capture a frame per step and let the video model read the sequence; the
-    # action run itself returns its normal step report (so the query goes to the frames, not the
-    # final state, avoiding a duplicate analysis).
+    # action run itself returns its normal step report, so the query goes to the frames, not the
+    # final state, avoiding a duplicate analysis.
     frames: list[bytes] | None = [] if record else None
     dispatch_query = None if record else query
     if win:
@@ -200,7 +201,7 @@ async def run_actions(
 
 @mcp.tool()
 async def get_page_state(
-    scope: str | None = None, tab: int | None = None, session: str = _DEFAULT_SESSION
+    scope: str | None = None, tab: int | None = None, session: str = _AUTO_SESSION
 ) -> str:
     """Get current page URL, title, accessibility tree, focused element, visible text, and the
     page's interactive elements as a numbered `ref` list — so you can act by `ref` in run_actions
@@ -233,7 +234,7 @@ async def get_page_state(
 @mcp.tool()
 async def session(
     action: Literal["list", "save", "load", "close"],
-    name: str = _DEFAULT_SESSION,
+    name: str = _AUTO_SESSION,
     path: str | None = None,
 ) -> str:
     """Manage browser sessions — one tool for the whole lifecycle.
@@ -244,7 +245,8 @@ async def session(
       - "load"  — restore `name` from a previously saved `path` (path required).
       - "close" — close `name` and free its browser/resources.
 
-    name: the session to act on (default "default").
+    name: the session to act on — omit it for YOUR OWN session (the one every reply names in
+        its `[session: …]` prefix); "default" is the shared one.
     path: the session-state file for save/load. A relative path lands under ~/.interact/out
         (interact's output dir), never the server's cwd; "~" expands. The reply names the
         absolute file.
@@ -256,7 +258,10 @@ async def session(
         lines = []
         for s in sessions:
             idle = core._sessions.idle_seconds(s)
-            lines.append(f"  {s}" + (f" — idle {idle:.0f}s" if idle is not None else " — no browser open"))
+            mine = " (yours)" if s == name else ""  # `name` resolved to THIS caller's own session
+            lines.append(
+                f"  {s}{mine}" + (f" — idle {idle:.0f}s" if idle is not None else " — no browser open")
+            )
         ttl = config.session_idle_ttl
         if ttl > 0:
             lines.append(f"(idle sessions auto-close after {ttl}s; set INTERACT_SESSION_IDLE_TTL=0 to disable)")
@@ -276,7 +281,7 @@ async def session(
 
 
 @mcp.tool()
-async def download_asset(url: str, path: str, session: str = _DEFAULT_SESSION) -> str:
+async def download_asset(url: str, path: str, session: str = _AUTO_SESSION) -> str:
     """Download a URL to a local file. Uses the browser session's cookies for authenticated
     downloads.
 
@@ -297,7 +302,7 @@ async def get_logs(
     source: Literal["network", "console"],
     clear: bool = False,
     limit: int = DEFAULT_LIMIT,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
 ) -> str:
     """Return captured browser logs (last `limit` entries). source="network" → requests
     (method/status/url), source="console" → console messages + errors. clear=True flushes after reading."""

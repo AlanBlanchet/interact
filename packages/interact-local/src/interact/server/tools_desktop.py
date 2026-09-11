@@ -19,7 +19,7 @@ from interact.launch import (
 )
 from interact.models import supports_native_video_inline
 from interact.server import core, sandbox, targets, vlm
-from interact.server.core import _DEFAULT_SESSION, _NO_WINDOWS_MSG, _session_response, config, mcp
+from interact.server.core import _AUTO_SESSION, _NO_WINDOWS_MSG, _session_response, config, mcp
 from interact.vision import MediaAnalysis, MediaItem, RecordingCapture, RecordingResult
 from interact.vision.types import VLMResult
 from interact.vision.session import sample_video_frames
@@ -113,12 +113,12 @@ def _sampling_caveat(
 ) -> str:
     """The resolution floor of a video verdict, stated as part of the verdict itself.
 
-    A recording judged by a non-native-video model is ffmpeg-sampled at ``video.fps`` and capped at
-    ``video.max_frames``, so an effect finer than one sampling interval CANNOT appear — a real
-    100ms-per-element stagger ladder was reported flatly absent twice, contradicted by the page's
-    own ``document.getAnimations()`` (#86). The model was not wrong about its frames; the answer was
-    presented without the floor that produced it. Naming the floor turns a false negative into an
-    honest "below what this can resolve"."""
+    A recording judged by a non-native-video model is ffmpeg-sampled at ``video.fps`` and capped
+    at ``video.max_frames``, so an effect finer than one sampling interval CANNOT appear — a real
+    100ms-per-element stagger ladder was once reported flatly absent, contradicted by the page's
+    own ``document.getAnimations()`` (#86). The model wasn't wrong about its frames; the answer
+    was presented without the floor that produced it. Naming the floor turns a false negative
+    into an honest "below what this can resolve"."""
     if result is not None and result.video_sampled is False:
         return ""
     if (
@@ -164,8 +164,8 @@ async def list_desktop_windows() -> str:
         return _NO_WINDOWS_MSG
     parts = []
     if monitors:
-        # Offer the connector name (DP-1, eDP-1) as the target: indices reorder across sessions /
-        # display-manager restarts, the connector is stable (#1.6).
+        # Offer the connector name (DP-1, eDP-1) as the target: indices reorder across
+        # sessions/display-manager restarts, connector is stable (#1.6).
         mon_lines = "\n".join(
             f"  target=\"screen:{m['name']}\" (or screen:{m['index']}) — {m['w']}x{m['h']} at {m['x']},{m['y']}"
             for m in monitors
@@ -182,8 +182,8 @@ async def list_desktop_windows() -> str:
             for w, n in sandbox._sandbox.list_windows()
         )
         parts.append(f"Sandbox windows (isolated display; launch_app to add):\n{nested or '  (empty)'}")
-        # A URL a sandboxed app opened was CONTAINED rather than sent to the user's real browser
-        # (#83). Say so — otherwise the control looks broken, since nothing visibly happens.
+        # A URL a sandboxed app opened was CONTAINED, not sent to the user's real browser (#83) —
+        # say so, else the control looks broken since nothing visibly happens.
         opened = getattr(sandbox._sandbox, "opened_urls", None)
         if opened is not None and (urls := opened()):
             listed = "\n".join(f"  {u}" for u in urls[-5:])
@@ -266,9 +266,9 @@ async def launch_app(
             argv = shlex.split(command)
         except ValueError as e:
             return f"ERROR: could not parse command ({e})"
-        # `FOO=bar app` is shell phrasing with no shell marker: exec'd verbatim it died on a program
-        # named 'FOO=bar' (#117). The assignments become the launch env and the command stays on the
-        # exec path, so the rewrites below still apply.
+        # `FOO=bar app` is shell phrasing with no shell marker: exec'd verbatim it died on a
+        # program named 'FOO=bar' (#117). Assignments become the launch env, command stays on the
+        # exec path, rewrites below still apply.
         assignments, argv = split_env_assignments(argv)
         if not argv:
             if not assignments:
@@ -278,10 +278,10 @@ async def launch_app(
                     f"e.g. `{command} app`")
         env = assignments or None
         argv, flutter_note = apply_launch_rewrites(argv, getattr(backend, "display", ":?"))
-    # An identical command already running is almost never a second app the caller wants: it is a
-    # retried tool call. Spawning anyway produced two same-titled windows, and target="nested:<title>"
-    # then silently alternated between them — ~20 actions landed on the invisible one (#87). Point
-    # the caller at what is already there instead.
+    # An identical command already running is almost never a second app wanted: it's a retried
+    # tool call. Spawning anyway once produced two same-titled windows, target="nested:<title>"
+    # silently alternating between them — ~20 actions landed on the invisible one (#87). Point the
+    # caller at what's already there instead.
     running = getattr(backend, "running_command", None)
     if running is not None and running(argv) is not None:
         windows = await asyncio.to_thread(backend.list_windows)
@@ -297,9 +297,9 @@ async def launch_app(
         kill_apps = getattr(backend, "kill_apps", None)
         if kill_apps is not None:
             replaced = await asyncio.to_thread(kill_apps)
-    # An exec that cannot start raised straight out of the tool, reaching the agent as FastMCP's
-    # generic exception text instead of a guided ERROR: the prefix is consumed now, so the name
-    # shown is the real command (#117).
+    # An exec that can't start once raised straight out of the tool, reaching the agent as
+    # FastMCP's generic exception text instead of a guided ERROR — prefix consumed now, so the
+    # name shown is the real command (#117).
     env_note = f" with {shlex.join(f'{k}={v}' for k, v in env.items())} set" if env else ""
     tried = f"`{shlex.join(argv)}`{env_note}"
     try:
@@ -330,10 +330,10 @@ async def launch_app(
         health = f" {health}" if health else ""
         return (f"Launched `{command}` in the sandbox but no window appeared within {wait:.0f}s.{flutter_note}{health} "
                 f"It may still be starting — retry list_desktop_windows, or raise `wait`.")
-    # Fit each new window to fill the (now correctly-shaped) display so a mobile app isn't a small
-    # rectangle floating in a big screen — then nudge a software-GL app (Flutter/Electron) once so
-    # it starts rendered (a stale black buffer otherwise persists until a configure event makes it
-    # repaint). Both best-effort — capture self-heals the repaint the same way if it recurs.
+    # Fit each new window to fill the (now correctly-shaped) display, so a mobile app isn't a
+    # small rectangle floating in a big screen — then nudge a software-GL app (Flutter/Electron)
+    # once so it starts rendered (a stale black buffer otherwise persists until a configure event
+    # repaints it). Both best-effort — capture self-heals the repaint the same way if it recurs.
     await asyncio.sleep(0.6)  # let the window reach its real size first
     fit = getattr(backend, "fit_window", None)
     repaint = getattr(backend, "force_repaint", None)
@@ -342,8 +342,8 @@ async def launch_app(
             await asyncio.to_thread(fit, name)
         if repaint is not None:
             await asyncio.to_thread(repaint, name)
-    # Offer the window ID alongside the title: an app that sets no per-instance title makes
-    # target="nested:<title>" ambiguous the moment a second window exists, and wid: cannot drift (#87).
+    # Offer the window ID alongside the title: an app with no per-instance title makes
+    # target="nested:<title>" ambiguous the moment a second window exists — wid: cannot drift (#87).
     targets_out = "\n".join(
         f'  target="nested:{name}"  (unambiguous: target="nested:wid:{wid}")' for wid, name in windows
     )
@@ -379,7 +379,7 @@ async def record(
     fps: int | None = None,
     path: str | None = None,
     target: str | None = None,
-    session: str = _DEFAULT_SESSION,
+    session: str = _AUTO_SESSION,
 ) -> RecordingResult:
     """Record actions as video and optionally analyze with vision.
 
@@ -388,7 +388,7 @@ async def record(
     NON-blocking session and returns at once (so you can drive actions, e.g. tap a control to trigger
     an animation, while it captures), then record(start=False) stops and analyzes. Pass duration= for
     a blocking one-shot clip of fixed length instead (no interleaved actions).
-    A desktop target and a non-default session are mutually exclusive (list_desktop_windows lists them).
+    A desktop target and a session you named are mutually exclusive (list_desktop_windows lists them).
 
     Sandbox (nested) recordings include the APP'S AUDIO: launched apps play into the sandbox's
     private sink (never the user's speakers), and its monitor is muxed into the mp4 — so
