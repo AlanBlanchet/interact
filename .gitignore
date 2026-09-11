@@ -35,3 +35,8 @@ vscode-extension/src/settings.json
 .github/instructions/
 .github/prompts/
 .github/skills/
+
+# The private server half (AlanBlanchet/interact-cloud), checked out next door and linked
+# in so both gits are workable from this directory. Never committed here.
+/cloud
+*.code-workspace

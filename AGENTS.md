@@ -17,8 +17,12 @@ Public and private halves:
 
 - This repository is the PUBLIC half: it parses, asks the server for what it needs, and puts the
   answer to work across the surfaces above.
-- The server is PRIVATE and lives in its own repository — tenants, auth, billing, secrets, queues,
-  retention, deployment. It consumes a released public schema version and is never imported here.
+- The server is PRIVATE: `AlanBlanchet/interact-cloud` — tenants, auth, billing, secrets, queues,
+  retention, deployment, web gateway. It consumes a released public schema version and is never
+  imported here. Checked out beside this repository it appears at `cloud/` (git-ignored), so both
+  gits are workable from here; `interact.code-workspace` opens the two halves in one window.
+- User feedback arrives as GitHub issues on the public repo — `.github/ISSUE_TEMPLATE/` shapes the
+  human ones, interact's own `report_issue` tool files the agent ones.
 
 Ownership (short names map to `packages/interact-core` and `packages/interact-local`):
 
