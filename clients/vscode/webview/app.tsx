@@ -918,8 +918,8 @@ function ConcurrencyRibbon({ lanes, axis }: { lanes: AgentLane[]; axis: Axis }):
           line needed 197px in a 118px cell, and the user's own noun leads the second. */}
       <div className="board-score-col score-head"
            title="Artificial Analysis intelligence index — one measure, never a verdict">
-        <span className="score-head-name">Artificial Analysis</span>
-        <span className="score-head-hedge">intelligence · not a verdict</span>
+        <span className="score-head-name">Intelligence score</span>
+        <span className="score-head-hedge">Artificial Analysis · not a verdict</span>
       </div>
       <div className="lane-track ribbon-track">
         {gridLines(axis)}

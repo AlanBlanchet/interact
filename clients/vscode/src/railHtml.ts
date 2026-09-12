@@ -104,7 +104,7 @@ body {
   margin: 0;
   font-family: var(--vscode-font-family);
   --bd-text-body: max(15px, var(--vscode-font-size, 13px));
-  --bd-text-small: max(14px, calc(var(--vscode-font-size, 13px) * .9333));
+  --bd-text-small: max(15px, var(--vscode-font-size, 13px));
   font-size: var(--bd-text-body);
   line-height: 1.5;
   color: var(--vscode-foreground);
@@ -288,22 +288,24 @@ body ::-webkit-scrollbar-thumb:hover {
    seven-character names — so it stands down to the stacked reading rather than overflowing. */
 @container (max-width: 1380px) {
   .runs .row, .view-table .runs .row {
-    display: grid; grid-template-columns: minmax(0, 66ch) auto;
-    justify-content: start; align-items: center; gap: 5px 14px; padding-block: 10px;
+    display: grid; grid-template-columns: minmax(13rem, .7fr) minmax(0, 1.5fr);
+    align-items: start; gap: 8px 18px; padding-block: 10px;
   }
   .run-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; grid-column: 1; grid-row: 1; min-width: 0; }
   .runs .who { flex: 0 1 auto; font-weight: 650; }
-  .runs .oneliner { grid-column: 1; grid-row: 2; color: var(--bd-fg); }
-  .run-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; grid-column: 1; grid-row: 3; min-width: 0; }
+  .runs .oneliner { grid-column: 2; grid-row: 1; color: var(--bd-fg); }
+  .run-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; grid-column: 1; grid-row: 2; min-width: 0; }
   .runs .provider, .runs .model, .runs .effort, .runs .score, .runs .when, .runs .cost {
     flex: 0 1 auto; max-width: 100%;
   }
-  .runs .acts { grid-column: 2; grid-row: 1 / span 3; grid-template-columns: repeat(2, max-content); }
+  .runs .acts { grid-column: 2; grid-row: 2; display: flex; flex-wrap: wrap; justify-self: start; }
   .runs .row > :empty, .run-facts > :empty { display: none; }
   .columnHead { display: none; }
 }
-@container (max-width: 560px) {
+@container (max-width: 800px) {
   .runs .row, .view-table .runs .row { grid-template-columns: minmax(0, 1fr); }
+  .runs .oneliner { grid-column: 1; grid-row: 2; }
+  .run-facts { grid-column: 1; grid-row: 3; }
   .runs .acts { grid-column: 1; grid-row: 4; justify-self: start; }
 }
 
@@ -497,7 +499,8 @@ body.vscode-light .mark, body.vscode-high-contrast-light .mark {
 .task-detail > summary { cursor: pointer; display: flex; align-items: baseline; gap: 6px; min-height: 24px; }
 .task-detail > summary::before { content: "▸"; flex: none; }
 .task-detail[open] > summary::before { content: "▾"; }
-.task-detail > summary > span { overflow: hidden; text-overflow: ellipsis; }
+.task-detail > summary > span { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.task-disclosure-label { flex: none; font-weight: 500; color: var(--bd-teal); text-decoration: underline; text-underline-offset: 3px; }
 .task-detail > summary:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
 .task-detail > p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; line-height: 1.5; color: var(--bd-fg); }
 /* Band headings are PLAQUES — the signs the building hangs on every department, pressed onto the
@@ -681,7 +684,7 @@ export function railBody(
           (r.tasks ?? 1) > 1 ? `<button class="tasks" data-agent="${esc(roleOf(r.run).id)}" title="Show all ${r.tasks} tasks">×${r.tasks}</button>` : ""}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
         <span class="stamp" title="${esc(voice.phrase)}">${esc(voice.word)}</span></span>
-        ${errand ? `<details class="oneliner task-detail" data-fold-key="task:${esc(r.run.run_id)}"><summary title="Expand full task"><span>${esc(errand)}</span></summary><p>${esc(r.run.task ?? "")}</p></details>` : '<span class="oneliner"></span>'}
+        ${errand ? `<details class="oneliner task-detail" data-fold-key="task:${esc(r.run.run_id)}"><summary title="Expand full task"><span>${esc(errand)}</span><b class="task-disclosure-label">Full task</b></summary><p>${esc(r.run.task ?? "")}</p></details>` : '<span class="oneliner"></span>'}
         <span class="run-facts"><span class="provider" title="${esc(provider ? `Provider ${provider}` : "No provider recorded")}">${esc(provider)}</span>
         <span class="model" title="${esc(model || "No model recorded")}">${esc(model)}</span>
         <span class="effort" title="${esc(effort ? `Reasoning ${effort}` : "No reasoning level recorded")}">${esc(effort)}</span>
