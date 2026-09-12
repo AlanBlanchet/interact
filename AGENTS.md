@@ -17,14 +17,14 @@ Public and private halves:
 
 - This repository is the PUBLIC half: it parses, asks the server for what it needs, and puts the
   answer to work across the surfaces above.
-- The server is PRIVATE: `AlanBlanchet/interact-cloud` — tenants, auth, billing, secrets, queues,
+- The server is PRIVATE: `AlanBlanchet/interact-server` — tenants, auth, billing, secrets, queues,
   retention, deployment, web gateway. It consumes a released public schema version and is never
-  imported here. Checked out beside this repository it appears at `cloud/` (git-ignored), so both
-  gits are workable from here; `interact.code-workspace` opens the two halves in one window.
+  imported here. In the combined `interact-all` workspace it is the sibling checkout at
+  `../interact-server`; the parent workspace opens all three repositories.
 - User feedback arrives as GitHub issues on the public repo — `.github/ISSUE_TEMPLATE/` shapes the
   human ones, interact's own `report_issue` tool files the agent ones.
 
-Ownership (short names map to `packages/interact-core` and `packages/interact-local`):
+Ownership (short names map to the standalone `../interact-core` checkout and `packages/interact-local`):
 
 - `interact-core` — provider-independent contracts and generated API models shared by every surface.
   Source of truth for tool APIs, schemas and payloads; the tool docstrings carry the behaviour. An
@@ -46,8 +46,9 @@ this repository holds distributable defaults; indexes and mirror caches are deri
 
 ## Team
 
-- Delegate independent, file-scoped work with explicit boundaries and write authority. At most three
-  child workers alive.
+- Delegate independent, file-scoped work with explicit boundaries and write authority. Choose
+  concurrency from useful independent work and each role's cost, not a fixed three-agent ceiling.
+  Release finished threads and queue further work when the provider's own capacity is reached.
 
 ## Delivery
 

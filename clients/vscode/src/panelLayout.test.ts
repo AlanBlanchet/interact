@@ -14,6 +14,12 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+/** Every command the manifest declares. A command hidden by a `when: false` palette entry and one
+ *  removed from the manifest altogether are both off the palette. */
+const declared = (manifest: { contributes: { commands: { command: string }[] } }) =>
+  new Set(manifest.contributes.commands.map((c) => c.command));
+
+
 type View = { id: string; name?: string; initialSize?: number; visibility?: string; when?: string };
 
 const views: View[] = JSON.parse(
@@ -109,4 +115,35 @@ test("no command that needs a subject is offered where it has none", () => {
                      "interact.agents.openConversation"]) {
     assert.ok(hidden.has(cmd), `${cmd} needs a subject and would no-op from the palette`);
   }
+});
+
+test("EVERY command that opens a prompt is hidden from the palette, not just the ones we listed", () => {
+  /* "Remove from everywhere the fact that we can prompt from the vscode CTRL+P box at the top.
+     Everything should be in the dashboard."
+
+     Two earlier tests name three commands each, by hand. `interact.agents.newSession` was added
+     later, was in neither list, and shipped in the palette opening "What do you want done?" — the
+     exact box he asked to be rid of. A hand-kept list cannot cover a command nobody remembered to
+     add to it, so this derives the list from the SOURCE: anything that calls `showInputBox` or
+     `showQuickPick` must be hidden. */
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+  const source = readFileSync(join(import.meta.dirname, "extension.ts"), "utf8");
+  const hidden = new Set(
+    (manifest.contributes.menus?.commandPalette ?? [])
+      .filter((e: { when?: string }) => e.when === "false")
+      .map((e: { command: string }) => e.command),
+  );
+
+  // FREE TEXT is the subject of his decision — "prompt from the box". A quick pick offers a
+  // choice; an input box asks you to type, which is the thing that must live in the dashboard.
+  const prompts: string[] = [];
+  const registration = /registerCommand\(\s*"([^"]+)"([\s\S]*?)(?=\n    vscode\.commands\.registerCommand\(|\n  \);)/g;
+  for (const [, command, body] of source.matchAll(registration)) {
+    if (/showInputBox/.test(body)) prompts.push(command);
+  }
+  assert.ok(prompts.length >= 3, `expected to find prompting commands, found ${prompts.length}`);
+
+  const exposed = prompts.filter((c) => declared(manifest).has(c) && !hidden.has(c));
+  assert.deepEqual(exposed, [],
+    `these open a box from Ctrl+Shift+P: ${exposed.join(", ")} — give them a dashboard entry instead`);
 });

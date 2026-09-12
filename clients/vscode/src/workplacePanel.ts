@@ -3,8 +3,8 @@
  *  An editor tab, not a side-bar section: a room full of people needs width, and the point is to
  *  leave it open on a second monitor and glance at it. The side bar keeps the list and the chat.
  *
- *  This file is the HOST only — it assembles a `TeamState` from the registry and hands it to the
- *  renderer. The drawing lives in `webview/workplace/`, so the visual can be reworked without
+ *  This file is the HOST only — it assembles a TeamState from the registry and hands it to the
+ *  renderer. The drawing lives in webview/workplace/, so the visual can be reworked without
  *  touching the data, and the data can be fixed without touching the visual.
  */
 import * as fs from "fs";
@@ -21,7 +21,10 @@ import { facultiesOf, parseCapabilities } from "./capabilities";
 import { companyOf, readOrg } from "./org";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 import { buildRail, railRoute } from "./rail";
-import { railBody, railScript, railStyle } from "./railHtml";
+import { ROSTER_VIEWS, modelsOnScreen, railBody, railScript, railStyle,
+  type RosterView } from "./railHtml";
+import { shortCompetence } from "./competence";
+import { CompetenceStore } from "./competenceStore";
 import { actionsFor } from "./agentActions";
 import { agentLabel, conversationTitle, roleOf } from "./roster";
 import { voiceOf } from "./statusLanguage";
@@ -30,12 +33,16 @@ import { describeScope, projectFor } from "./workspaceScope";
 
 export class WorkplacePanel {
   private static current: WorkplacePanel | undefined;
+  /** What each model is measured at — the one store every surface shares. */
+  private readonly measured = new CompetenceStore();
   private watcher: fs.FSWatcher | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private readonly log: vscode.OutputChannel,
+    /** Where a UI preference is remembered between windows. */
+    private readonly store?: vscode.Memento,
   ) {
     this.panel.onDidDispose(() => this.dispose());
     // One column for interact's surfaces: a new one joins the group its siblings already
@@ -44,9 +51,15 @@ export class WorkplacePanel {
     // A click in the room aims the side-bar Chat at that agent: the workplace is where you SEE
     // the team, the chat is where you talk to one of them, and this is the seam between.
     this.panel.webview.onDidReceiveMessage((msg) => {
-      // Two shapes on purpose: `select`/`run_id` is what the pixel-art scene posts, `focus`/`runId`
-      // what the plain fallback does. Accepting only one was why clicking a sprite did nothing at
-      // all — the hook was there, the two halves just never agreed on the word.
+      // The roster's view chooser. Handled before anything else because it is the one message
+      // that is a PREFERENCE rather than a navigation: it changes how the list looks and nothing
+      // about where you are in it.
+      const view = (msg as { type?: string; view?: string } | null)?.type === "rosterView"
+        ? (msg as { view?: string }).view : undefined;
+      if (view) { void this.chooseView(view as RosterView); return; }
+      // Two shapes on purpose: select/run_id is what the pixel-art scene posts, focus/runId what
+      // the plain fallback does. Accepting only one was why clicking a sprite did nothing at all
+      // — the hook was there, the two halves just never agreed on the word.
       const runId = selectedRunId(msg);
       if (runId) {
         // A character IS an agent now, so clicking one opens that agent and the errands it was
@@ -64,7 +77,7 @@ export class WorkplacePanel {
         return;
       }
       // The roster shares this document now, so its buttons arrive here too. Routed through the
-      // same `railRoute` the side-bar view used, so what a row can do is decided in one place and
+      // same railRoute the side-bar view used, so what a row can do is decided in one place and
       // an untrusted message still cannot name an arbitrary command.
       railRoute(msg, {
         run: (command) => void vscode.commands.executeCommand(command),
@@ -101,8 +114,25 @@ export class WorkplacePanel {
     this.render();
   }
 
+  /** Where the chosen roster view is remembered. "store in configs (cache) so it reuses the same
+   *  next time" — the same memento the agents tree already keeps its grouping in, so a preference
+   *  survives a window close without inventing a second place for UI state to live. */
+  private static readonly VIEW_KEY = "interact.workplace.rosterView";
+
+  /** The chosen view, this session at minimum. Held in a FIELD as well as the memento: with only
+   *  this.store?.update(...) a missing memento made the whole chooser inert — the write was
+   *  swallowed by the optional chaining, the getter fell back, and every click re-rendered the
+   *  same view. A preference that cannot be persisted must still be honoured while the panel is
+   *  open; silently doing nothing is the one behaviour worth ruling out. */
+  private chosenView: RosterView | undefined;
+
+  private get rosterView(): RosterView {
+    const stored = this.chosenView ?? this.store?.get<RosterView>(WorkplacePanel.VIEW_KEY);
+    return ROSTER_VIEWS.some((v) => v.id === stored) ? stored as RosterView : "grouped";
+  }
+
   /** One panel, reused — opening it twice should focus the room, not stack tabs of it. */
-  public static show(log: vscode.OutputChannel): void {
+  public static show(log: vscode.OutputChannel, state?: vscode.Memento): void {
     if (WorkplacePanel.current) {
       WorkplacePanel.current.panel.reveal();
       return;
@@ -113,7 +143,7 @@ export class WorkplacePanel {
       nextColumn() as vscode.ViewColumn,
       { enableScripts: true, retainContextWhenHidden: true },
     );
-    WorkplacePanel.current = new WorkplacePanel(panel, log);
+    WorkplacePanel.current = new WorkplacePanel(panel, log, state);
   }
 
   /** What an agent can do, from its own definition file — cached, because the file changes only
@@ -136,7 +166,7 @@ export class WorkplacePanel {
       // Quality & Critics, Production & Makers, Research, Records, the Wealth Desk — and nothing
       // placed anybody by them, so a finance agent stood among the code reviewers.
       (agent) => WorkplacePanel.departmentOf(agent),
-      // WHO each run was held with. One body per agent: five sessions recorded as `claude` are the
+      // WHO each run was held with. One body per agent: five sessions recorded as claude are the
       // coordinator five times, not five teammates, and an agent given three errands is one
       // colleague — which is what "I can see multiple 'claude' agents... they're all duplicates"
       // was looking at.
@@ -182,7 +212,7 @@ export class WorkplacePanel {
     WorkplacePanel.current?.render();
   }
 
-  /** Whether the document exists yet. Assigning `webview.html` REBUILDS it — every sprite becomes
+  /** Whether the document exists yet. Assigning webview.html REBUILDS it — every sprite becomes
    *  a new element, every running animation dies, and there is no clock — so it happens once. */
   private mounted = false;
   /** The agent whose conversations the roster is narrowed to, if you have gone into one. */
@@ -213,13 +243,47 @@ export class WorkplacePanel {
       // panel led with 8-day-old smoke probes while the living company sat below the fold.
       now,
     );
+    // Asked BY NAME, because every run names a model the ranking does not carry (sonnet,
+    // claude-sonnet-5): only a named ask resolves it, and the board on disk fills the rest.
+    this.ensureCompetence(modelsOnScreen(rail));
     return railBody(
       rail,
       voiceOf,
       (run) => conversationTitle(run as never),
       (run) => ({ id: roleOf(run as never, company).id, label: agentLabel(run as never, company) }),
       (run) => actionsFor(run as never),
+      (run) => {
+        const model = (run as { model?: string }).model;
+        const full = this.measured.competence(model);
+        const text = shortCompetence(full);
+        if (full && text) {
+          return { text, title: `${model} — ${full} — one measure, never a verdict` };
+        }
+        // Never a bare blank: "could not ask" and "not ranked" look identical in an empty cell,
+        // and the first of the two is a fact about this machine the reader can act on.
+        return this.measured.unavailable
+          ? { text: "—", title: this.measured.unavailable }
+          : undefined;
+      },
+      (run) => (run as { model?: string }).model,
+      this.rosterView,
     );
+  }
+
+  /** Remember the view and repaint the roster alone — the choice is a preference, not a reason to
+   *  rebuild the panel. */
+  private async chooseView(view: RosterView): Promise<void> {
+    if (!ROSTER_VIEWS.some((v) => v.id === view)) return;  // untrusted: it arrives from a webview
+    this.chosenView = view;
+    this.pushRoster();                      // the view changes whether or not it can be REMEMBERED
+    await this.store?.update(WorkplacePanel.VIEW_KEY, view);
+  }
+
+  /** Asked once for every surface that shows a number; never awaited by a paint. */
+  private ensureCompetence(models: readonly string[]): void {
+    void this.measured.ensure(models).then((known) => {
+      if (known) WorkplacePanel.refreshIfOpen();
+    });
   }
 
   /** Repaint just the roster — going into an agent must not rebuild the room and restart every

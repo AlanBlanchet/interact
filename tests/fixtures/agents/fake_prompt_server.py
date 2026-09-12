@@ -19,9 +19,15 @@ class _Handler(BaseHTTPRequestHandler):
     second_revision: str | None
     corrupt_second: bool
     token: str
+    log_file: Path
+
+    def _record(self, status: int) -> None:
+        with self.log_file.open("a") as log:
+            log.write(json.dumps({"path": self.path, "status": status}) + "\n")
 
     def do_GET(self) -> None:
         if self.headers.get("authorization") != f"Bearer {self.token}":
+            self._record(401)
             self.send_error(401)
             return
         if self.path == "/v1/catalog":
@@ -69,6 +75,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "created_at": datetime.now(UTC).isoformat(),
             }
         else:
+            self._record(404)
             self.send_error(404)
             return
         body = json.dumps(payload).encode()
@@ -77,6 +84,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        self._record(200)
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -85,6 +93,7 @@ class _Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port-file", type=Path, required=True)
+    parser.add_argument("--log-file", type=Path, required=True)
     parser.add_argument("--content", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--body-revision")
@@ -105,6 +114,7 @@ if __name__ == "__main__":
     _Handler.second_revision = args.second_revision
     _Handler.corrupt_second = args.corrupt_second
     _Handler.token = args.token
+    _Handler.log_file = args.log_file
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     args.port_file.write_text(str(server.server_port))
     server.serve_forever()

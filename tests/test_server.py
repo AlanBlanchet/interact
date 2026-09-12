@@ -10,7 +10,8 @@ from PIL import Image as PILImage
 
 import interact.vision.detect as det
 from interact.config import Config
-from interact.vision import MediaItem, _UNSET, analyze_media, VisionError, VLMResult
+from interact.vision import MediaItem, VLMResult
+from interact.vision.core import _UNSET, VisionError, analyze_media
 
 _DESKTOP_CTX = "Desktop window: Test (800x600)"
 

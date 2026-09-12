@@ -85,10 +85,10 @@ class Box(Element):
 
 _element_cache: dict[int, list] = {}
 _page_sig: dict[int, str] = {}  # last page signature (screenshot content hash) per wid → clear refs on change
-# Window geometry (x, y, w, h) when the refs for a wid were detected. A ref's box is only meaningful
-# under the layout it was measured in: after a dock resize / splitter move / window resize the same
-# box names a DIFFERENT widget, so a click by that ref lands somewhere unrelated while the log still
-# prints the old label (#88). Recorded at store time, compared at resolve time.
+# Window geometry (x, y, w, h) when refs for a wid were detected. A ref's box is only meaningful
+# under the layout it was measured in: after a dock resize/splitter move/window resize the same
+# box names a DIFFERENT widget, so a click by that ref lands somewhere unrelated while the log
+# still prints the old label (#88). Recorded at store time, compared at resolve time.
 _detect_geometry: dict[int, tuple[int, int, int, int]] = {}
 
 
@@ -103,14 +103,14 @@ class DesktopElement(Box):
     def detection_stale(cls, wid: int, win) -> str | None:
         """A short reason when this window's cached refs predate a LAYOUT CHANGE, else None.
 
-        Refs are boxes measured against one layout. When the window has since been resized — the
+        Refs are boxes measured against one layout. When the window has since been resized — a
         splitter moves, a dock is added, a tab bar changes the content area — every stored box may
         now cover different content, so acting by ref silently hits the wrong widget while the step
         report still names the old one (#88). Callers surface this as a warning rather than guessing.
 
-        Deliberately geometry-based: it is free (no capture) and catches the reshaping case that
-        actually moves boxes. An in-place change that leaves geometry identical (a tab switch) is
-        already handled by the page-signature invalidation in :meth:`merge_into`.
+        Deliberately geometry-based: free (no capture), catches the reshaping case that actually
+        moves boxes. An in-place change leaving geometry identical (a tab switch) is already
+        handled by the page-signature invalidation in :meth:`merge_into`.
         """
         detected = _detect_geometry.get(wid)
         if detected is None or not _element_cache.get(wid):
@@ -141,11 +141,11 @@ class DesktopElement(Box):
         geometry: tuple[int, int, int, int] | None = None,
     ) -> list[Self]:
         """Accumulate detections for a window across detect calls, keyed by a page
-        ``signature`` (a content fingerprint of the screenshot — NOT the title, which is
-        constant in single-window apps). Same screen → union with the existing refs (a
-        second/targeted detect *adds* to what we already found). Screen changed → drop the
-        now-stale refs first, since those elements are gone. Returns the full current set
-        (re-indexed), which becomes the live ref table for this window.
+        ``signature`` (a content fingerprint of the screenshot — NOT the title, constant in
+        single-window apps). Same screen → union with existing refs (a second/targeted detect
+        *adds* to what's already found). Screen changed → drop now-stale refs first, since those
+        elements are gone. Returns the full current set (re-indexed) — the live ref table for
+        this window.
         """
         if _page_sig.get(wid) != signature:
             _element_cache[wid] = []
@@ -172,10 +172,10 @@ class DesktopElement(Box):
         """True when refs exist for this window but were detected on a DIFFERENT frame.
 
         ``cached_for`` withholds stale refs from a listing; this answers the sharper question a
-        caller asks before ACTING on one ref — is the geometry and label I am about to use
-        describing the screen that is up right now? Cropping the live frame at last screen's
-        coordinates and captioning it with last screen's widget name hands a model text that
-        contradicts its image (#112)."""
+        caller asks before ACTING on one ref — does the geometry and label I'm about to use
+        describe the screen up right now? Cropping the live frame at last screen's coordinates
+        and captioning it with last screen's widget name hands a model text that contradicts its
+        image (#112)."""
         return wid in _page_sig and _page_sig.get(wid) != signature
 
     @classmethod
@@ -183,7 +183,7 @@ class DesktopElement(Box):
         """Cached refs ONLY if they were detected on the currently-displayed frame (its content
         ``signature`` matches the one stored when the refs were detected). After a navigation the
         live frame's signature differs, so the prior screen's refs are NOT surfaced — preventing a
-        screenshot from listing refs for a screen that's no longer shown, and clicks landing on gone
+        screenshot from listing refs for a screen no longer shown, and clicks landing on gone
         targets (#19)."""
         if _page_sig.get(wid) != signature:
             return None

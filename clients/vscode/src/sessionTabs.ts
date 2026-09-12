@@ -9,8 +9,8 @@
  *  agent it sent out is a tab, and an agent that sent out its OWN helpers shows them too —
  *  indented by depth, because "is it calling other agents" is the question the strip answers.
  *
- *  Pure: no `vscode`, no filesystem, no runtime import at all, so the decisions that go quietly
- *  wrong here are unit-tested (the test loader demands `.ts` specifiers tsc refuses to emit).
+ *  Pure: no vscode, no filesystem, no runtime import at all, so the decisions that go quietly
+ *  wrong here are unit-tested (the test loader demands ".ts" specifiers tsc refuses to emit).
  */
 
 import type { AgentRun } from "./agents";
@@ -34,7 +34,7 @@ export interface SessionTab {
 const CAP = 8;
 
 /** Walk from a run up to the session's entry agent, then back down through everyone it put to
- *  work. `label` is passed in (this module stays import-free) — it is the agent's name, the same
+ *  work. label is passed in (this module stays import-free) — it's the agent's name, the same
  *  one the roster row and the world's plaque carry. */
 export function sessionTabs(
   runs: readonly AgentRun[],

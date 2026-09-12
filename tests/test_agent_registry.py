@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import stat
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -512,6 +513,89 @@ def test_a_nonzero_exit_is_failed(monkeypatch):
     reg.finish("r1", exit_code=2)
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     assert reg.list_runs()[0].status == "failed"
+
+
+def test_a_stale_reaper_cannot_finish_a_reused_run_pid():
+    _record(pid=111)
+    first = reg.get_run("r1")
+    assert first is not None and first.lifecycle_token
+    reg.begin_turn("r1", pid=111)
+    current = reg.get_run("r1")
+    assert current is not None and current.lifecycle_token != first.lifecycle_token
+
+    assert reg.finish(
+        "r1", exit_code=0, expected_pid=111,
+        expected_lifecycle_token=first.lifecycle_token,
+    ) is False
+    current = reg.get_run("r1")
+    assert current is not None and current.pid == 111 and current.status == "running"
+
+    assert reg.finish(
+        "r1", exit_code=0, expected_pid=111,
+        expected_lifecycle_token=current.lifecycle_token,
+    ) is True
+
+
+def test_stop_rejects_a_stale_lifecycle_token():
+    _record(pid=None)
+    first = reg.get_run("r1")
+    assert first is not None and first.lifecycle_token
+    reg.begin_turn("r1", pid=None)
+    current = reg.get_run("r1")
+    assert current is not None and current.lifecycle_token != first.lifecycle_token
+
+    assert reg.stop("r1", expected_lifecycle_token=first.lifecycle_token) is False
+    assert reg.get_run("r1").status == "running"
+
+
+def test_stop_fails_closed_when_queue_cancellation_cannot_persist(monkeypatch):
+    from interact.agents import agent_queue
+
+    _record(pid=None)
+    monkeypatch.setattr(
+        agent_queue, "cancel_pending_locked",
+        lambda run_id: (_ for _ in ()).throw(OSError("queue write failed")),
+    )
+    terminated = []
+    monkeypatch.setattr(reg, "_terminate", lambda pid: terminated.append(pid))
+
+    assert reg.stop("r1") is False
+    assert terminated == []
+    assert reg.get_run("r1").status == "running"
+
+
+def test_derived_fields_cannot_clobber_a_same_pid_new_turn(monkeypatch):
+    _record(pid=111)
+    monkeypatch.setattr(reg, "_alive", lambda pid: True)
+    entered = threading.Event()
+    release = threading.Event()
+    stale_events = [AgentEvent(kind="text", text="stale reply", cost_usd=1.0)]
+    real_read_events = reg.read_events
+
+    def delayed_read_events(run_id):
+        entered.set()
+        assert release.wait(timeout=10)
+        return stale_events if run_id == "r1" else real_read_events(run_id)
+
+    monkeypatch.setattr(reg, "read_events", delayed_read_events)
+    result = {}
+
+    def derive():
+        result["runs"] = reg.list_runs()
+
+    worker = threading.Thread(target=derive)
+    worker.start()
+    assert entered.wait(timeout=10)
+    current = reg.begin_turn("r1", pid=111)
+    assert current is not None and current.lifecycle_token
+    reg._merge_record_locked("r1", {"last": "new turn", "cost_usd": 2.0})
+    release.set()
+    worker.join(timeout=10)
+
+    stored = reg.get_run("r1")
+    assert not worker.is_alive()
+    assert stored is not None and stored.lifecycle_token == current.lifecycle_token
+    assert stored.last == "new turn" and stored.cost_usd == 2.0
 
 
 # ── the spawn tree: who launched whom, across providers ──────────────────────────────────────

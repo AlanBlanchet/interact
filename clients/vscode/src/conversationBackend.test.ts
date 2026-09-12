@@ -57,6 +57,7 @@ test("conversation backend resolution is explicit, local, version-bound, and spa
   assert.deepEqual(dev, {
     available: true,
     command: "uv",
+    origin: "project_checkout",
     args: ["run", "--directory", canonicalProject, "interact", "agents", "console",
       "--workspace-root", fs.realpathSync(root)],
   });
@@ -66,6 +67,7 @@ test("conversation backend resolution is explicit, local, version-bound, and spa
   });
   assert.equal(local.available, true);
   if (local.available) {
+    assert.equal(local.origin, "local_path");
     assert.equal(local.command, path.join(compatible, "interact"));
     assert.deepEqual(local.args, ["agents", "console", "--workspace-root", root]);
     assert.doesNotMatch(`${local.command} ${local.args.join(" ")}`, /uvx|https?:|git\+|\b(?:sh|bash|cmd)\b/);

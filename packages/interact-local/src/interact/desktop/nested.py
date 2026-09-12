@@ -49,7 +49,7 @@ class NestedBackend(DesktopBackend):
     _opened_urls: str | None = None  # log of URLs a sandboxed app tried to open (#83)
 
     def __init__(self, display: int = 99, size: str = "1280x800", *,
-                 headless: bool = False, ready_timeout: float = 5.0):
+                 headless: bool = True, ready_timeout: float = 5.0):
         self.size = size
         self.headless = headless
         width, height = size.split("x")
@@ -74,12 +74,8 @@ class NestedBackend(DesktopBackend):
         # MCP servers fight over it — the loser's Xephyr died seconds in, taking the launched app's
         # windows with it (#33). Picking a free number also sidesteps a stale lock from a crashed
         # prior server.
-        # Sweep away displays whose owner died before claiming one. A crashed or reloaded server
-        # leaves its Xephyr running, reparented to init, sitting on the user's screen with nothing
-        # left that remembers it — and each new server would otherwise step past it to the next
-        # free number, so they accumulate.
-
-        orphans.reap_orphaned_displays()
+        # Never sweep process-global displays from a constructor. This instance owns only the
+        # display it starts below and cleanup remains bound to that recorded ownership.
         last_err: Exception | None = None
         for candidate in self._free_displays(display):
             self.display = f":{candidate}"
@@ -210,10 +206,10 @@ class NestedBackend(DesktopBackend):
         alive, and WHY it died — so launch_app can explain a dead display instead of only listing
         the generic Qt-helper windows (#33).
 
-        The exit status is decoded, not printed raw (#84): a negative returncode is a SIGNAL, and
-        which signal separates the two causes a caller otherwise cannot tell apart — SIGKILL means
-        something outside interact killed the whole sandbox (host OOM-killer under memory pressure,
-        which is exactly what the reporter suspected), while an ordinary non-zero exit is the X
+        Exit status is decoded, not printed raw (#84): a negative returncode is a SIGNAL, and
+        which signal separates the two causes a caller otherwise can't tell apart — SIGKILL means
+        something outside interact killed the whole sandbox (host OOM-killer under memory
+        pressure, exactly what the reporter suspected), while an ordinary non-zero exit is the X
         server failing on its own terms."""
         if self.is_alive():
             return ""
@@ -283,11 +279,12 @@ class NestedBackend(DesktopBackend):
         """Launch a process inside the nested display (tracked for teardown), capturing its
         stdout/stderr so a crash can be explained. Reaps previously-exited apps first.
 
-        ``start_new_session`` makes the child lead its OWN process group, which is what lets
-        :meth:`kill_apps` take a whole app TREE down. A real launch is rarely one process — `uv run
-        app`, a Flutter bundle launcher, an Electron main+renderer — and terminating only the direct
-        child orphaned the rest onto the display: four live instances accumulated in one session and
-        a capture composited a stray element from an OLDER one over the current app (#92)."""
+        ``start_new_session`` makes the child lead its OWN process group, what lets
+        :meth:`kill_apps` take a whole app TREE down. A real launch is rarely one process — `uv
+        run app`, a Flutter bundle launcher, an Electron main+renderer — and terminating only the
+        direct child orphaned the rest onto the display: four live instances accumulated in one
+        session and a capture composited a stray element from an OLDER one over the current app
+        (#92)."""
         self._ensure_audio_sink()  # route the app's audio into the sandbox sink from birth (#47)
         self._reap()
         path = self._open_log("app")
@@ -653,15 +650,15 @@ class NestedBackend(DesktopBackend):
     def _announce_active_window(self, wid) -> None:
         """Publish ``_NET_ACTIVE_WINDOW`` on the root, the way a window manager would.
 
-        X input focus alone is not what a GTK toolkit consults to decide a toplevel is ACTIVE — it
+        X input focus alone isn't what a GTK toolkit consults to decide a toplevel is ACTIVE — it
         reads the WM's ``_NET_ACTIVE_WINDOW`` hint, and the sandbox deliberately runs WM-less, so
-        nothing ever sets it. GTK then treats the window as inactive and its ``GtkIMContext`` stays
-        focused-out, which drops TEXT input while pointer events (routed purely by position) keep
-        working — the exact reported shape: the click lands, the field shows its focus ring, and
-        not one character ever appears (#93).
+        nothing ever sets it. GTK then treats the window as inactive and its ``GtkIMContext``
+        stays focused-out, dropping TEXT input while pointer events (routed purely by position)
+        keep working — the exact reported shape: the click lands, the field shows its focus ring,
+        and not one character ever appears (#93).
 
-        Best-effort by construction: python-xlib is optional, and a toolkit that ignores the hint is
-        simply unaffected. Never raises — this runs before every keyboard action."""
+        Best-effort by construction: python-xlib is optional, and a toolkit that ignores the hint
+        is simply unaffected. Never raises — runs before every keyboard action."""
         try:
             from Xlib import X, display as _xdisplay  # lazy: Linux X11 only, optional
         except ImportError:
@@ -890,5 +887,4 @@ class NestedBackend(DesktopBackend):
                 except OSError:
                     pass
         self._logs.clear()
-
 

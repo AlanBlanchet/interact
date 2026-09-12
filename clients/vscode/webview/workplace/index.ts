@@ -2,22 +2,21 @@
  *
  *      renderWorkplace(state, nonce) -> a complete HTML document
  *
- *  Hand it a `TeamState` and the webview's nonce; assign the result to `webview.html`. Nothing
- *  else is needed: the art (a data-URI atlas of the CC0 Kenney tiles), the stylesheet and the one
- *  script are generated into the document, so there is no bundle to build, no asset to resolve
- *  through `asWebviewUri`, and no request that could ever leave the machine — the CSP allows
- *  `img-src data:` and nothing else.
+ *  Hand it a TeamState and the webview's nonce; assign the result to webview.html. Nothing else
+ *  needed: art (data-URI atlas of the CC0 Kenney tiles), stylesheet and the one script are all
+ *  generated into the document — no bundle to build, no asset through asWebviewUri, no request
+ *  that could leave the machine (CSP allows img-src data: and nothing else).
  *
- *  Render it ONCE, then keep it. The engine inside is a running simulation with its own clock, so
- *  the way to update it is to post the next scene rather than to reassign the document:
+ *  Render ONCE, then keep it — the engine is a running simulation with its own clock, so update
+ *  by posting the next scene, not by reassigning the document:
  *
  *      panel.webview.html = renderWorkplace(state, nonce)                     // once
  *      panel.webview.postMessage({ type: "team", html: renderActors(state) }) // every refresh
  *
- *  The engine swaps `#wp-mount`, re-binds every body by `data-run-id`, and carries positions and
- *  journeys across the swap — so somebody sent to another room is watched the whole way there.
- *  Reassigning `.html` still works and still produces a real walk (the document recovers the last
- *  snapshot from `setState`), but the clock restarts each time; see `motion.ts`.
+ *  The engine swaps #wp-mount, re-binds every body by data-run-id, and carries positions and
+ *  journeys across the swap — someone sent to another room is watched the whole way there.
+ *  Reassigning .html still works (the document recovers the last snapshot from setState) but
+ *  restarts the clock each time; see motion.ts.
  */
 import type { TeamState } from "../../src/team";
 import { renderScene } from "./scene";
@@ -27,15 +26,14 @@ import { SCRIPT } from "./motion";
 export { renderScene, renderActors, brainOf, deptsOf, worldFor, placeOf } from "./scene";
 export type { Cast } from "./scene";
 export { STYLE } from "./style";
-// The status lexicon is part of the workplace's public surface, not a private helper: the side
-// bar imports it, and anything else that ever has to name a run's state must take these words
-// rather than invent a second set.
+// Status lexicon is public surface, not a private helper: the side bar imports it, and anything
+// naming a run's state must reuse these words, never invent a second set.
 export { STAMPS, STAMP_CSS, STALL_SECONDS, WORDS, isHeld, stampFor, stampHtml } from "./status";
 export type { Stamp, StampKind } from "./status";
 
-/** A nonce ends up inside an attribute and inside a CSP header value, so it is reduced to the
- *  alphabet a nonce is allowed to use rather than trusted. A caller passing something strange
- *  gets a broken script, never a broken document. */
+/** A nonce lands inside an attribute and a CSP header value, so it's reduced to the alphabet a
+ *  nonce allows rather than trusted. A strange caller value breaks the script, never the
+ *  document. */
 function safeNonce(nonce: string): string {
   const clean = String(nonce).replace(/[^A-Za-z0-9+/=_-]/g, "");
   return clean || "workplace";
@@ -44,9 +42,9 @@ function safeNonce(nonce: string): string {
 /** An embedded panel rendered BESIDE the room — the roster, supplied by the host.
  *
  *  "Your team and agents panel are still on the left side, whereas they should be in the big main
- *  panel somewhere." The room and the roster are two views of the same company and belong in the
- *  same wide surface; the side bar is left for the one conversation you are having. The host owns
- *  the roster's markup so this module keeps knowing only about the world.
+ *  panel somewhere." Room and roster are two views of one company and belong on the same wide
+ *  surface; the side bar is left for the one conversation in progress. Host owns the roster's
+ *  markup, so this module keeps knowing only about the world.
  */
 export interface WorkplaceAside {
   style: string;
@@ -66,51 +64,53 @@ export function renderWorkplace(state: TeamState, nonce: string, aside?: Workpla
 <title>The team</title>
 <style>${STYLE}</style>
 ${aside ? `<style>${aside.style}
-/* The company, two ways, in one surface: the room on the left, the roster on the right. The
-   roster scrolls on its own so a long team never pushes the room off screen. */
+/* Company, two ways, one surface: room left, roster right. Roster scrolls on its own so a long
+   team never pushes the room off screen. */
 .wp-split { display: flex; align-items: stretch; height: 100vh; width: 100%; position: relative;
   container-type: inline-size; }
-.wp-split > .wp-room { flex: 1 1 auto; min-width: 0; position: relative; overflow: hidden; }
-/* The scene sizes itself to the VIEWPORT when it owns the page; inside the split it must size to
-   its half, or — measured in the stacked layout — the room runs 894px tall in a 495px slot and
-   its bottom-right survey controls land ON TOP of the roster, eating its clicks while a click
-   near them scrubs the zoom. That is a blocking defect an overlay earns silently. */
-.wp-split .wp { height: 100%; }
 .wp-split > .wp-list {
-  flex: 0 0 clamp(240px, 26%, 380px); min-width: 0; overflow-y: auto; overflow-x: hidden;
-  border-left: 1px solid var(--vscode-panel-border, transparent);
+  flex: 1 1 auto; min-width: 0; overflow-y: auto; overflow-x: hidden;
   background: var(--vscode-editor-background);
 }
-.wp-roster-toggle { display: none; }
-/* ONE owner per fact on the shared panel: the rail's header states the scope and the counts, so
-   the world's HUD sheds its duplicate tallies and project sub-line here — standalone it keeps
-   them, being the only header in the room. */
+/* Scene sizes itself to the VIEWPORT when it owns the page; inside the split it must size to its
+   half. Stacked layout measured: room ran 894px tall in a 495px slot, its bottom-right survey
+   controls landing ON TOP of the roster — eating clicks, and a click there scrubbed the zoom. */
+.wp-split .wp { height: 100%; }
+/* A second rule used to live here too: a fixed 240-380px sidebar width from when a world shared
+   the panel. Equal specificity meant it won — roster got 367px against 1045px empty at full
+   width, and the 560px container query was permanently true, so the table never rendered as a
+   table. One selector, one owner of the width. */
+/* ONE owner per fact on the shared panel: rail's header states scope and counts, so the world's
+   HUD drops its duplicate tally and project sub-line here. Standalone, it keeps them — it's the
+   only header in the room there. */
 .wp-split .wp-hud .wp-tally, .wp-split .wp-hud .wp-sign-sub { display: none; }
-/* 560, not 720. The breakpoint applies to the EDITOR GROUP, not the window: measured live, a
-   1280px laptop with both side bars open leaves roughly 630px here, so a 720px threshold stacked
-   the split for most real windows and only flipped side-by-side above ~1440px. At 560 the roster
-   still gets its 240px floor and the room keeps ~320px, which is a room rather than a slot. */
-@container (max-width: 560px) {
-  .wp-split > .wp-room { flex: 1 1 100%; }
-  .wp-split .wp-hud { padding-right: 64px; }
-  .wp-split > .wp-list { display: none; position: absolute; z-index: 800; inset: 30px 0 0;
-    border-left: 0; border-top: 1px solid var(--vscode-panel-border, transparent); }
-  .wp-split.roster-open > .wp-list { display: block; }
-  .wp-roster-toggle { display: block; position: absolute; z-index: 900; right: 6px; top: 4px;
-    min-height: 24px; color: var(--vscode-foreground); background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-focusBorder); }
-}
+/* 560, not 720 — breakpoint applies to the EDITOR GROUP, not the window. Measured live: a
+   1280px laptop with both side bars open leaves ~630px here, so 720px stacked the split on most
+   real windows, only flipping side-by-side above ~1440px. At 560 the roster keeps its 240px
+   floor and the room keeps ~320px — a room, not a slot. */
+/* No narrow regime any more: with no room beside it, the roster fills the panel at every width
+   — never hides, overlays, or needs a toggle. */
+
 </style>` : ""}
 </head>
 <body>
 ${aside
-  ? `<div class="wp-split"><button class="wp-roster-toggle" type="button" aria-expanded="false" ` +
-    `aria-controls="wp-roster">Roster</button><div class="wp-room">${renderScene(state)}</div>` +
-    `<div class="wp-list" id="wp-roster">${aside.body}</div></div>`
+  // The roster is the "Team tab" users called laggy: "remove the game like features... orient it
+  // more like we're doing in the web." The ~9,700-line tile world (world/sim/scene/tiles) was the
+  // cause — 149% CPU, 2.99GB RSS, a CDP round-trip missing a 60s timeout at full width, the
+  // 48-actor frame-budget test failing 23.7ms vs a 20ms budget. renderScene is no longer called
+  // here, so the simulation never starts — that alone is the fix; the roster itself was never
+  // slow. Scene modules stay (reversible); deleting their 4,300 lines is a separate call.
+  //
+  // .wp-list is the REPAINT HOST: railScript opens every roster update with
+  // querySelector(".wp-list") and bails when it's absent. Removing it silently killed every
+  // repaint — live updates, drill-in, the view chooser. It stays, now wrapping the roster instead
+  // of sitting beside a room.
+  ? `<div class="wp-split"><div class="wp-list">${aside.body}</div></div>`
   : renderScene(state)}
 <script nonce="${n}">${SCRIPT}</script>
 ${aside ? `<script nonce="${n}">${aside.script}</script>` : ""}
-${aside ? `<script nonce="${n}">document.querySelector('.wp-roster-toggle')?.addEventListener('click',function(){var split=this.closest('.wp-split');var open=split.classList.toggle('roster-open');this.setAttribute('aria-expanded',String(open));});</script>` : ""}
+
 </body>
 </html>`;
 }

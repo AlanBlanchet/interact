@@ -1,14 +1,14 @@
 /** Your OWN sessions, readable — the provider-transcript half of the conversation view.
  *
  *  A foreign run's id IS its Claude session id, and Claude Code files every session under
- *  `~/.claude/projects/<cwd with "/" and "." as "-">/<session-id>.jsonl`. Mapping that shape
+ *  ~/.claude/projects/<cwd with "/" and "." as "-">/<session-id>.jsonl. Mapping that shape
  *  into ours is what turns a "your session" row from a grey dead thing into a place — the
  *  panel can SHOW the session, which is the half of "chat just like in claude code" a session
  *  interact did not start can honestly have (watching, not steering: it is already being
  *  steered, by you, in its window).
  *
- *  Runtime-import-free apart from node builtins, so `node --test` can load it directly — the
- *  same discipline as `rail.ts` (the loader demands ".ts" specifiers tsc refuses to emit).
+ *  Runtime-import-free apart from node builtins, so node --test can load it directly — the
+ *  same discipline as rail.ts (the loader demands ".ts" specifiers tsc refuses to emit).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";

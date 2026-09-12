@@ -165,10 +165,11 @@ def test_the_unrestricted_mode_is_flagged_in_the_machine_output(capsys):
     assert flagged == ["bypassPermissions"]
 
 
-def test_a_provider_with_no_verified_modes_prints_nothing(capsys):
+def test_a_provider_with_no_verified_modes_prints_nothing(capsys, monkeypatch):
     """Not a line of prose: a caller splitting on newlines would read it as a mode."""
     from interact.cli.app import agents_modes
 
+    monkeypatch.setattr(CodexProvider, "permission_modes", lambda self: ())
     agents_modes(provider="codex")
     assert capsys.readouterr().out == ""
 
@@ -289,9 +290,10 @@ def test_an_unknown_mode_at_the_CLI_reads_like_every_other_error(monkeypatch, ca
     import importlib
 
     cli = importlib.import_module("interact.cli.app")
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
 
     with pytest.raises(SystemExit) as exit_info:
-        cli.agents_spawn("t", permission_mode="definitely-not-a-mode")
+        cli.agents_spawn("t", agent="tester", permission_mode="definitely-not-a-mode")
     assert exit_info.value.code != 0
     said = capsys.readouterr()
     combined = said.out + said.err
@@ -308,9 +310,53 @@ def test_agents_run_reports_a_bad_mode_too(monkeypatch, capsys):
     import importlib
 
     cli = importlib.import_module("interact.cli.app")
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
 
     with pytest.raises(SystemExit) as exit_info:
-        cli.agents_run("t", permission_mode="definitely-not-a-mode")
+        cli.agents_run("t", agent="tester", permission_mode="definitely-not-a-mode")
     assert exit_info.value.code != 0
     combined = "".join(capsys.readouterr())
     assert "ERROR" in combined and "definitely-not-a-mode" in combined, combined
+
+
+def test_the_doctor_reports_the_criterion_when_one_governs_the_role(monkeypatch, capsys):
+    """A CRITERION set in `media.criteria` is what the real VLM call resolves with — `vision/core`
+    parses it and chooses. The doctor read only the pin-or-chain path, so the two surfaces
+    disagreed: setting a criterion changed which model actually ran and changed NOTHING here.
+
+    That is worse than a cosmetic gap. Watching this line is how you check your routing, so a
+    criterion looked like it did nothing and the honest-seeming move was to pin a model id —
+    which is exactly what a criterion exists to avoid.
+    """
+    monkeypatch.setattr("interact.models.Model.is_available", lambda self: self.id == "zai/glm-4.5v")
+    monkeypatch.setattr(runtime_config, "media_criteria", "cap.vlm and aa.intelligence >= 1")
+    cli._print_resolved_models()
+    out = capsys.readouterr().out
+    assert "criterion" in out.lower(), "the line says a criterion is what decides"
+    assert "cap.vlm and aa.intelligence >= 1" in out, "and names the rule, not just its answer"
+
+
+def test_agent_provider_json_preserves_disabled_and_unavailable_choices(monkeypatch, capsys):
+    from interact.cli import app_commands
+    from interact.agents.policy import Policy
+
+    policy = Policy(providers={"claude": False})
+    monkeypatch.setattr(Policy, "load", classmethod(lambda cls: policy))
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
+    monkeypatch.setattr(CodexProvider, "available", lambda self: False)
+    app_commands.agents_providers(json_out=True)
+    rows = {row["id"]: row for row in json.loads(capsys.readouterr().out)["providers"]}
+    assert rows["claude"] == {"id": "claude", "label": "claude", "active": False, "available": True}
+    assert rows["codex"] == {"id": "codex", "label": "codex", "active": True, "available": False}
+
+
+def test_agent_provider_json_listing_never_mutates_policy(monkeypatch, capsys):
+    from interact.cli import app_commands
+    from interact.agents.policy import Policy
+
+    monkeypatch.setattr(Policy, "load", classmethod(lambda cls: Policy()))
+    monkeypatch.setattr(Policy, "set_provider_active", lambda *args: pytest.fail("must not mutate"))
+    with pytest.raises(SystemExit) as error:
+        app_commands.agents_providers("codex", "off", json_out=True)
+    assert error.value.code == 2
+    assert "omit name and state" in capsys.readouterr().err

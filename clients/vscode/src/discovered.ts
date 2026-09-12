@@ -6,11 +6,11 @@
  *  for them the whole time. "i have agents in the 'sheets' folder elsewhere, and i can't change
  *  and see how they work" was literally true: the panel had no way to learn they existed.
  *
- *  So the fast path stays a file read, and this adds the discovered ones from `interact agents
- *  discovered` on a slow cadence — editor windows open and close on a human timescale, not on a
+ *  So the fast path stays a file read, and this adds the discovered ones from interact agents
+ *  discovered on a slow cadence — editor windows open and close on a human timescale, not on a
  *  refresh timer, and paying a subprocess per repaint to track that would be the wrong trade.
  */
-// `import type` on purpose: the test loader (node --test --experimental-strip-types) resolves
+// import type on purpose: the test loader (node --test --experimental-strip-types) resolves
 // real specifiers and would need a ".ts" suffix that tsc then refuses to emit. A type-only import
 // is erased before either sees it, so this module stays loadable by both.
 import type { AgentRun } from "./agents";
@@ -24,7 +24,7 @@ export interface Discovery {
   at: number;
 }
 
-/** Parse `interact agents discovered` — one JSON object per line.
+/** Parse interact agents discovered — one JSON object per line.
  *
  *  A line that will not parse is dropped rather than failing the batch: the realistic cause is a
  *  warning on stdout from some tool in the chain, and losing one session beats losing all of them.

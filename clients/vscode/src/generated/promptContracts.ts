@@ -32,6 +32,14 @@ export interface PromptKey {
   slug: string;
 }
 /**
+ * Hostile authoring input for the first immutable Git-backed prompt revision.
+ */
+export interface PromptCreateRequest {
+  key: PromptKey;
+  name: string;
+  content: string;
+}
+/**
  * Server-verified immutable prompt identity persisted with one execution.
  */
 export interface PromptExecutionRef {
@@ -39,6 +47,16 @@ export interface PromptExecutionRef {
   channel: string;
   digest: string;
   revision: string;
+}
+/**
+ * Integrity and compare-and-swap metadata for one bounded Git bundle.
+ */
+export interface PromptGitBundleManifest {
+  expected_head?: string | null;
+  head: string;
+  manifest_digest: string;
+  bundle_digest: string;
+  bundle_size: number;
 }
 /**
  * One complete exact-commit prompt snapshot applied by global cursor CAS.
@@ -69,3 +87,14 @@ export interface PromptRevision {
   source_commit: string;
   created_at: string;
 }
+/**
+ * Safe server-side projection of the latest prompt Git synchronization.
+ */
+export interface PromptSyncStatus {
+  server_head?: string | null;
+  last_import_at?: string | null;
+  last_export_at?: string | null;
+  last_result?: ("succeeded" | "conflict" | "unavailable") | null;
+  error_code?: ("head_changed" | "non_fast_forward" | "invalid_bundle" | "repository_unavailable") | null;
+}
+export interface WireModel {}

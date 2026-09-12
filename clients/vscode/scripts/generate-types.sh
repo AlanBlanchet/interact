@@ -20,22 +20,49 @@ export PATH="$EXT_DIR/node_modules/.bin:$PATH"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OLLAMA_DISCOVERY="0"
 
-if ! uv run --directory "$REPO_DIR" python -c "import pydantic2ts" >/dev/null 2>&1; then
+# Prefer the sibling checkout while developing in the private parent. A public checkout without
+# that sibling must resolve the released dependency instead of treating a missing local path as
+# the package source.
+CORE_SOURCE_DIR="$REPO_DIR/../interact-core"
+UV_RUN=(uv run --directory "$REPO_DIR")
+if [ -f "$CORE_SOURCE_DIR/pyproject.toml" ]; then
+    UV_RUN+=(--with-editable "$CORE_SOURCE_DIR")
+fi
+
+if ! "${UV_RUN[@]}" python -c "import pydantic2ts" >/dev/null 2>&1; then
     echo "[generate-types] pydantic-to-typescript not installed; skipping." >&2
     exit 0
 fi
 
-uv run --directory "$REPO_DIR" pydantic2ts \
+# The public repository consumes the released package. When both repositories are checked out
+# under the private parent, regenerate the sibling's checked-in schema artifacts; an installed
+# core package is read-only and already carries its release schemas.
+CORE_SCHEMA_DIR="${INTERACT_CORE_SCHEMA_DIR:-$CORE_SOURCE_DIR/src/interact_core/schema}"
+if [ ! -f "$CORE_SOURCE_DIR/pyproject.toml" ] || [ ! -d "$CORE_SCHEMA_DIR" ]; then
+    CORE_SCHEMA_DIR=""
+fi
+
+"${UV_RUN[@]}" pydantic2ts \
     --module interact.api_types \
     --output "$OUT"
-uv run --directory "$REPO_DIR" pydantic2ts \
+"${UV_RUN[@]}" pydantic2ts \
     --module interact_core.prompts \
     --output "$EXT_DIR/src/generated/promptContracts.ts"
-uv run --directory "$REPO_DIR" python "$HERE/export-prompt-schema.py" \
-    > "$REPO_DIR/packages/interact-core/schema/prompt-contracts.schema.json"
+if [ -n "$CORE_SCHEMA_DIR" ]; then
+    "${UV_RUN[@]}" python "$HERE/export-prompt-schema.py" \
+        > "$CORE_SCHEMA_DIR/prompt-contracts.schema.json"
+    "${UV_RUN[@]}" python "$HERE/export-account-schema.py" \
+        > "$CORE_SCHEMA_DIR/account-contracts.schema.json"
+    "${UV_RUN[@]}" python "$HERE/export-workflow-schema.py" \
+        > "$CORE_SCHEMA_DIR/workflow-contracts.schema.json"
+    "${UV_RUN[@]}" python "$HERE/export-admin-schema.py" \
+        > "$CORE_SCHEMA_DIR/admin-contracts.schema.json"
+else
+    echo "[generate-types] installed interact-core detected; keeping its packaged schemas unchanged." >&2
+fi
 SCHEMA_OUT="$EXT_DIR/out/generated/conversation-schemas.json"
 mkdir -p "$(dirname "$SCHEMA_OUT")"
-uv run --directory "$REPO_DIR" python "$HERE/export-runtime-schemas.py" > "$SCHEMA_OUT"
+"${UV_RUN[@]}" python "$HERE/export-runtime-schemas.py" > "$SCHEMA_OUT"
 node "$HERE/append-runtime-decoders.js" "$SCHEMA_OUT"
 
 # Prepend header if pydantic2ts didn't add one.

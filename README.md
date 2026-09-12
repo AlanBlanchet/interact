@@ -10,18 +10,22 @@ interact is two repositories. This one is public:
 
 - `packages/interact-local` — the `interact` Python import, CLI, MCP server, automation, local
   sessions, and explicit API routes.
-- `packages/interact-core` — dependency-light contracts and their generated JSON Schema, shared by
-  every surface; `clients/vscode` consumes the generated TypeScript form.
+- `interact-core` — the standalone dependency-light contracts package and its generated JSON Schema,
+  shared by every surface; `clients/vscode` consumes the generated TypeScript form. In the private
+  parent workspace, its development checkout sits beside this repository under `worktrees/`.
 - `clients/vscode` owns the VS Code extension, and `site` owns the static public website.
 - `prompts/` contains distributable product defaults and their manifest. Personal prompt source
   lives in the user's own Interact-managed Git worktree and never enters this repository.
 
-`AlanBlanchet/interact-cloud` is private and holds the server half — tenants, authentication,
+`AlanBlanchet/interact-server` is private and holds the server half — tenants, authentication,
 billing, secrets, queues, retention, deployment, and the web gateway. It consumes a released public
-schema version and is never imported here. With access, check it out beside this repository and it
-shows up at `cloud/` (git-ignored); `interact.code-workspace` opens both halves in one window.
+schema version and is never imported here. In the combined `interact-all` workspace it is checked
+out as the sibling `../interact-server`; the parent workspace opens all three repositories.
 
-The packages version together from root `pyproject.toml`. Local-session and local-compute routes
+The public package depends on the exact public `interact-core` Git revision declared in `pyproject.toml`.
+It installs without a sibling checkout. To work on both packages locally, use
+`uv run --with-editable ../interact-core interact --help` from this repository.
+Local-session and local-compute routes
 stay distinct from separately billed `metered_api` routes; failure never silently crosses that
 charge boundary, and a vendor subscription is not described as universally free.
 

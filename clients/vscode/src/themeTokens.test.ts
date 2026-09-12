@@ -29,7 +29,7 @@ test("nothing consumes the raw token any more", () => {
   // The defect this whole change exists to remove: VS Code's Light theme ships
   // descriptionForeground at 4.28:1 on its own canvas, under the AA floor before we touch it.
   const files = ["sequencePanel.ts", "dashboard.ts", "sequenceFormat.ts", "usage.ts",
-                 "conversation.ts", "conversationFormat.ts", "workplaceView.ts"];
+                 "chatView.ts", "conversationFormat.ts", "workplaceView.ts"];
   const offenders = files.filter((f) =>
     readFileSync(join(here, f), "utf8").includes("var(--vscode-descriptionForeground)"));
   assert.deepEqual(offenders, []);

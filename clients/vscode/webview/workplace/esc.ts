@@ -11,9 +11,9 @@ export function esc(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** JSON for a `<script>` body. `JSON.stringify` alone is not enough: a `</script>` inside a
- *  worker's activity string would close the tag and the rest of the state would land on the page
- *  as markup. The line separators are escaped too — they are literal newlines to a JS parser. */
+/** JSON for a <script> body. JSON.stringify alone isn't enough: a </script> inside a worker's
+ *  activity string would close the tag and the rest of the state would land on the page as
+ *  markup. Line separators are escaped too — they're literal newlines to a JS parser. */
 export function jsonInScript(value: unknown): string {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")

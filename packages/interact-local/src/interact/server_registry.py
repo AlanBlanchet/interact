@@ -54,11 +54,11 @@ def latest_version() -> str:
 def register_server() -> Path | None:
     """Record this MCP server's pid, the version it loaded, and the SOURCE it loaded it from.
 
-    The source is recorded because a server is the only thing that knows which tree it actually
-    imported. Judging it later by comparing a process start time against whatever tree the CHECKER
-    happens to be in gives the wrong answer the moment those differ — two checkouts on one machine,
-    or a doctor run from an editable clone against a server running the installed package. It also
-    needed /proc, which is Linux-only, and start times, which say nothing about WHICH code ran.
+    Source is recorded because a server is the only thing that knows which tree it actually
+    imported. Judging it later by comparing a process start time against whatever tree the
+    CHECKER happens to be in gives the wrong answer the moment those differ — two checkouts on
+    one machine, or a doctor run from an editable clone against a server running the installed
+    package. Also needed /proc (Linux-only), and start times say nothing about WHICH code ran.
     """
     try:
         d = _runtime_dir()
@@ -87,9 +87,9 @@ def unregister_server(path: Path | None) -> None:
 def _still_running(pid: int) -> bool:
     """Liveness WITHOUT sending anything — reads the process table.
 
-    The restart path must not probe with ``os.kill(pid, 0)``: every test of it mocks ``os.kill``
-    to record what was sent, and a probe going through the same call is counted as a signal, so
-    the test measures its own polling. Reading /proc keeps the probe and the signal separate.
+    The restart path must not probe with ``os.kill(pid, 0)``: every test mocks ``os.kill`` to
+    record what was sent, so a probe through the same call counts as a signal and the test
+    measures its own polling. Reading /proc keeps probe and signal separate.
     """
     if sys.platform == "win32":
         return _alive_windows(pid)
@@ -97,10 +97,10 @@ def _still_running(pid: int) -> bool:
 
 
 def _alive(pid: int) -> bool:
-    # os.kill(pid, 0) is the POSIX liveness probe, but on Windows signal 0 IS CTRL_C_EVENT: os.kill
-    # would GenerateConsoleCtrlEvent, sending Ctrl-C to the pid's console group and interrupting US
-    # — the KeyboardInterrupt that broke Windows CI (every test passed, yet exit 1, #73). Query the
-    # process handle there instead; it sends no signal.
+    # os.kill(pid, 0) is the POSIX liveness probe, but on Windows signal 0 IS CTRL_C_EVENT:
+    # os.kill would GenerateConsoleCtrlEvent, sending Ctrl-C to the pid's console group and
+    # interrupting US — the KeyboardInterrupt that broke Windows CI (every test passed, yet exit
+    # 1, #73). Query the process handle instead; sends no signal.
     if sys.platform == "win32":
         return _alive_windows(pid)
     try:
@@ -152,10 +152,10 @@ def kill_stale_servers() -> list[int]:
     Best-effort: a pid that's gone or unsignalable is skipped, never raised.
 
     SIGTERM first, then SIGKILL for anything still standing. Measured on a real box, five of six
-    servers ignored SIGTERM entirely — the server blocks reading stdio, and versions before the
+    servers once ignored SIGTERM entirely — the server blocks reading stdio, versions before the
     teardown handler have nothing to catch it — while this reported them all "restarted". A
-    restart command that leaves the old code running is worse than none, because the user then
-    believes the fix reached them."""
+    restart command leaving old code running is worse than none: the user then believes the fix
+    reached them."""
     import signal
     import time
 
@@ -190,9 +190,9 @@ def _source_root() -> Path:
 def _newest_mtime(root: Path, pattern: str = "*.py") -> float:
     """When anything under ``root`` was last written.
 
-    An editable install serves the tree directly, so this moves every time a fix lands — which is
-    exactly when a long-lived server becomes stale, and exactly when the version string does NOT
-    move, because this project bumps once per release rather than once per change.
+    An editable install serves the tree directly, so this moves every time a fix lands — exactly
+    when a long-lived server becomes stale, exactly when the version string does NOT move (this
+    project bumps once per release, not once per change).
     """
     newest = 0.0
     try:
@@ -249,9 +249,9 @@ def stale_servers() -> list[dict]:
         if info.get("version") != latest:
             out.append({**info, "reason": "version"})
             continue
-        # Same version, older code. Between releases this is the ONLY way to see it, and it is
-        # the common case: the version moves once per release, the code moves every fix. Compared
-        # against the tree the SERVER recorded, not the one this checker happens to be running in.
+        # Same version, older code. Between releases this is the ONLY way to see it, and the
+        # common case: version moves once per release, code moves every fix. Compared against the
+        # tree the SERVER recorded, not the one this checker happens to be running in.
         root, loaded = info.get("source_root"), info.get("source_mtime")
         if root and loaded is not None and loaded < _newest_mtime(Path(root)):
             out.append({**info, "reason": "code"})

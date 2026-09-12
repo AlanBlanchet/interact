@@ -1,7 +1,8 @@
 """launch_app command handling at the tool level: a shell-syntax command (`cd X && app`) runs via
 bash instead of failing exec with `[Errno 2] No such file or directory: 'cd'`, `cwd=` starts the
-app in a project directory directly, and a `VAR=value app` prefix (#117) becomes the launch's
-environment instead of being exec'd as a literal program named `VAR=value`."""
+app in a project directory directly, a `VAR=value app` prefix (#117) becomes the launch's
+environment instead of being exec'd as a literal program named `VAR=value`, and the "Replaced N
+app(s)" note counts kills that HAPPENED and names what survived (#118)."""
 
 import asyncio
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import interact.server as srv
+from interact.desktop.nested import KillReport
 
 
 class _FakeBackend:
@@ -17,6 +19,11 @@ class _FakeBackend:
     def __init__(self):
         self.spawned: list[tuple[list[str], str | None, dict[str, str] | None]] = []
         self.spawn_error: OSError | None = None  # raised by spawn instead of launching
+        self.kill_report = KillReport(killed=0)  # what a replace-kill reports back
+        self.windows: list[tuple[int, str]] = [(7, "App")]
+
+    def kill_apps(self):
+        return self.kill_report
 
     def spawn(self, argv, cwd=None, env=None):
         if self.spawn_error is not None:
@@ -25,7 +32,7 @@ class _FakeBackend:
         return type("P", (), {"poll": lambda self: None, "returncode": None})()
 
     def list_windows(self):
-        return [(7, "App")]
+        return self.windows
 
 
 @pytest.fixture
@@ -106,3 +113,38 @@ def test_a_failed_exec_is_a_guided_error_naming_the_real_command(fake_backend, e
     fake_backend.spawn_error = error
     out = asyncio.run(srv.launch_app("FOO=bar app --x", wait=1))
     assert out.startswith("ERROR") and "'app'" in out and phrase in out
+
+
+# ── "Replaced N app(s)" reports what the kill DID (#118) ─────────────────────────────────────
+# `kill_apps` used to return the PRE-kill count, so an Electron app whose helpers `setsid` out of
+# the group was reported "replaced" while its window stayed up holding the profile socket — and the
+# next launch, handed to that zombie, opened nothing with no explanation anywhere.
+
+
+@pytest.mark.parametrize(
+    ("report", "present", "absent"),
+    [
+        (KillReport(killed=2), ["Replaced 2 app(s)"], ["SURVIVED"]),
+        (KillReport(killed=0), [], ["Replaced", "SURVIVED"]),
+        (
+            KillReport(killed=1, survivors={4242: "code --user-data-dir=/x --type=renderer"}),
+            ["Replaced 1 app(s)", "SURVIVED", "4242", "code --user-data-dir=/x --type=renderer",
+             "reset_sandbox"],
+            ["Replaced 2"],
+        ),
+    ],
+    ids=["all_died", "nothing_to_replace", "one_survived"],
+)
+def test_the_replaced_note_counts_kills_and_names_survivors(fake_backend, report, present, absent):
+    fake_backend.kill_report = report
+    out = asyncio.run(srv.launch_app("app", wait=1))
+    assert all(text in out for text in present), out
+    assert not any(text in out for text in absent), out
+
+
+def test_a_survivor_is_named_when_no_window_appears(fake_backend):
+    """The very symptom of #118 — the launch opens nothing — is where the survivor explains it."""
+    fake_backend.kill_report = KillReport(killed=0, survivors={4242: "code --type=renderer"})
+    fake_backend.windows = []
+    out = asyncio.run(srv.launch_app("app", wait=0.5))
+    assert "no window appeared" in out and "4242" in out and "code --type=renderer" in out, out

@@ -3,7 +3,7 @@
  *  All three reference tools (Claude Code, Codex, Copilot) expose their capabilities through a
  *  slash menu in the panel itself. interact's panel could only send a string: stopping the agent
  *  you were reading, starting another, switching workspace, opening the team — all of it lived in
- *  a tree context menu or the command palette. That is what "i can't control everything from
+ *  a tree context menu or the command palette. That's what "i can't control everything from
  *  there" means.
  *
  *  Declared as DATA so one list drives the menu, the typed-slash completion and the buttons, and
@@ -40,8 +40,8 @@ export const CHAT_COMMANDS: ChatCommand[] = [
     command: "interact.agents.workspace", needsAgent: false },
   { slash: "/events", title: "Raw events", detail: "this agent's unparsed stream",
     command: "interact.agents.showEvents", needsAgent: true },
-  { slash: "/prompt", title: "System prompt", detail: "open this agent's definition",
-    command: "interact.agents.openConversation", needsAgent: true },
+  { slash: "/prompt", title: "Prompt workspace", detail: "browse and edit the local Git prompt source",
+    command: "interact.openDashboard", needsAgent: false },
   { slash: "/permissions", title: "Default autonomy",
     detail: "how much agents started here may do alone",
     command: "interact.agents.permissions", needsAgent: false },

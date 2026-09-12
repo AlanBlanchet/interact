@@ -2,17 +2,17 @@
  *
  *  The dashboard is a WebviewPanel summoned by a command into an editor tab; close the tab and
  *  running agents are out of sight. Supervision has to live somewhere you can glance at while you
- *  work, so this is a real `TreeView` in its own view container.
+ *  work, so this is a real TreeView in its own view container.
  *
- *  Grouped by PROJECT (a run's `cwd`) by default, because that is how the work is actually
+ *  Grouped by PROJECT (a run's cwd) by default, because that's how the work is actually
  *  divided — "what is running in this repo" is the question being asked. Provider and model
  *  groupings exist too, and the mode persists so the panel opens the way you left it.
  *
- *  Read-only over the registry Python writes (`interact.agents.registry`), refreshed by watching
+ *  Read-only over the registry Python writes (interact.agents.registry), refreshed by watching
  *  that directory. The extension never spawns or supervises anything itself.
  *
- *  The pure decisions below are exported and unit-tested in `agentsView.test.ts`; the tree class
- *  needs the `vscode` module, which only exists inside the extension host.
+ *  The pure decisions below are exported and unit-tested in agentsView.test.ts; the tree class
+ *  needs the vscode module, which only exists inside the extension host.
  */
 import * as fs from "fs";
 import * as vscode from "vscode";
@@ -122,9 +122,9 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
 
   /** The company as the prompt repo declares it: departments, and who sits in each.
    *
-   *  Read from `~/.claude/org.json`, which the prompt repo generates from its own yaml. Absent for
-   *  anyone without that repo, in which case there is simply no company node — interact is
-   *  perfectly usable as a bare agent runner.
+   *  Read from ~/.claude/org.json, which the prompt repo generates from its own yaml. Absent
+   *  for anyone without that repo — no company node, and interact is perfectly usable as a bare
+   *  agent runner.
    */
   private companyNode(): Node | undefined {
     const org = readOrg();
@@ -135,7 +135,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
     );
     // ROLES, never "agents". This line sat directly above "No agents running", so the panel read
     // "27 agents / no agents running" — two counts of one word, four lines apart, meaning roster
-    // seats and live runs. A first-timer reads that as a bug, and they are not wrong to.
+    // seats and live runs. A first-timer reads that as a bug.
     node.description = `${org.agents.length} role${org.agents.length === 1 ? "" : "s"}` +
       ` · ${orgTree(org).length} departments` +
       (wired.size ? ` · ${[...wired].join(", ")}` : "");
@@ -262,10 +262,9 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       icon.id,
       icon.color ? new vscode.ThemeColor(icon.color) : undefined,
     );
-    // What it is doing RIGHT NOW is the most valuable string here, so it takes the description
-    // slot; time and cost follow it.
-    // The last thing that happened gets the row's whole width; elapsed and cost live on the hover
-    // and on the dashboard, and competing for a narrow side bar clipped the interesting half.
+    // The last thing that happened gets the row's whole width, not time or cost: elapsed and
+    // cost live on the hover and the dashboard, and competing with them for a narrow side bar
+    // clipped the interesting half.
     node.description = rowDescription(run);
     node.tooltip = new vscode.MarkdownString(runTooltip(run));
     // Only OUR runs can be stopped; a foreign session belongs to the user's own editor window.

@@ -31,11 +31,11 @@ _load_node() {
 
 # 2) Regenerate TS bindings when the Pydantic API surface changes (keeps the committed
 #    generated/types.ts in lock-step with the models).
-if git diff --cached --name-only | grep -qE '^packages/interact-local/src/interact/(models|formats|api_types)\.py$|^packages/interact-local/src/interact/benchmarks/(published|upstream)\.py$|^packages/interact-core/src/interact_core/'; then
+if git diff --cached --name-only | grep -qE '^packages/interact-local/src/interact/(models|formats|api_types)\.py$|^packages/interact-local/src/interact/benchmarks/(published|upstream)\.py$|^pyproject\.toml$|^clients/vscode/scripts/generate-types\.sh$'; then
     if _load_node; then
         echo "[hook] Pydantic API changed — regenerating TS types..."
         if bash clients/vscode/scripts/generate-types.sh >/dev/null 2>&1; then
-            git add clients/vscode/src/generated/types.ts clients/vscode/src/generated/promptContracts.ts packages/interact-core/schema/prompt-contracts.schema.json 2>/dev/null || true
+            git add clients/vscode/src/generated/types.ts clients/vscode/src/generated/promptContracts.ts 2>/dev/null || true
         else
             echo "[hook] WARN: type generation failed, continuing"
         fi

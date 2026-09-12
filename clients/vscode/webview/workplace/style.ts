@@ -1222,10 +1222,10 @@ body.vscode-high-contrast-light .wp {
 /* NEVER opacity. A translucent person reads as a rendering bug, not a state — the done-fade was
    removed for exactly that ("Agents are also transparent kind of... I don't know why"), and a
    stalled body fading by the same mechanism is the same defect waiting for the next held agent. */
-/* A FINISHED worker is NOT translucent. A real registry is mostly finished runs, so the fade made
-   most of the building ghostly and nothing on screen explained why — a translucent person reads
-   as a rendering bug, not a state. The body already SITS at the rest end of its room, which is
-   the whole signal; the sprite only cools a touch, at full opacity. */
+/* A FINISHED worker is NOT translucent either — a real registry is mostly finished runs, so the
+   fade made most of the building ghostly and nothing on screen explained why. The body already
+   SITS at the rest end of its room, which is the whole signal; the sprite only cools a touch, at
+   full opacity. */
 .wp-actor[data-status="done"] .wp-body { filter: saturate(.82) brightness(.97); }
 /* NOT faded with idle either. A visitor's session is not ours to age, and fading a body that is
    already drawn in one hue is precisely how it stopped reading as a person and started reading as
@@ -1312,4 +1312,29 @@ ${STAMP_CSS}
   .wp-lit .wp-pool { animation: none !important; }
   .wp-lv-steam { opacity: 0; }
 }
+
+body.vscode-reduce-motion .wp-view::after,
+body.vscode-reduce-motion .wp-view::before,
+body.vscode-reduce-motion .wp-core,
+body.vscode-reduce-motion .wp-lv-screen,
+body.vscode-reduce-motion .wp-lv-steam,
+body.vscode-reduce-motion .wp-lv-lamp,
+body.vscode-reduce-motion .wp-lv-fan,
+body.vscode-reduce-motion .wp-actor.is-brain::before,
+body.vscode-reduce-motion .wp-actor.is-talking .wp-body,
+body.vscode-reduce-motion .wp-actor.is-met .wp-body,
+body.vscode-reduce-motion .wp-actor.is-poked .wp-body,
+body.vscode-reduce-motion .wp-actor.is-poked .wp-bang,
+body.vscode-reduce-motion .wp-actor.is-picked .wp-ring,
+body.vscode-reduce-motion .wp-actor.is-met .wp-hi .wp-f0,
+body.vscode-reduce-motion .wp-actor.is-met .wp-hi .wp-f1,
+body.vscode-reduce-motion .wp-view[data-follow="0"] .wp-cam-follow,
+body.vscode-reduce-motion .wp-lit .wp-pool { animation: none !important; }
+body.vscode-reduce-motion .wp-pool,
+body.vscode-reduce-motion .wp-shut,
+body.vscode-reduce-motion .wp-leaf,
+body.vscode-reduce-motion .wp-rungs i,
+body.vscode-reduce-motion .wp-fac,
+body.vscode-reduce-motion .wp-can { transition: none; }
+body.vscode-reduce-motion .wp-lv-steam { opacity: 0; }
 `;

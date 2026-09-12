@@ -2,17 +2,17 @@
 
 The package ships a curated `benchmarks.json` describing WHICH benchmarks matter for GUI
 grounding. What it cannot ship is the SCORES: they age immediately, and a stale leaderboard
-presented as current is worse than none — a model listed there was months out of date while the
-panel showed it as fact.
+presented as current is worse than none — a model listed there once was months out of date while
+the panel showed it as fact.
 
 Two constraints shape this:
 
-* **Licensing.** Artificial Analysis's free tier is "internal use only, no redistribution". So
+* **Licensing.** Artificial Analysis's free tier is "internal use only, no redistribution", so
   scores are fetched at RUNTIME with the USER'S OWN key and cached under their home directory.
   Vendoring them into the repo would be redistribution; bundling one shared key would both breach
   the terms and leak a credential in an open-source package.
 * **Honesty.** The board carries its SOURCE and its AGE, and `is_live` goes false once stale —
-  the same invariant :mod:`interact.model_catalog` holds for prices. Serving old data offline is
+  same invariant :mod:`interact.model_catalog` holds for prices. Serving old data offline is
   fine; serving it as today's truth is the bug.
 """
 

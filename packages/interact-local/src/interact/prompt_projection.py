@@ -13,7 +13,7 @@ import sys
 
 
 MANIFEST_NAME = "projection-manifest.json"
-_OUTPUT_ROOTS = ("agents", "skills", "rules")
+_OUTPUT_ROOTS = ("agents", "skills", "rules", "scopes")
 _OUTPUT_FILES = ("AGENTS.md", "instructions.md", "org.json")
 _PASSTHROUGH_ROOTS = ("hooks",)
 
@@ -223,11 +223,15 @@ def _consumer_payloads(
         path = PurePosixPath(relative)
         destinations: tuple[Path, ...]
         if relative == "AGENTS.md":
-            destinations = (home / "AGENTS.md",)
+            # Codex reads the GLOBAL AGENTS.md at $CODEX_HOME, and the repo chain
+            # from the git root down to cwd — never ~/AGENTS.md for a project
+            # outside $HOME, so the home copy alone reached no Codex session.
+            destinations = (home / "AGENTS.md", home / ".codex" / "AGENTS.md")
         elif relative == "instructions.md":
+            # Only the user-level file: a copy at ~/CLAUDE.md was loaded a SECOND
+            # time as an ancestor project file by every project under $HOME.
             destinations = (
-                home / "CLAUDE.md", home / ".claude" / "CLAUDE.md",
-                vscode_root / "alan.instructions.md",
+                home / ".claude" / "CLAUDE.md", vscode_root / "alan.instructions.md",
             )
         elif relative == "org.json":
             destinations = (home / ".claude" / "org.json",)
@@ -248,9 +252,14 @@ def _consumer_payloads(
                 home / ".claude" / "rules" / path.name,
                 vscode_root / f"{path.stem}.instructions.md",
             )
+        elif _scoped_output(path) is not None:
+            # Domain-scoped agents / skills are HELD outside every consumer's
+            # auto-load roots; `interact prompts scope <name>` links a set into
+            # one project's .claude/ so a coding project never loads the wealth desk.
+            destinations = (home / ".claude" / "scopes" / Path(*path.parts[1:]),)
         elif len(path.parts) == 2 and path.parts[0] == "hooks" and path.suffix == ".sh":
             destinations = (home / ".claude" / "hooks" / path.name,)
-        elif relative in {"hooks/hooks.json", "hooks/turn-end-asks.md"}:
+        elif relative in {"hooks/hooks.json", "hooks/turn-end-asks.md", "hooks/codex-hooks.json", "hooks/cursor-hooks.json"}:
             continue
         else:
             raise ValueError("projection output has no consumer mapping")
@@ -263,7 +272,32 @@ def _consumer_payloads(
         outputs, settings, hook_scripts, prior_hook_groups
     )
     targets[settings] = (settings_bytes, 0o600)
-    return targets, {settings}, hook_groups
+    mergeable = {settings}
+    if "hooks/codex-hooks.json" in outputs:
+        codex_settings = home / ".codex" / "hooks.json"
+        current = json.loads(codex_settings.read_text()) if codex_settings.exists() else {}
+        fragment = json.loads(outputs["hooks/codex-hooks.json"].read_text())
+        hooks = current.setdefault("hooks", {})
+        for event, additions in fragment["hooks"].items():
+            previous = prior_hook_groups.get(f"codex:{event}", [])
+            hooks[event] = [group for group in hooks.get(event, [])
+                            if group not in previous and group not in additions] + additions
+            hook_groups[f"codex:{event}"] = additions
+        targets[codex_settings] = ((json.dumps(current, indent=2) + "\n").encode(), 0o600)
+        mergeable.add(codex_settings)
+    if "hooks/cursor-hooks.json" in outputs:
+        cursor_settings = home / ".cursor" / "hooks.json"
+        current = json.loads(cursor_settings.read_text()) if cursor_settings.exists() else {"version": 1}
+        fragment = json.loads(outputs["hooks/cursor-hooks.json"].read_text())
+        hooks = current.setdefault("hooks", {})
+        for event, additions in fragment["hooks"].items():
+            previous = prior_hook_groups.get(f"cursor:{event}", [])
+            hooks[event] = [group for group in hooks.get(event, [])
+                            if group not in previous and group not in additions] + additions
+            hook_groups[f"cursor:{event}"] = additions
+        targets[cursor_settings] = ((json.dumps(current, indent=2) + "\n").encode(), 0o600)
+        mergeable.add(cursor_settings)
+    return targets, mergeable, hook_groups
 
 
 def _merged_hook_settings(
@@ -488,10 +522,14 @@ def _write_manifest(
 
 def _consumer_kinds(relative: str) -> tuple[str, ...]:
     path = PurePosixPath(relative)
+    if relative == "hooks/codex-hooks.json":
+        return ("codex-settings-merge",)
+    if relative == "hooks/cursor-hooks.json":
+        return ("cursor-settings-merge",)
     if relative == "AGENTS.md":
-        return ("home-agents",)
+        return ("home-agents", "codex-agents")
     if relative == "instructions.md":
-        return ("home-claude", "claude-claude", "vscode-instructions")
+        return ("claude-claude", "vscode-instructions")
     if relative == "org.json":
         return ("claude-org",)
     if len(path.parts) == 2 and path.parts[0] == "agents":
@@ -504,7 +542,19 @@ def _consumer_kinds(relative: str) -> tuple[str, ...]:
         return ("claude-hook",)
     if relative in {"hooks/hooks.json", "hooks/turn-end-asks.md"}:
         return ("claude-settings-merge",)
+    if _scoped_output(path) is not None:
+        return ("claude-scope",)
     raise ValueError("projection output has no consumer mapping")
+
+
+def _scoped_output(path: PurePosixPath) -> str | None:
+    """Return the scope name of a `scopes/<scope>/{agents/<a>.md,skills/<s>/SKILL.md}` output."""
+    parts = path.parts
+    if len(parts) == 4 and parts[0] == "scopes" and parts[2] == "agents" and path.suffix == ".md":
+        return parts[1]
+    if len(parts) == 5 and parts[0] == "scopes" and parts[2] == "skills" and path.name == "SKILL.md":
+        return parts[1]
+    return None
 
 
 def _safe_path(value: str) -> PurePosixPath:

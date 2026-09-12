@@ -1,11 +1,11 @@
 /** Reading the agent-run registry that the Python side writes.
  *
- *  This process only ever READS: `interact agents` (or an agent calling the MCP tools) owns
+ *  This process only ever READS: interact agents (or an agent calling the MCP tools) owns
  *  spawning and stopping. The panel is a window onto that, which is why a run's status here is
  *  whatever Python derived from the live pid — the extension never guesses liveness itself.
  *
- *  Mirrors `interact.agents.registry` (packages/interact-local/src/interact/agents/registry.py); tests/test_paths.py
- *  binds the directory the two agree on.
+ *  Mirrors interact.agents.registry (packages/interact-local/src/interact/agents/registry.py);
+ *  tests/test_paths.py binds the directory the two agree on.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -25,7 +25,7 @@ export type AgentRun = Omit<GeneratedAgentRun, "status"> & { status: RunStatus }
 
 const SAFE_RUN_ID = /^[A-Za-z0-9._:@+-]{1,160}$/;
 
-/** Mirrors Python registry `_safe_run_id`; no persisted/provider id may become a path segment. */
+/** Mirrors Python registry _safe_run_id; no persisted/provider id may become a path segment. */
 function agentFile(runId: string, suffix: string): string | null {
   if (runId === "." || runId === ".." || !SAFE_RUN_ID.test(runId)) return null;
   return path.join(agentsDir(), `${runId}${suffix}`);
@@ -134,7 +134,7 @@ function decodeActivity(line: string): AgentActivity | null {
   }
 }
 
-/** A run's recent activity, oldest last. Bounded by `limit` because a long run's transcript is
+/** A run's recent activity, oldest last. Bounded by limit because a long run's transcript is
  *  unbounded and the panel only ever shows a tail — reading it all to display ten lines would
  *  make every refresh scale with the longest-running agent. */
 export function readAgentActivity(runId: string, limit = 40): AgentActivity[] {
@@ -257,12 +257,12 @@ export function activityOf(run: AgentRun, limit = 40): AgentActivity[] {
 }
 
 /** Where the child wrote its OWN stream, verbatim — full tool inputs and outputs live here.
- *  Mirrors Python's `raw_events_path`. */
+ *  Mirrors Python's raw_events_path. */
 export function rawEventsPath(runId: string): string | null {
   return agentFile(runId, ".raw.jsonl");
 }
 
-/** One agent addressing another. Written by Python to `<run_id>.messages.jsonl` on BOTH sides,
+/** One agent addressing another. Written by Python to <run_id>.messages.jsonl on BOTH sides,
  *  so this dedupes — the same exchange appears in the sender's file and the recipient's. */
 export interface AgentMessage {
   from_run: string;

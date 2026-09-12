@@ -15,11 +15,11 @@ _DND_DISPATCH_JS = (Path(__file__).parent.parent / "js" / "dnd_dispatch.js").rea
 
 _JS_NEEDS_ASYNC = re.compile(r"\b(return|await)\b")
 
-# A script the agent already wrote AS a function — an arrow (`(a) => …`, `a => …`) or a `function`
-# expression, optionally `async`. Playwright invokes such a string itself (passing `args` as the
-# parameter), so it MUST pass through unwrapped: wrapping `() => { return x }` in another IIFE
-# defines the inner arrow without ever calling it, so the value is lost (page.evaluate returns
-# undefined) — that was the root of "evaluate_js return value is blank" for any function-bodied
+# A script the agent already wrote AS a function — an arrow (`(a) => …`, `a => …`) or a
+# `function` expression, optionally `async`. Playwright invokes such a string itself (passing
+# `args` as the parameter), so it MUST pass through unwrapped: wrapping `() => { return x }` in
+# another IIFE defines the inner arrow without calling it, losing the value (page.evaluate
+# returns undefined) — root of "evaluate_js return value is blank" for any function-bodied
 # script (e.g. `() => { const r = el.getBoundingClientRect(); return r.width }`).
 _JS_IS_FUNCTION = re.compile(
     r"""^\s*(async\s+)?(
@@ -32,8 +32,8 @@ _JS_IS_FUNCTION = re.compile(
 )
 
 # A script that OPENS with a statement keyword (or a named function declaration) is a statement
-# body, not an expression — passing it bare to page.evaluate throws SyntaxError ("Unexpected token
-# 'const'", seen 10x+ in client logs). It must run inside an IIFE even when it never `return`s.
+# body, not an expression — passing it bare to page.evaluate throws SyntaxError ("Unexpected
+# token 'const'", seen 10x+ in client logs). Must run inside an IIFE even when it never `return`s.
 _JS_IS_STATEMENT = re.compile(
     r"^\s*(const|let|var|if|for|while|do|try|switch|class|throw|function\s+[A-Za-z_$])\b"
 )
@@ -61,9 +61,9 @@ def _wrap_js(script: str, has_args: bool = False) -> str:
 
 class Action(BaseModel):
     # An unknown field must be a LOUD error. Pydantic's default silently drops extras, so a
-    # mistyped or unsupported parameter looked accepted and simply never happened — the failure
-    # shape behind "emulate_device took reduced_motion and ignored it" (#107). An agent cannot
-    # tell "applied" from "dropped" except by the behaviour never changing, so refuse instead.
+    # mistyped or unsupported parameter looked accepted and never happened — the failure shape
+    # behind "emulate_device took reduced_motion and ignored it" (#107). An agent can't tell
+    # "applied" from "dropped" except by the behaviour never changing, so refuse instead.
     model_config = ConfigDict(extra="forbid")
 
     mutates: ClassVar[bool] = True
@@ -76,17 +76,17 @@ class ObservationAction(Action):
 
 
 def _require_name_for_role(action) -> None:
-    """``role`` is a qualifier on ``name`` (get_by_role(role, name=...)) — it's meaningless alone.
-    The same check was copied across click/type/drag; one helper now (works for any action with
+    """``role`` is a qualifier on ``name`` (get_by_role(role, name=...)) — meaningless alone.
+    Same check was copied across click/type/drag; one helper now (works for any action with
     ``role``/``name`` fields, regardless of how else it targets)."""
     if action.role and not action.name:
         raise ValueError("role requires name")
 
 
 class _RefSelectorLocator:
-    """Shared by every browser action that targets by ``ref``/``selector``: ref → its
-    data-interact-ref locator, else the raw CSS selector. The body was copied verbatim across the
-    targeting actions; defined once here (a plain mixin — no fields — so pydantic leaves it alone)."""
+    """Shared by every browser action targeting by ``ref``/``selector``: ref → its
+    data-interact-ref locator, else the raw CSS selector. Body was copied verbatim across
+    targeting actions; defined once here (plain mixin — no fields — pydantic leaves it alone)."""
 
     def _locator(self, page: Page):
         return (
@@ -161,8 +161,8 @@ class ClickAction(_CoordinateTargetMixin):
 
     type: Literal["click"] = "click"
     element: int | None = None
-    # Which mouse button to press. A right-click is the ONLY way into a context menu, and a desktop
-    # app whose menu is right-click-only was simply unreachable before this (#91). Works on both
+    # Which mouse button to press. A right-click is the ONLY way into a context menu — a desktop
+    # app whose menu is right-click-only was unreachable before this (#91). Works on both
     # surfaces: X buttons 1/2/3 on desktop, Playwright's `button=` on the browser.
     button: Literal["left", "right", "middle"] = "left"
 
@@ -185,9 +185,9 @@ class ClickAction(_CoordinateTargetMixin):
         if self.ref:
             locator = self._locator(page)
             if await locator.count() == 0:
-                # A ref is a data-interact-ref attribute on a live node, so a navigation or a
+                # A ref is a data-interact-ref attribute on a live node, so navigation or a
                 # re-render legitimately destroys it. Say THAT, rather than spending the full
-                # timeout and reporting an indistinguishable "never became actionable" (#95).
+                # timeout reporting an indistinguishable "never became actionable" (#95).
                 raise ValueError(
                     f"ref {self.ref!r} is stale — it no longer exists in the page's DOM, which a "
                     "navigation or a re-render does to every ref detected before it. Re-run "
@@ -215,13 +215,13 @@ class HoverAction(_CoordinateTargetMixin):
 
 
 class TypeTextAction(_RefSelectorLocator, Action):
-    """Type into a field, replacing what is there unless ``clear_first`` is off.
+    """Type into a field, replacing what's there unless ``clear_first`` is off.
 
     ``clear_first`` replaces the WHOLE field, and in a mode-prefixed input the mode lives in the
     text: VS Code's command palette opens pre-filled with ``>``, go-to-line with ``:``, symbol
-    search with ``@``. Typing a command name alone therefore does not fail to match it — it
-    silently switches the widget to a different search and reports no results, which reads like a
-    wrong command name and cost one caller four round-trips before they worked it out (#114).
+    search with ``@``. Typing a command name alone doesn't fail to match — it silently switches
+    the widget to a different search and reports no results, reads like a wrong command name,
+    cost one caller four round-trips to work out (#114).
 
     So when a shortcut opened a prefixed input, type the prefix yourself (``">Interact: Show
     Team"``), or pass ``clear_first=false`` to append to what is already there. Deliberately not
@@ -277,9 +277,9 @@ class ScrollAction(_CoordinateTargetMixin):
         return v
 
     async def execute(self, page: Page):
-        # Anchor the pointer first when a target is given: the wheel is delivered to whatever
-        # sits UNDER the pointer, so position IS the scroll target — an unanchored wheel next to
-        # a zoomable canvas scrolls (or zooms) the wrong widget (#76). No target keeps the old
+        # Anchor the pointer first when a target is given: the wheel delivers to whatever sits
+        # UNDER the pointer, so position IS the scroll target — an unanchored wheel next to a
+        # zoomable canvas scrolls (or zooms) the wrong widget (#76). No target keeps the old
         # scroll-at-current-position behavior.
         if self.ref:
             await self._locator(page).hover()
@@ -298,9 +298,9 @@ async def _click_selector(
     """Click (or double-click) a CSS selector, preferring the first VISIBLE match when several
     match. Duplicated link text (a breadcrumb mirroring the sidebar) or a generic button label
     (`:has-text('Annuler')`) makes a selector resolve to many nodes; `page.click` would target
-    whatever is first in DOM order — often a hidden/off-screen one, so the click silently lands
-    wrong or times out (#29). A single match clicks directly; none-visible falls back to the first
-    so a hidden-but-actionable target still works."""
+    whatever is first in DOM order — often hidden/off-screen, so the click silently lands wrong
+    or times out (#29). A single match clicks directly; none-visible falls back to the first so
+    a hidden-but-actionable target still works."""
     loc = page.locator(selector)
     target = None
     count = await loc.count()
@@ -383,13 +383,14 @@ class NavigateAction(Action):
 
 
 class EvaluateJsAction(Action):
-    """Run a JS PROGRAM against the live page and get its value back — interact's batch primitive.
+    """Run a JS PROGRAM against the live page and get its value back — interact's batch
+    primitive.
 
     Prefer this for any iterate-over-elements flow (query → filter → loop → read/act) over many
-    get_interactive_elements→act round-trips: it runs in ONE call, inside the browser's own isolate
-    (no access to interact's host/filesystem), takes `args` for data, and surfaces the return value
-    JSON-serialised. E.g. read every row's price, or click each element matching a selector, in a
-    single step — `document.querySelectorAll(...)` + a loop, returning the collected result.
+    get_interactive_elements→act round-trips: runs in ONE call, inside the browser's own
+    isolate (no access to interact's host/filesystem), takes `args` for data, surfaces the
+    return value JSON-serialised. E.g. read every row's price, or click each matching element,
+    in one step — `document.querySelectorAll(...)` + a loop, returning the collected result.
     """
 
     # "eval_js" is an accepted alias tag: agents guessed it (with a `code` field) 81 times in the
@@ -419,12 +420,12 @@ class EvaluateJsAction(Action):
 
 
 class DoubleClickAction(ClickAction):
-    """Double-click a target — selects a word in a contenteditable (Lexical/Payload richtext) so a
-    selection-gated toolbar appears, fires a dblclick handler, etc. Two separate `click` actions do
-    NOT coalesce into a dblclick, so this is the way to get one (#32): Playwright's native dblclick
-    on the browser, and on a desktop/nested window the click primitive with count=2, the presses
-    spaced inside the toolkit's double-click interval (#116). It IS a click — same targeting
-    (ref / selector / element / name / x+y), same `button` — only the count differs."""
+    """Double-click a target — selects a word in a contenteditable (Lexical/Payload richtext) so
+    a selection-gated toolbar appears, fires a dblclick handler, etc. Two separate `click`
+    actions do NOT coalesce into a dblclick, so this is the way to get one (#32): Playwright's
+    native dblclick on the browser, and on a desktop/nested window the click primitive with
+    count=2, presses spaced inside the toolkit's double-click interval (#116). IS a click —
+    same targeting (ref/selector/element/name/x+y), same `button` — only the count differs."""
 
     type: Literal["double_click"] = "double_click"
     click_count: ClassVar[int] = 2
@@ -503,8 +504,8 @@ class WaitForAction(ObservationAction):
     @model_validator(mode="after")
     def _require_condition(self):
         # Only BOTH is ambiguous (wait for which?). Neither is the obvious "just pause" intent —
-        # agents send `{"type":"wait_for","timeout":2000,"selector":null}` and used to get a hard
-        # validation error for it (twice in 24h of client logs); it now pauses, as they meant.
+        # agents send `{"type":"wait_for","timeout":2000,"selector":null}` and used to get a
+        # hard validation error (twice in 24h of client logs); it now pauses, as they meant.
         if self.selector is not None and self.text is not None:
             raise ValueError("Provide `selector` or `text` to wait for, not both")
         return self
@@ -635,9 +636,9 @@ class EmulateDeviceAction(ObservationAction):
     is_mobile: bool | None = None
     has_touch: bool | None = None
     user_agent: str | None = None
-    # Media features (page.emulate_media) — unlike the viewport these need no context rebuild, so
-    # they can be set alone. reduced_motion is how a site's `@media (prefers-reduced-motion)`
-    # branch gets verified live, which was otherwise only checkable at the OS a11y setting (#107).
+    # Media features (page.emulate_media) — unlike the viewport these need no context rebuild,
+    # can be set alone. reduced_motion is how a site's `@media (prefers-reduced-motion)` branch
+    # gets verified live, otherwise only checkable at the OS a11y setting (#107).
     reduced_motion: Literal["reduce", "no-preference", "null"] | None = None
     color_scheme: Literal["light", "dark", "no-preference", "null"] | None = None
     forced_colors: Literal["active", "none", "null"] | None = None

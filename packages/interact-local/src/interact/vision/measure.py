@@ -48,8 +48,8 @@ def contrast_ratio(rgb1: Rgb, rgb2: Rgb) -> float:
 
 def _dominant_colors(arr: np.ndarray, k: int = 4, quant: int = 16) -> list[tuple[Rgb, float]]:
     """Top-``k`` colours by frequency. Pixels are grouped into coarse buckets so anti-aliasing
-    doesn't fragment a flat fill, but each colour returned is the MEAN of the actual pixels in its
-    bucket (not the bucket centre) — so pure black/white come back exact and the WCAG ratio is
+    doesn't fragment a flat fill, but each colour returned is the MEAN of actual pixels in its
+    bucket (not the bucket centre) — pure black/white come back exact and the WCAG ratio is
     accurate, not quantization-skewed. Returns ``[(rgb, fraction), …]`` most-common first."""
     flat = arr.reshape(-1, 3).astype(int)
     buckets = flat // quant
@@ -62,22 +62,22 @@ def _dominant_colors(arr: np.ndarray, k: int = 4, quant: int = 16) -> list[tuple
     return out
 
 
-# Blank means NO CONTRAST ANYWHERE — not "one colour dominates". Text is a minority of pixels by
-# area on every page ever designed, so a dominant-colour test calls a real sign-in form (99.6%
-# white) empty and REFUSES to analyse it. A confident wrong refusal about a real screen is worse
-# than the confabulation this exists to prevent.
-# The bar is FLAT, and deliberately strict. Every reported case — a crashed window, an unmapped
-# surface, a GPU buffer the grabber cannot read — comes back perfectly uniform, so nothing is lost
-# by demanding that; while any frame carrying text carries near-black pixels on near-white and is
+# Blank means NO CONTRAST ANYWHERE — not "one colour dominates". Text is a minority of pixels
+# by area on every page ever designed, so a dominant-colour test calls a real sign-in form
+# (99.6% white) empty and REFUSES to analyse it. A confident wrong refusal about a real screen
+# is worse than the confabulation this exists to prevent.
+# The bar is FLAT, deliberately strict. Every reported case — a crashed window, an unmapped
+# surface, a GPU buffer the grabber can't read — comes back perfectly uniform, so nothing is
+# lost by demanding that; any frame carrying text carries near-black pixels on near-white,
 # nowhere near it. Erring this way is the point: wrongly calling a real screen blank REFUSES to
-# look at it, which is the failure this gate exists to prevent, in the other direction. Wrongly
-# calling an empty one real just spends a model call.
+# look at it — the failure this gate exists to prevent, in the other direction. Wrongly calling
+# an empty one real just spends a model call.
 _FLAT_RANGE = 8
 _COMPRESSIBLE_ENOUGH = 0.05
-# Below this the encoded size says more about PNG's header than about the picture: an 8x8 blank
-# frame encodes at 1.08 bytes/pixel, twenty times the threshold. An element query crops single
-# widgets, which is exactly this size range, so the screen is simply skipped there — the decode
-# it exists to avoid costs microseconds at that size.
+# Below this the encoded size says more about PNG's header than the picture: an 8x8 blank frame
+# encodes at 1.08 bytes/pixel, twenty times the threshold. An element query crops single
+# widgets, exactly this size range, so the check is simply skipped there — the decode it exists
+# to avoid costs microseconds at that size.
 _FAST_PATH_MIN_PIXELS = 20_000
 
 
@@ -91,11 +91,11 @@ def _png_dimensions(png: bytes) -> tuple[int, int] | None:
 def blank_frame_reason(png: bytes) -> str | None:
     """Why this frame has nothing on it, or ``None`` if it does.
 
-    Handed an all-black capture of a CRASHED window, a VLM did not say "this image is empty" — it
-    answered the question anyway, echoing the agent's own action text back as if it had read it on
-    screen (#112). A plausible invented answer is worse than an error, because it reads as a real
-    observation and the caller acts on it. Emptiness is deterministic, so it is decided here on the
-    pixels and never sent to a model.
+    Handed an all-black capture of a CRASHED window, a VLM didn't say "this image is empty" —
+    it answered the question anyway, echoing the agent's own action text back as if it had read
+    it on screen (#112). A plausible invented answer is worse than an error, because it reads
+    as a real observation and the caller acts on it. Emptiness is deterministic, decided here on
+    the pixels, never sent to a model.
     """
     # Cheapest question first: a flat image is what PNG compresses BEST, so its encoded size can
     # rule out a busy frame before any decode — hundreds of kB for a real screenshot against a few

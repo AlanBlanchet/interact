@@ -26,6 +26,13 @@ function fake(mode = "healthy") {
   };
 }
 
+async function waitForState(client: { state(): string }, expected: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (client.state() !== expected && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("only conversation runs use the stateful transport", () => {
   // The extension has two delivery contracts: historical process runs retain the established CLI
   // send path, while provider conversations stay on their one typed host process.
@@ -34,6 +41,7 @@ test("only conversation runs use the stateful transport", () => {
     ["process", false],
     ["conversation", true],
     ["provider_child", false],
+    ["provider_root", false],
   ] as const) {
     assert.equal(usesConversationTransport({
       run_id: "run",
@@ -203,7 +211,7 @@ test("incompatible, crashed and malformed hosts fail visibly without reconnectin
         assert.equal(client.state(), "crashed", "the first dispatch must expose the bridge exit");
       } else {
         await client.catalog();
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        await waitForState(client, "crashed");
         assert.equal(client.state(), "crashed", `${mode} must make the one process terminal`);
         await assert.rejects(client.send("root-run", "do not retry"),
           /stopped|crash|protocol|malformed/i);
@@ -230,7 +238,7 @@ test("pre-initialize launch failures are distinct, safe, terminal, and explicitl
     {
       name: "missing executable",
       spec: { command: path.join(path.dirname(fakeHost), "absent-interact"), args: [], cwd: path.dirname(fakeHost) },
-      expected: /not installed.*reload/i,
+      expected: /was not found.*Install it.*reload/i,
     },
     { name: "incompatible methods", spec: fake("incompatible"), expected: /incompatible.*reload/i },
   ] as const;
@@ -253,4 +261,37 @@ test("pre-initialize launch failures are distinct, safe, terminal, and explicitl
       assert.equal(client.state(), "closed", "dispose must leave the failed bridge terminal");
     }
   });
+});
+
+test("a bridge that dies at startup logs WHAT it said, without showing it", () => {
+  /* Live cold entry gave "(exit 1; 638 stderr bytes)" — 638 bytes of diagnosis counted and thrown
+     away. That text turned out to name a real version skew (`Unknown command "console"`), so it
+     must be captured. But the neighbouring contract is deliberate and right: a child's stderr is
+     untrusted and may carry paths or secrets, so it never crosses into the UI. The tail therefore
+     goes to `onDiagnostic` (the extension's log) while `onError` keeps the count. */
+  const src = fs.readFileSync(new URL("./conversationClient.ts", import.meta.url), "utf8");
+  assert.match(src, /stderrTail/, "the text is kept, not only its length");
+  assert.match(src, /onDiagnostic/, "and routed to the log");
+  const exitMessage = src.slice(src.indexOf("exited before initialization"), src.indexOf("exited before initialization") + 160);
+  assert.doesNotMatch(exitMessage, /stderrTail|said\(/, "the USER-facing message carries no stderr");
+  assert.match(exitMessage, /stderrBytes/, "it still says how much there was to look at");
+});
+
+test("a missing program is named, and the diagnostic actually reaches a listener", () => {
+  /* Two round-48 findings in one place.
+
+     ENOENT said "Interact is not installed" when the missing program was `uv` — the spawn uses
+     `uv run --directory` for a project checkout. The user got confident, wrong advice next to a
+     RELOAD BRIDGE button, which compounds with any other fault in that path.
+
+     And `onDiagnostic` was declared, computed and bounded — then never wired to anything, so the
+     stderr the whole change existed to preserve was dropped on the floor. Producing without a
+     consumer is not delivering. */
+  const src = fs.readFileSync(new URL("./conversationClient.ts", import.meta.url), "utf8");
+  const at = src.indexOf('=== "ENOENT"');
+  const enoent = src.slice(at, src.indexOf('conversation bridge could not start', at));
+  assert.match(enoent, /spec\.command/, "the message names the program that is actually missing");
+
+  const view = fs.readFileSync(new URL("./chatView.ts", import.meta.url), "utf8");
+  assert.match(view, /onDiagnostic/, "and something must actually listen for the diagnostic");
 });

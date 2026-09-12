@@ -408,8 +408,6 @@ export const PROPS: Record<ZoneId, Piece> = {
   idle: BREAK,
 };
 
-/** The same catalogue under the name the sprite table reads. */
-
 /* ── Status marks ────────────────────────────────────────────────────────────────────────────
  *
  *  Status is read by SHAPE first. Colour is the second signal, never the only one: a red dot and

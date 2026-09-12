@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { describeAge, isLive, pickHighlights, type Catalog } from "./catalogFormat.ts";
+import { describeAge, isLive, seeingModels, type Catalog } from "./catalogFormat.ts";
 
 function cat(over: Partial<Catalog> = {}): Catalog {
   return {
@@ -44,7 +44,7 @@ test("the offline fallback is never live", () => {
 });
 
 test("highlights prefer models that can actually see — this is a vision tool", () => {
-  const picks = pickHighlights(cat(), 2);
+  const picks = seeingModels(cat());
   assert.equal(picks.length, 2);
   assert.ok(picks.every((m) => m.input_modalities.includes("image")),
     "a text-only model is useless for driving a UI and must not be highlighted");
@@ -52,5 +52,5 @@ test("highlights prefer models that can actually see — this is a vision tool",
 
 test("highlights survive a catalog with no modality data", () => {
   const bare = cat({ models: [{ id: "x", name: "x", context_length: null, input_cost_per_token: null, input_modalities: [] }] });
-  assert.doesNotThrow(() => pickHighlights(bare, 3));
+  assert.doesNotThrow(() => seeingModels(bare));
 });

@@ -63,14 +63,13 @@ def desktop_unsupported_message() -> str:
     )
 
 
-# A process killed by the host (OOM) versus one that failed on its own terms look identical as a
-# bare `rc=` number, and that ambiguity is exactly what a caller could not resolve when the sandbox
-# X server died three times in one session with zero diagnostics (#84).
-# Keyed by signal NAME, never by `signal.SIGKILL` and friends: those attributes do not exist on
+# A process killed by the host (OOM) vs one that failed on its own terms look identical as a
+# bare `rc=` number — the ambiguity a caller couldn't resolve when the sandbox X server died
+# three times in one session with zero diagnostics (#84).
+# Keyed by signal NAME, never by `signal.SIGKILL` and friends: those attributes don't exist on
 # Windows, and this dict is built at import time, so naming them here made `import
 # interact.desktop.backend` raise AttributeError on Windows — taking the whole suite down at
-# collection, invisibly to any Linux or macOS run. A name that this platform lacks simply never
-# matches.
+# collection, invisibly to any Linux/macOS run. A name this platform lacks simply never matches.
 _SIGNAL_CAUSE = {
     "SIGKILL": "SIGKILL — killed from outside; on a loaded host this is usually the "
                "OOM-killer, not an interact fault",
@@ -113,8 +112,8 @@ def _tail_file(path: str | None, limit: int) -> str:
 
 def _frac_dark(gray, cutoff: int = 8) -> float:
     """Fraction of (near-)true-black pixels in an 8-bit grayscale PIL image, via its histogram
-    (C-fast, no Python per-pixel loop). The cutoff is deliberately low: an unrendered GL buffer is
-    *exactly* black (0,0,0), whereas a real dark theme (#1e1e1e ≈ 30) sits well above it — so the
+    (C-fast, no Python per-pixel loop). Cutoff is deliberately low: an unrendered GL buffer is
+    *exactly* black (0,0,0), a real dark theme (#1e1e1e ≈ 30) sits well above it — so the
     repaint heuristic fires on the unrendered case without flagging a legitimately dark UI."""
     hist = gray.histogram()
     total = sum(hist) or 1
@@ -126,10 +125,10 @@ def _gl_unrendered(png: bytes, *, strip_fracs: tuple[float, ...] = (0.08, 0.12, 
     """True when a nested GL-window capture looks like it never painted: the whole frame is
     near-black, or a black bottom strip sits over a rendered body — a blurred bottom nav
     (BottomNavigationBar / convex_bottom_bar ConvexAppBar) that software GL left black (#7/#8,
-    #14-#20). Both clear after a repaint nudge. The black bar's height varies by toolkit, so scan a
+    #14-#20). Both clear after a repaint nudge. Black bar's height varies by toolkit, so scan a
     band of candidate strip fractions, not one fixed 12%. A genuinely dark theme has a dark body
-    too, so the strip-only case demands a much lighter body — otherwise every capture of a dark UI
-    would needlessly nudge (and reset its scroll)."""
+    too, so the strip-only case demands a much lighter body — else every dark-UI capture would
+    needlessly nudge (and reset its scroll)."""
     try:
         from PIL import Image
 
@@ -367,16 +366,16 @@ class LocalBackend(DesktopBackend):
 
 
 class PortableBackend(DesktopBackend):
-    """A cross-platform real-session backend — the one selected on **macOS / Windows**, where the
+    """A cross-platform real-session backend — selected on **macOS / Windows**, where the
     Linux uinput/X11 path doesn't exist. Screen capture via **mss**, pointer + keyboard via
-    **pynput**, both pure-Python and OS-native underneath (Quartz on macOS, Win32 SendInput/GDI on
-    Windows, Xlib on Linux). It drives the whole virtual desktop in screen pixels, so
+    **pynput**, both pure-Python and OS-native underneath (Quartz on macOS, Win32 SendInput/GDI
+    on Windows, Xlib on Linux). Drives the whole virtual desktop in screen pixels, so
     ``target="screen"`` works everywhere; per-window targeting on macOS/Windows is a follow-up
-    (mss/pynput don't enumerate windows). On macOS the process needs Screen-Recording (capture) +
-    Accessibility (input) permission, granted once to the host terminal/app.
+    (mss/pynput don't enumerate windows). On macOS the process needs Screen-Recording (capture)
+    + Accessibility (input) permission, granted once to the host terminal/app.
 
     Linux keeps :class:`LocalBackend` (deeper, works on X11 + Wayland); this is the portable
-    fallback. It's verifiable on Linux too (mss/pynput honour ``DISPLAY``), so the macOS/Windows
+    fallback. Verifiable on Linux too (mss/pynput honour ``DISPLAY``), so the macOS/Windows
     behaviour is exercised in CI on real runners."""
 
     _BUTTONS = ("left", "right", "middle")
@@ -514,20 +513,20 @@ _X11_PINS = {
 def sandbox_child_env(base: dict[str, str], display: str, shim_dir: str) -> dict[str, str]:
     """The environment every sandboxed child gets: the host's, with the escapes closed.
 
-    Pure so the containment guarantees are testable without an X server. Three jobs: point the
-    child at the nested DISPLAY and pin the toolkits to X11 (#85), contain URL opening so it
-    cannot reach the user's browser (#83), and force software GL (a nested display has no usable
+    Pure so containment guarantees are testable without an X server. Three jobs: point the
+    child at the nested DISPLAY and pin toolkits to X11 (#85), contain URL opening so it can't
+    reach the user's browser (#83), and force software GL (a nested display has no usable
     hardware GL, so a GPU app renders black).
 
-    URL containment is done TWICE over, because ``$BROWSER`` alone is not enough — verified live:
-    ``xdg-open`` resolves the ``x-scheme-handler/https`` desktop association first and only
+    URL containment is done TWICE over, because ``$BROWSER`` alone isn't enough — verified live:
+    ``xdg-open`` resolves the ``x-scheme-handler/https`` desktop association first, only
     consults ``$BROWSER`` if that finds nothing, so it still reached the host's Chrome. So the
-    shim directory is also prepended to ``PATH``, which intercepts the ``xdg-open`` binary itself
-    no matter what the mime database says. ``$BROWSER`` still matters: Python's
+    shim directory is also prepended to ``PATH``, intercepting the ``xdg-open`` binary itself no
+    matter what the mime database says. ``$BROWSER`` still matters: Python's
     ``webbrowser.open()`` reads it before trying anything else.
 
-    Note the deliberate limit: ``DBUS_SESSION_BUS_ADDRESS`` is left ALONE. Clearing it would close
-    the xdg-desktop-portal route too, but interact's own AT-SPI element detection rides that same
+    Deliberate limit: ``DBUS_SESSION_BUS_ADDRESS`` is left ALONE. Clearing it would close the
+    xdg-desktop-portal route too, but interact's own AT-SPI element detection rides that same
     bus, so a direct portal D-Bus call can still escape.
     """
     env = {k: v for k, v in base.items() if k not in _WAYLAND_ESCAPE_VARS | _DESKTOP_DETECT_VARS}
@@ -601,10 +600,10 @@ def nested_server_command(display: str, size: str, headless: bool) -> list[str]:
     the agent drives via ``DISPLAY=:N``."""
     if headless:
         return ["Xvfb", display, "-screen", "0", f"{size}x24", "-nolisten", "tcp"]
-    # `-title` is undocumented in -help but honoured. It earns its place twice: the window on the
-    # user's desktop says whose it is (several servers means several sandboxes, which otherwise
-    # looks like a leak), and it is a marker interact CONTROLS — the plain flags below are exactly
-    # what someone types by hand, so they could never tell our display from anyone else's.
+    # `-title` is undocumented in -help but honoured. Earns its place twice: the window on the
+    # user's desktop says whose it is (several servers means several sandboxes, otherwise looks
+    # like a leak), and it's a marker interact CONTROLS — the plain flags below are exactly what
+    # someone types by hand, so they could never tell our display from anyone else's.
     return ["Xephyr", display, "-title", f"{SANDBOX_TITLE} {display}",
             "-screen", size, "-br", "-ac", "-noreset", "-no-host-grab"]
 

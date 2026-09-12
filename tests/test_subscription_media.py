@@ -43,7 +43,8 @@ from interact.config import Config
 from interact.benchmarks.published import PublishedEntry, PublishedTable
 from interact.benchmarks.upstream import GroundingLeaderboardJS, UpstreamSource
 from interact.models import Benchmark, CircuitBreaker, Model, ModelCapability, ModelChain
-from interact.vision import MediaItem, analyze_media, transcribe_audio
+from interact.vision import MediaItem
+from interact.vision.core import analyze_media, transcribe_audio
 from interact.vision.core import VLMResult
 
 

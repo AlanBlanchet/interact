@@ -10,6 +10,7 @@ An orphan is identifiable: it is OUR X server (our own flags), and its parent is
 
 import os
 import signal
+from pathlib import Path
 
 import pytest
 
@@ -39,6 +40,8 @@ def _proc(pid, ppid, cmdline):
 # Derived from the real command builder, never hand-typed: a fixture that drifts from what we
 # actually spawn is how the reaper silently stops recognising our own displays.
 _OURS = " ".join(nested_server_command(":99", "1280x800", headless=False))
+#: One of OUR sandbox profiles (the editor's isolated --user-data-dir for display :99).
+_PROFILE = str(Path.home() / ".interact/out/sandbox-profiles/editor-99")
 
 
 def test_an_orphan_is_ours_and_has_lost_its_parent():
@@ -135,11 +138,16 @@ def test_a_process_bound_to_the_sandbox_display_is_a_client(monkeypatch):
     assert orphans.display_clients(":99") == [7]
 
 
-def test_our_own_process_is_never_a_client(monkeypatch):
-    """The sweep must not signal the process running it — the self-kill trap again."""
+def test_the_server_and_its_own_direct_children_are_never_clients(monkeypatch):
+    """The sweep must not signal the process running it — the self-kill trap again — nor the
+    handles that process holds itself: a live ffmpeg recorder, a `maim` / `xdotool` in flight, a
+    launched app's group leader are direct children bound to the same display, each managed by
+    whatever spawned it. The sweep exists for what ESCAPED those handles — an app's helper that
+    `setsid`d out of its group (#118) — and must not cut a recording short on the way."""
     monkeypatch.setattr(orphans, "_proc_display", lambda pid: ":99")
-    monkeypatch.setattr(orphans, "_all_pids", lambda: [os.getpid(), 12])
-    assert orphans.display_clients(":99") == [12]
+    monkeypatch.setattr(orphans, "_all_pids", lambda: [os.getpid(), 12, 13])
+    monkeypatch.setattr(orphans, "_proc_ppid", lambda pid: os.getpid() if pid == 12 else 1)
+    assert orphans.display_clients(":99") == [13]
 
 
 @pytest.mark.parametrize("display", ["", None, ":0"])
@@ -154,6 +162,7 @@ def test_it_refuses_to_sweep_the_real_session_display(monkeypatch, display):
 def test_killing_clients_reports_what_it_signalled(monkeypatch):
     monkeypatch.setattr(orphans, "display_clients", lambda d: [21, 22])
     monkeypatch.setattr(orphans, "_terminate", lambda pid: pid != 22)
+    monkeypatch.setattr(orphans, "_still_alive", lambda pid: False)
     assert orphans.kill_display_clients(":99") == [21]
 
 
@@ -170,15 +179,25 @@ def test_proc_display_is_none_when_unreadable(tmp_path, monkeypatch):
     assert orphans._proc_display(999) is None
 
 
-def test_a_client_that_ignores_SIGTERM_is_killed(monkeypatch):
+@pytest.mark.parametrize(
+    ("source", "sweep"),
+    [
+        ("display_clients", lambda: orphans.kill_display_clients(":99", grace=0.1)),
+        ("profile_clients", lambda: orphans.kill_profile_clients(_PROFILE, grace=0.1)),
+    ],
+    ids=["display", "profile"],
+)
+def test_a_client_that_ignores_SIGTERM_is_killed(monkeypatch, source, sweep):
     """Observed live: a survivor stayed up through SIGTERM and kept the profile's IPC socket, so
-    the next launch handed its window to a displayless zombie and the sandbox stayed empty."""
+    the next launch handed its window to a displayless zombie and the sandbox stayed empty. Both
+    sweeps escalate the same way — a profile holder that shrugs off SIGTERM keeps the singleton
+    exactly like a display client does (#118)."""
     sent: list[tuple[int, int]] = []
-    monkeypatch.setattr(orphans, "display_clients", lambda d: [31])
+    monkeypatch.setattr(orphans, source, lambda target: [31])
     monkeypatch.setattr(orphans.os, "kill", lambda pid, sig: sent.append((pid, sig)))
     # Without this the grace loop calls the REAL os.kill(31, 0) and then SIGKILLs pid 31.
     monkeypatch.setattr(orphans, "_still_alive", lambda pid: len(sent) < 2)
-    assert orphans.kill_display_clients(":99") == [31]
+    assert sweep() == [31]
     assert [sig for _, sig in sent] == [signal.SIGTERM, signal.SIGKILL]
 
 
@@ -298,20 +317,19 @@ def test_a_hand_started_xephyr_with_the_same_plain_flags_is_NOT_ours():
 
 
 def test_a_process_holding_our_sandbox_profile_is_ours_wherever_it_runs(monkeypatch):
-    profile = "/home/alan/.interact/out/sandbox-profiles/editor-99"
     monkeypatch.setattr(orphans, "_process_table", lambda: [
-        (10, f"/usr/share/code/code --user-data-dir={profile} --type=renderer"),
+        (10, f"/usr/share/code/code --user-data-dir={_PROFILE} --type=renderer"),
         (11, "/usr/share/code/code --user-data-dir=/home/alan/.config/Code"),  # the user's own
-        (os.getpid(), f"grep {profile}"),                                       # us, hunting
+        (os.getpid(), f"grep {_PROFILE}"),                                      # us, hunting
     ])
-    assert orphans.profile_clients(profile) == [10]
+    assert orphans.profile_clients(_PROFILE) == [10]
 
 
 def test_the_users_own_editor_is_never_swept(monkeypatch):
     monkeypatch.setattr(orphans, "_process_table", lambda: [
         (11, "/usr/share/code/code --user-data-dir=/home/alan/.config/Code"),
     ])
-    assert orphans.profile_clients("/home/alan/.interact/out/sandbox-profiles/editor-99") == []
+    assert orphans.profile_clients(_PROFILE) == []
 
 
 @pytest.mark.parametrize("profile", ["", "/", "/home/alan", "/home/alan/.config/Code"])
@@ -336,3 +354,6 @@ def test_the_process_table_is_read_untruncated(tmp_path, monkeypatch):
     monkeypatch.setattr(orphans, "_PROC", tmp_path)
     monkeypatch.setattr(orphans, "_all_pids", lambda: [42])  # the module fixture stubs this empty
     assert (42, ) == tuple(pid for pid, args in orphans._process_table() if long_flag in args)
+    # The same untruncated read names a survivor in a kill report (#118).
+    assert orphans.cmdline_of(42).endswith(long_flag)
+    assert orphans.cmdline_of(43) is None

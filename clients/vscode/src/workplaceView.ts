@@ -1,16 +1,16 @@
 /** The seam between the workplace DATA and the workplace VISUAL.
  *
- *  The pixel-art room is built separately under `webview/workplace/` — a visual is reworked far
+ *  The pixel-art room is built separately under webview/workplace/ — a visual is reworked far
  *  more often than the data behind it, and keeping them apart means either can change alone.
- *  This module is the adapter: it takes a `TeamState`, hands it to whichever renderer is present,
+ *  This module is the adapter: it takes a TeamState, hands it to whichever renderer is present,
  *  and falls back to a plain, honest room so the pipeline is testable before the art exists.
  */
 import { ZONES, leads, reportsOf } from "./team";
 import type { TeamState, Worker } from "./team";
 
-/** The pixel-art renderer, loaded once. Bundled from `webview/workplace/` by
- *  `npm run build:workplace` and required at runtime rather than imported: it lives outside
- *  tsc's rootDir on purpose, so the visual can be reworked without recompiling the data layer. */
+/** The pixel-art renderer, loaded once. Bundled from webview/workplace/ by npm run
+ *  build:workplace and required at runtime rather than imported: it lives outside tsc's
+ *  rootDir on purpose, so the visual can be reworked without recompiling the data layer. */
 type Aside = { style: string; body: string; script: string };
 let art: ((state: TeamState, nonce: string, aside?: Aside) => string) | null | undefined;
 /** Just the scene, for pushing an update into a document that is already live. */
@@ -96,7 +96,7 @@ export function plainRoom(state: TeamState, nonce: string): string {
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 // Clicking a worker aims the side-bar Chat at them — what makes the workplace a control surface
-// rather than a picture, and what ties the two panels together. Delegated, so it survives every
+// rather than a picture, ties the two panels together. Delegated, so it survives every
 // re-render and works however the sprite is nested.
 document.addEventListener("click", (event) => {
   const el = event.target && event.target.closest ? event.target.closest("[data-run-id]") : null;
@@ -109,7 +109,7 @@ document.addEventListener("click", (event) => {
 
 /** The scene's markup ALONE — no document, no script — for updating a webview in place.
  *
- *  Replacing `webview.html` destroys the document: every sprite becomes a new element and every
+ *  Replacing webview.html destroys the document: every sprite becomes a new element and every
  *  running animation dies, which is why a worker teleported between rooms instead of walking
  *  there. The panel builds the shell once and then posts this, so the engine inside can keep each
  *  body's position and finish a walk across an update.

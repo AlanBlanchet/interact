@@ -3,17 +3,17 @@
  *  Alan: "an agent is different than a conversation with an agent... When i click on an agent, i
  *  should be able to view the conversations is had, and go back to the parent if there is one."
  *
- *  An AGENT is a role — `tester`, `visual-critic`, `researcher` — defined by a file holding its
- *  system prompt. It is not a thing that runs; it is a thing you can start. A CONVERSATION is one
- *  engagement WITH that role: it has its own transcript, its own status, its own cost, and it may
- *  have been spawned BY another conversation. One agent, many conversations, arranged in a tree.
+ *  An AGENT is a role — tester, visual-critic, researcher — defined by a file holding its system
+ *  prompt. Not a thing that runs; a thing you can start. A CONVERSATION is one engagement WITH
+ *  that role: its own transcript, status, cost, maybe spawned BY another conversation. One
+ *  agent, many conversations, arranged in a tree.
  *
- *  The panel used to flatten all of that into a single list of runs, which is why every row said
- *  "claude" and why there was no way in. The data already carried what was needed — `agent` names
- *  the role, `parent_run_id` names the caller — so this is a modelling gap, not a data gap.
+ *  The panel used to flatten all of that into one list of runs, so every row said "claude" with
+ *  no way in. Data already carried what was needed — agent names the role, parent_run_id names
+ *  the caller — a modelling gap, not a data gap.
  *
- *  Pure and host-free on purpose: no `vscode` import, so it is unit-testable and so the panel can
- *  be re-skinned without touching the meaning of anything here.
+ *  Pure and host-free on purpose: no vscode import, so it's unit-testable and the panel can be
+ *  re-skinned without touching the meaning of anything here.
  */
 
 export type Run = {
@@ -30,7 +30,7 @@ export type Run = {
 
 /** A role you can hold a conversation with, plus every conversation it has had. */
 export type Agent = {
-  /** The definition name (`tester`), or the provider when a run carries no definition. */
+  /** The definition name (tester), or the provider when a run carries no definition. */
   id: string;
   /** What to call it on screen. */
   label: string;
@@ -45,10 +45,10 @@ const TITLE_MAX = 60;
 
 /** A conversation's display name.
  *
- *  The old rule was `run.name || run_id.slice(0,8)`, and since Python records `name` as the
- *  PROVIDER when no definition applies, a screen full of real work all read "claude" — which is
- *  what Alan meant by "the names are not correct". A conversation is best identified by what it is
- *  DOING, so the task wins; the role is a fallback; the id is a last resort.
+ *  Old rule was run.name || run_id.slice(0,8); since Python records name as the PROVIDER when no
+ *  definition applies, a screen of real work all read "claude" — what Alan meant by "the names
+ *  are not correct". Best identified by what it's DOING, so task wins; role is a fallback; id is
+ *  a last resort.
  */
 export function conversationTitle(run: Run): string {
   const task = (run.task ?? "").replace(/\s+/g, " ").trim();
@@ -58,27 +58,26 @@ export function conversationTitle(run: Run): string {
   // A name that merely repeats the CLI identifies nothing when twenty rows share it.
   if (named && named !== run.provider) return named;
   if (role) return role;
-  // Nothing to go on: no task, and a name that only repeats the CLI. A bare id-slice reads as a
-  // typo ("run-fore") rather than an identifier, so say what it is and keep just enough of the id
-  // to tell two of them apart.
+  // Nothing to go on: no task, a name that only repeats the CLI. A bare id-slice reads as a typo
+  // ("run-fore") not an identifier, so say what it is and keep just enough id to tell two apart.
   return `untitled · ${run.run_id.slice(0, 6)}`;
 }
 
 /** What the company knows: who coordinates, and which names are just a vendor's binary.
  *
- *  Read from `org.json`, which the prompt repo generates. Optional throughout — interact must work
- *  for someone with no prompt repo at all, and then the provider is genuinely all we know. */
+ *  Read from org.json, which the prompt repo generates. Optional throughout — interact must
+ *  work for someone with no prompt repo at all, where the provider is genuinely all we know. */
 export type Company = {
   coordinator: { id: string; title: string };
-  /** The CLI tokens a definition-less run gets recorded under (`claude`, `codex`, …). */
+  /** The CLI tokens a definition-less run gets recorded under (claude, codex, …). */
   binaries: string[];
 };
 
 /** The role a run was held with.
  *
- *  A run with no `agent` used to fall back to the provider, so a screen of unrelated work all read
- *  "claude" — the vendor's binary standing in for a colleague. The company file now says that the
- *  definition-less case IS the coordinator (its system prompt is `instructions.md`, a real file),
+ *  A run with no agent used to fall back to the provider, so a screen of unrelated work all read
+ *  "claude" — the vendor's binary standing in for a colleague. Company file now says the
+ *  definition-less case IS the coordinator (its system prompt is instructions.md, a real file),
  *  so when the recorded name is merely the CLI's own token, this resolves it there instead.
  *
  *  Only a KNOWN binary is treated that way: a run someone named themselves keeps its name.
@@ -121,9 +120,9 @@ export function agentsFrom(runs: Run[]): Agent[] {
 
 /** The chain from a conversation up to its root, nearest parent first.
  *
- *  Guards against a cycle rather than trusting the data: these ids come from a registry written by
- *  several processes, and a panel that hangs on a malformed parent link is worse than one that
- *  shows a short chain.
+ *  Guards against a cycle rather than trusting the data: these ids come from a registry several
+ *  processes write, and a panel that hangs on a malformed parent link is worse than one showing
+ *  a short chain.
  */
 export function ancestry(runId: string, runs: Run[]): Run[] {
   const index = new Map(runs.map((r) => [r.run_id, r]));

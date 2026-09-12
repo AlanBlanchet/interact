@@ -14,12 +14,12 @@ from interact.state import InteractiveElement
 
 
 def chromium_launch_kwargs(browser_type: str, headless: bool, slow_mo: int) -> dict:
-    """Launch kwargs for the automation browser. For Chromium, hide the default automation signals
-    that ordinary bot-checks (Cloudflare et al.) fingerprint — drop the ``--enable-automation`` flag
-    and the ``AutomationControlled`` blink feature (which sets ``navigator.webdriver``) — so a
-    legitimate QA browse is less likely to be flagged (#69). Not a full stealth mode: an advanced
-    challenge can still block; pair with a persistent authenticated profile (browser_profile_dir).
-    Non-Chromium engines take only headless/slow_mo (they reject Chromium args)."""
+    """Launch kwargs for the automation browser. For Chromium, hide default automation signals
+    that bot-checks (Cloudflare et al.) fingerprint — drop ``--enable-automation`` and the
+    ``AutomationControlled`` blink feature (sets ``navigator.webdriver``) — so a legit QA browse
+    is less likely flagged (#69). Not full stealth: an advanced challenge can still block; pair
+    with a persistent authenticated profile (browser_profile_dir). Non-Chromium engines take
+    only headless/slow_mo (reject Chromium args)."""
     kw: dict = {"headless": headless, "slow_mo": slow_mo}
     if browser_type == "chromium":
         kw["args"] = ["--disable-blink-features=AutomationControlled"]
@@ -36,15 +36,16 @@ def _redacted(url: str) -> str:
 async def _restore_url(page, url: str) -> tuple[str, str | None]:
     """Put the session back where it was after a context swap, best effort.
 
-    Recording rebuilds the context, so the page has to be navigated back. That navigation is the
-    LEAST important thing happening here — by the time it runs the recording context already
-    exists and is capturing — so a slow page must not cost the caller the whole recording. Seen in
-    real client logs as three `Page.goto: Timeout exceeded` failures out of `record(start=True)`.
+    Recording rebuilds the context, so the page must be navigated back. That navigation is the
+    LEAST important thing happening here — the recording context already exists and is
+    capturing by the time it runs — so a slow page must not cost the caller the whole
+    recording. Seen in real client logs as three `Page.goto: Timeout exceeded` failures out of
+    `record(start=True)`.
 
-    Returns where the page ACTUALLY is, and what went wrong if anything did. A log line does not
-    count as telling the caller: it goes to the server's stderr, while the agent reads only the
-    tool result — so a swallowed failure here is the same silent-wrong shape being fixed elsewhere
-    in this release.
+    Returns where the page ACTUALLY is, and what went wrong if anything did. A log line doesn't
+    count as telling the caller: it goes to the server's stderr, the agent reads only the tool
+    result — a swallowed failure here is the same silent-wrong shape being fixed elsewhere this
+    release.
     """
     try:
         await page.goto(url)
@@ -65,50 +66,49 @@ class BrowserManager:
         self._playwright = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
-        # Persistent profile dir for this session (#43): when browser_profile_dir is configured the
-        # context is launched from <base>/<session_id> so cookies/login survive a restart. Each
-        # session gets its own subdir because Playwright locks a user-data-dir to one live context.
+        # Persistent profile dir for this session (#43): when browser_profile_dir is configured,
+        # context launches from <base>/<session_id> so cookies/login survive a restart. Own
+        # subdir per session — Playwright locks a user-data-dir to one live context.
         base = config.browser_profile_dir
         self._profile_dir: Path | None = (Path(base) / session_id) if base else None
         self._element_map: dict[int, list[InteractiveElement]] = {}
-        # Monotonic ref counter for the DOM scan: a node's ref (eN) is stable across scans within a
-        # session — a NEW node gets the next number, a surviving node keeps its own — and the counter
-        # is reset only here, on a new session (#35). Never reused → no two nodes collide on a ref.
+        # Monotonic ref counter for the DOM scan: a node's ref (eN) is stable across scans in a
+        # session — a NEW node gets the next number, a surviving node keeps its own — reset only
+        # here, on a new session (#35). Never reused → no two nodes collide on a ref.
         self._ref_counter = 0
         self._network_log: deque[dict] = deque(maxlen=LOG_MAXLEN)
         self._console_log: deque[dict] = deque(maxlen=LOG_MAXLEN)
         self._recording_dir: tempfile.TemporaryDirectory | None = None
-        # An active device-emulation profile (set by emulate_device); None → the configured
-        # default viewport at DPR 1. Folded into every new context via _context_kwargs.
+        # Active device-emulation profile (set by emulate_device); None → configured default
+        # viewport at DPR 1. Folded into every new context via _context_kwargs.
         self._device_override: dict | None = None
         # Forced media features (prefers-reduced-motion / color-scheme / forced-colors). Held on
-        # the session so a context rebuild or a new tab keeps them — an override that silently
-        # lapsed on the next navigation would be as useless as not having it (#107).
+        # the session so a context rebuild or new tab keeps them — an override that silently
+        # lapsed on next navigation would be as useless as not having it (#107).
         self._media_override: dict = {}
-        # The tab that tab-less tool calls (screenshot / get_page_state / get_interactive_elements)
-        # act on. new_tab / switch_tab move it, so a standalone capture after a switch sees the tab
-        # the agent switched to, not tab 0 (#30).
+        # Tab that tab-less tool calls (screenshot / get_page_state / get_interactive_elements)
+        # act on. new_tab / switch_tab move it, so a standalone capture after a switch sees the
+        # tab the agent switched to, not tab 0 (#30).
         self._active_tab = 0
-        # Native JS dialogs (#77): Playwright would auto-dismiss an unhandled confirm()/prompt()
+        # Native JS dialogs (#77): Playwright auto-dismisses an unhandled confirm()/prompt()
         # SILENTLY, so a dialog-gated click no-ops with no trace. We handle every dialog
         # ourselves: `_dialog_next` holds a one-shot directive armed by a handle_dialog action
-        # (consumed by the next dialog; default = dismiss, the old behavior), and `_dialog_log`
-        # records each dialog's type + message + outcome for the step report.
+        # (consumed by next dialog; default = dismiss, the old behavior); `_dialog_log` records
+        # each dialog's type + message + outcome for the step report.
         self._dialog_next: dict | None = None
         self._dialog_log: list[str] = []
-        # Last time this session's browser was touched (monotonic). The idle reaper closes a
+        # Last time this session's browser was touched (monotonic). Idle reaper closes a
         # session unused past the configured TTL so idle Chromium instances don't pile up.
         self._last_active = time.monotonic()
-        # storage_state (+ url) captured when this session was idle-closed, restored lazily on the
+        # storage_state (+ url) captured when this session was idle-closed, restored lazily on
         # next browser use so an idle close doesn't silently log the agent out (#36).
         self._pending_state: dict | None = None
         self._http_credentials: dict | None = None  # Basic-auth creds folded into each context (#70)
         # Self-recovery notes (#89): a session can end up with ZERO pages mid-task — the browser
-        # died, or (the "default" session is SHARED across callers) a concurrent caller closed the
-        # last tab. Every page access then failed with "Tab 0 does not exist — 0 tab(s) open" and
-        # the session stayed wedged for the rest of the task. get_page/new_tab now heal it instead;
-        # each heal appends a note here, which the tool surface drains onto its result so the agent
-        # LEARNS its page state is gone (never a silent recovery).
+        # died, or (the "default" session is SHARED) a concurrent caller closed the last tab.
+        # Every page access then failed "Tab 0 does not exist — 0 tab(s) open", wedged for the
+        # rest of the task. get_page/new_tab now heal it instead; each heal appends a note here,
+        # drained onto the tool result so the agent LEARNS its page state is gone, never silently.
         self._recovery_notes: list[str] = []
 
     @property
@@ -129,11 +129,11 @@ class BrowserManager:
         return idle is not None and idle >= ttl
 
     def _tab_key(self, tab: int | None) -> int:
-        """Normalize a tab argument to a concrete index so a tab-less scan (tab=None → the active
+        """Normalize a tab argument to a concrete index so a tab-less scan (tab=None → active
         tab) and an explicit active-tab int land in the SAME element-map bucket. Without this a
-        tab-less get_interactive_elements/get_page_state/screenshot stores its refs under key None
-        while the following run_actions reads them under the active-tab int — None != 0, so every
-        ref is lost between calls (#34)."""
+        tab-less get_interactive_elements/get_page_state/screenshot stores refs under key None
+        while the following run_actions reads them under the active-tab int — None != 0, every
+        ref lost between calls (#34)."""
         return self._active_tab if tab is None else tab
 
     def set_element_map(self, tab: int | None, elements: list[InteractiveElement]):
@@ -156,7 +156,7 @@ class BrowserManager:
             return
         if self._pending_state is not None:
             # Reopening after an idle close: restore cookies/localStorage (+ url) so the agent
-            # isn't silently logged out (#36). Consumed once; a failure falls back to a fresh context.
+            # isn't silently logged out (#36). Consumed once; failure falls back to a fresh context.
             state, self._pending_state = self._pending_state, None
             try:
                 await self.load_state(state)
@@ -167,7 +167,7 @@ class BrowserManager:
         await self._new_context()
 
     # Cap on undrained recovery notes (#89): a tool surface that never drains must not grow the
-    # list without bound over a long session — the agent only needs the recent heals anyway.
+    # list unbounded over a long session — the agent only needs the recent heals anyway.
     _MAX_RECOVERY_NOTES = 4
 
     def _note_recovery(self, note: str) -> None:
@@ -178,16 +178,16 @@ class BrowserManager:
         del self._recovery_notes[: -self._MAX_RECOVERY_NOTES]
 
     def drain_recovery_notes(self) -> list[str]:
-        """The self-recovery notes since the last drain, for the tool result (#89). Drained once —
-        a heal is reported on the call that performed it, not repeated on every later call."""
+        """The self-recovery notes since the last drain, for the tool result (#89). Drained once
+        — a heal reports on the call that performed it, not repeated on every later call."""
         out, self._recovery_notes = self._recovery_notes, []
         return out
 
     @property
     def _browser_alive(self) -> bool:
-        """False when this session's browser process is gone (crashed / killed / disconnected) —
-        cause (a) of the empty-tab-list bug (#89). A persistent session has no standalone Browser
-        handle, so read it off the context; no handle at all → nothing to disprove, treat as alive."""
+        """False when this session's browser process is gone (crashed/killed/disconnected) —
+        cause (a) of the empty-tab-list bug (#89). Persistent session has no standalone Browser
+        handle, read it off the context; no handle at all → nothing to disprove, treat as alive."""
         browser = self._browser or (self._context.browser if self._context else None)
         return browser is None or browser.is_connected()
 
@@ -214,8 +214,8 @@ class BrowserManager:
         )
 
     async def _ensure_open_tab(self):
-        """``_ensure_connected`` + heal cause (b): a LIVE context with no pages, because the last
-        tab was closed — plausibly by another caller, since the "default" session is shared (#89).
+        """``_ensure_connected`` + heal cause (b): a LIVE context with no pages — the last tab
+        was closed, plausibly by another caller since the "default" session is shared (#89).
         Open a blank tab and re-base the active tab, so the session keeps working."""
         await self._ensure_connected()
         if self._context.pages:
@@ -253,7 +253,7 @@ class BrowserManager:
 
     async def new_tab(self, url: str | None = None) -> int:
         # _ensure_connected, not _ensure_open_tab: opening the page IS this method's job, so a
-        # 0-tab session must not get a recovery tab AND a new one (#89) — but a DEAD browser still
+        # 0-tab session must not get a recovery tab AND a new one (#89) — a DEAD browser still
         # needs the relaunch, else new_page raises TargetClosedError.
         await self._ensure_connected()
         page = await self._context.new_page()
@@ -326,8 +326,8 @@ class BrowserManager:
             return await self._rebuild_context(record_video_dir=self._recording_dir.name)
         except Exception:
             # Whatever went wrong, this session is NOT recording. Leaving the marker set makes
-            # every later attempt fail with "Already recording" for the rest of the session —
-            # which is how one slow page ended recording permanently in a real run.
+            # every later attempt fail "Already recording" for the rest of the session — how one
+            # slow page ended recording permanently in a real run.
             self._recording_dir.cleanup()
             self._recording_dir = None
             raise
@@ -371,11 +371,12 @@ class BrowserManager:
         user_agent: str | None = None,
         reset: bool = False,
     ) -> str:
-        """Set the session's viewport / device profile (true device metrics: CSS size, DPR, touch),
-        then rebuild the context so later navigations & screenshots see it. Preserves the session's
-        storage state (cookies + localStorage) and re-opens the current URL — saying so in the
-        returned description if the page could not be re-opened, since the agent reads only that.
-        Returns a short human description. Raises ValueError on an unknown device name."""
+        """Set the session's viewport/device profile (true device metrics: CSS size, DPR,
+        touch), then rebuild the context so later navigations & screenshots see it. Preserves
+        the session's storage state (cookies + localStorage) and re-opens the current URL —
+        saying so in the returned description if the page couldn't reopen, since the agent
+        reads only that. Returns a short human description. Raises ValueError on an unknown
+        device name."""
         await self.ensure_ready()
         if reset:
             self._device_override = None
@@ -435,20 +436,20 @@ class BrowserManager:
         return "viewport set to " + ", ".join(bits) + note
 
     async def _rebuild_context(self, record_video_dir: str | None = None) -> tuple[str, str | None]:
-        """Recreate the context with the current kwargs — for a setting fixed at context creation
-        (viewport / DPR / mobile / touch, a recording's video dir) that changed mid-session — and
-        carry the session across the swap: its storage state and the active tab's URL.
+        """Recreate the context with the current kwargs — for a setting fixed at context
+        creation (viewport/DPR/mobile/touch, a recording's video dir) that changed mid-session —
+        and carry the session across the swap: its storage state and the active tab's URL.
 
-        The state is Playwright's ``storage_state`` — cookies AND every origin's localStorage — the
-        same snapshot the idle-close restore (#36) and the Basic-auth rebuild (#70) carry. The swap
-        used to re-add only the cookies (#123): the page came back logged in but with its
-        localStorage gone, so an onboarded app re-rendered as a first visit and an agent recording
-        it read the returning banner as a "flash" bug in the page. sessionStorage and in-memory JS
-        state cannot survive any swap — a fresh context is a fresh page. A persistent session keeps
-        its state in the on-disk profile, so there is nothing to snapshot.
+        State is Playwright's ``storage_state`` — cookies AND every origin's localStorage — same
+        snapshot the idle-close restore (#36) and Basic-auth rebuild (#70) carry. The swap used
+        to re-add only cookies (#123): page came back logged in but with localStorage gone, so
+        an onboarded app re-rendered as a first visit and an agent recording it read the
+        returning banner as a "flash" bug. sessionStorage and in-memory JS state can't survive
+        any swap — a fresh context is a fresh page. A persistent session keeps state in the
+        on-disk profile, nothing to snapshot.
 
         Returns where the page actually landed + what went wrong restoring it, if anything (see
-        ``_restore_url``): the new context already exists by then, so a slow page is not fatal.
+        ``_restore_url``): the new context already exists by then, so a slow page isn't fatal.
         """
         page = self._active_page()
         url = page.url if page and page.url != "about:blank" else None
@@ -461,8 +462,8 @@ class BrowserManager:
         try:
             await self._new_context(storage_state=state, record_video_dir=record_video_dir)
         except Exception:
-            # The old context is already closed, so without this the session is left with a dead
-            # one and every later action fails for a second, unrelated-looking reason.
+            # Old context already closed — without this the session is left with a dead one and
+            # every later action fails for a second, unrelated-looking reason.
             try:
                 await self._new_context(storage_state=state)
             except Exception:
@@ -473,9 +474,9 @@ class BrowserManager:
         return await _restore_url(self._context.pages[0], url)
 
     def set_http_credentials(self, username: str, password: str) -> None:
-        """Provide HTTP Basic-auth credentials for this session so Playwright authenticates at the
-        context level — the native browser 'Sign in' dialog (which can't be typed into reliably,
-        #70) never appears. Applied to every context this session creates from now on."""
+        """HTTP Basic-auth credentials for this session so Playwright authenticates at the
+        context level — the native browser 'Sign in' dialog (can't be typed into reliably, #70)
+        never appears. Applied to every context this session creates from now on."""
         self._http_credentials = {"username": username, "password": password}
 
     def set_http_credentials_spec(self, spec: str | None) -> None:
@@ -487,9 +488,9 @@ class BrowserManager:
         self.set_http_credentials(username, password)
 
     async def apply_http_credentials(self, spec: str | None) -> None:
-        """Set/clear Basic-auth creds and refresh the live context so they take effect on the next
-        navigation — httpCredentials is a context-creation option, so an existing context is rebuilt
-        (cookies preserved via storage_state for a non-persistent session, #70)."""
+        """Set/clear Basic-auth creds and refresh the live context so they take effect on the
+        next navigation — httpCredentials is a context-creation option, so an existing context
+        is rebuilt (cookies preserved via storage_state for a non-persistent session, #70)."""
         self.set_http_credentials_spec(spec)
         if self._context is None:
             return  # no live context yet → the next _new_context folds the creds in
@@ -509,11 +510,11 @@ class BrowserManager:
                 "width": dev.get("width") or self._config.viewport_width,
                 "height": dev.get("height") or self._config.viewport_height,
             },
-            # Default DPR=1 so screenshot pixels == CSS pixels (and == coords returned by
-            # getBoundingClientRect / element.boundingBox). Without this, high-DPI hosts produce
-            # 2× screenshots that don't match DOM-reported coordinates and the VLM/annotator render
-            # boxes offset bottom-right. emulate_device may raise it for true device metrics — the
-            # action documents that ref overlays can then be offset.
+            # Default DPR=1 so screenshot pixels == CSS pixels (== coords from
+            # getBoundingClientRect/element.boundingBox). Without this, high-DPI hosts produce 2×
+            # screenshots that don't match DOM coordinates and the VLM/annotator render boxes
+            # offset bottom-right. emulate_device may raise it for true device metrics — the
+            # action then documents ref overlays can be offset.
             "device_scale_factor": float(dev["device_scale_factor"])
             if dev.get("device_scale_factor")
             else 1.0,
@@ -527,16 +528,16 @@ class BrowserManager:
             kw["user_agent"] = dev["user_agent"]
         if record_video_dir:
             kw["record_video_dir"] = record_video_dir
-            # Must match the viewport ABOVE, emulation included. Asking for a 390px viewport and
-            # 1280x720 frames records the mobile session as a desktop layout — which reads exactly
-            # like another caller's context served your named session (#110).
+            # Must match the viewport ABOVE, emulation included. A 390px viewport with 1280x720
+            # frames records the mobile session as desktop layout — reads exactly like another
+            # caller's context served your named session (#110).
             kw["record_video_size"] = dict(kw["viewport"])
         if self._http_credentials:  # authenticate Basic-auth sites without the native dialog (#70)
             kw["http_credentials"] = self._http_credentials
         return kw
 
     def _install_browser(self):
-        # `python -m playwright`, NOT the bare `playwright` CLI: the CLI isn't on PATH in an
+        # `python -m playwright`, NOT bare `playwright` CLI: the CLI isn't on PATH in an
         # installed tool env (uv tool / pipx), which crashed every launch with a cryptic
         # "[Errno 2] No such file or directory: 'playwright'".
         subprocess.run(
@@ -574,7 +575,7 @@ class BrowserManager:
     async def _new_context(self, storage_state: dict | None = None, record_video_dir: str | None = None):
         kwargs = self._context_kwargs(record_video_dir)
         if self._persistent:
-            # The on-disk profile is the source of truth for cookies/login, so a persistent context
+            # On-disk profile is the source of truth for cookies/login, so a persistent context
             # both launches the browser AND is the context (no new_context). storage_state — the
             # idle-close stash (#36) — doesn't apply: persistence is already durable on disk.
             self._profile_dir.mkdir(parents=True, exist_ok=True)
@@ -595,9 +596,9 @@ class BrowserManager:
                 kwargs["storage_state"] = storage_state
             self._context = await self._browser.new_context(**kwargs)
         self._active_tab = 0  # a fresh context starts on its first page
-        # Fail fast on a missing/non-actionable selector: Playwright's 30s default makes a bad
-        # selector hang the agent for half a minute before erroring. config.wait_timeout (10s) is
-        # the one knob; a dead selector then surfaces as an actionable nudge (see dispatch) in ~10s.
+        # Fail fast on a missing/non-actionable selector: Playwright's 30s default hangs the
+        # agent half a minute before erroring. config.wait_timeout (10s) is the one knob; a dead
+        # selector then surfaces as an actionable nudge (see dispatch) in ~10s.
         from interact.runtime import config
 
         self._context.set_default_timeout(config.wait_timeout)
@@ -605,9 +606,9 @@ class BrowserManager:
         # A persistent context opens with one page already; an ephemeral new_context has none.
         page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._attach_page_listeners(page)
-        # Here rather than at each call site: a rebuilt context drops the forced media features,
-        # and the fix had already been applied to two of the three places that rebuild one —
-        # _rebuild_context (a viewport/DPR/mobile change) still silently cleared reduced-motion.
+        # Here rather than at each call site: a rebuilt context drops forced media features, and
+        # the fix had already been applied to two of the three places that rebuild one —
+        # _rebuild_context (viewport/DPR/mobile change) still silently cleared reduced-motion.
         await self.reapply_media()
 
     def peek_url(self) -> str | None:
@@ -627,8 +628,8 @@ class BrowserManager:
         ``@media (prefers-reduced-motion: reduce)`` / dark-scheme / forced-colors branch gets
         verified live, which otherwise needed the OS accessibility setting (#107).
 
-        Playwright's own sentinel for "stop overriding" is None, so the string ``"null"`` clears a
-        feature. Unlike the viewport this needs no context rebuild."""
+        Playwright's own sentinel for "stop overriding" is None, so ``"null"`` clears a feature.
+        Unlike the viewport this needs no context rebuild."""
         await self.ensure_ready()
         setting = {k: (None if v == "null" else v) for k, v in features.items() if v is not None}
         if not setting:
@@ -737,7 +738,7 @@ class BrowserManager:
 
 class SessionRegistry:
     # Cap on idle-close state stashes (#36): one small storage_state dict per never-returning
-    # session id; bounded so a pathological client churning ids can't grow it without limit.
+    # session id; bounded so a pathological client churning ids can't grow it unbounded.
     _MAX_STASH = 64
 
     def __init__(self, config: Config):
@@ -771,9 +772,10 @@ class SessionRegistry:
         return mgr.idle_seconds() if mgr else None
 
     async def close_idle(self, ttl: float) -> list[str]:
-        """Close + drop sessions whose browser has been idle for at least ``ttl`` seconds (``ttl``
-        <= 0 disables, returning []). Each closed session re-opens lazily on the next ``get`` — and
-        its cookies/login are stashed first, so the reopen restores them instead of logging out (#36)."""
+        """Close + drop sessions whose browser has been idle for at least ``ttl`` seconds
+        (``ttl`` <= 0 disables, returning []). Each closed session re-opens lazily on next
+        ``get`` — cookies/login stashed first, so the reopen restores them instead of logging
+        out (#36)."""
         if ttl <= 0:
             return []
         stale = [sid for sid, mgr in self._sessions.items() if mgr.is_idle(ttl)]

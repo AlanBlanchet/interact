@@ -25,11 +25,18 @@ import {
 import { scopeStore } from "./scopeStore";
 import { readAgentRuns, summarise, withDepth } from "./agents";
 import { describeAge as describeBoardAge, readLeaderboard } from "./leaderboard";
-import { describeAge, ageSeconds, isLive, loadCatalog, pickHighlights, type Catalog } from "./catalog";
+import { describeAge, ageSeconds, isLive, loadCatalog, seeingModels, type Catalog } from "./catalog";
 import { agentsDir, usageLogPathFor, INTERACT_CONFIG_PATH } from "./paths";
 import { DIM_FOREGROUND } from "./themeTokens";
 import { claimColumn, nextColumn, releaseColumn } from "./panelColumn";
 import { presentMediaStatus } from "./mediaStatus";
+import { conversationExtensionVersion, resolveConversationBackend } from "./conversationBackend";
+import { promptRequest, type PromptEditorState } from "./promptClient";
+import { PROMPT_ACTIONS, type PromptAction } from "./promptActions";
+import { comparisonRows } from "./comparison";
+import { readOrg } from "./org";
+import { bareModelName, shortCompetence } from "./competence";
+import { CompetenceStore } from "./competenceStore";
 import { billingPresentation } from "./billingPresentation";
 import {
   readUsageLog,
@@ -127,11 +134,24 @@ export class DashboardPanel {
   private readonly panel: vscode.WebviewPanel;
   private disposed = false;
   private range: RangeId = "7d";
-  /** How the agent board splits its lanes. Project first: the owner's own default question about a
-   *  team is "what is happening on which of my repos". */
-  private agentGroupBy: AgentGroupBy = "project";
+  /** How the agent board splits its lanes. MODEL first: "compare the most competents and trust one
+   *  agent more than another in some situations". That comparison exists under Split by → Model —
+   *  one row per model, strict descending — and it opened behind a control nobody pressed, on a
+   *  default view whose rows all printed the same string. */
+  private agentGroupBy: AgentGroupBy = "model";
+  private measuredStore: CompetenceStore | undefined;
+  /** Every number this panel shows, and why it has none when it has none.
+   *
+   *  Lazy, not a field initializer: a test that exercises one cell by calling the method on a
+   *  hand-built object never runs field initializers, so the field was `undefined` and the cell
+   *  threw where it used to render. A getter answers for both shapes. */
+  private get measured(): CompetenceStore {
+    return (this.measuredStore ??= new CompetenceStore());
+  }
   private watchers: fs.FSWatcher[] = [];
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private refreshRevision = 0;
+  private promptState: PromptEditorState = { files: [] };
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -140,6 +160,7 @@ export class DashboardPanel {
     private readonly modelsData: ModelsData,
     private readonly benchmarksData: BenchmarksFile,
     private readonly emitter: vscode.EventEmitter<void>,
+    private readonly conversationCatalog: () => import("./generated/types").ConversationCatalog | undefined,
   ) {
     this.panel = panel;
     panel.webview.options = {
@@ -216,6 +237,7 @@ export class DashboardPanel {
     modelsData: ModelsData,
     benchmarksRaw: unknown,
     emitter: vscode.EventEmitter<void>,
+    conversationCatalog: () => import("./generated/types").ConversationCatalog | undefined,
   ): DashboardPanel {
     if (DashboardPanel.instance) {
       DashboardPanel.instance.panel.reveal(DashboardPanel.instance.panel.viewColumn);
@@ -237,6 +259,7 @@ export class DashboardPanel {
       modelsData,
       asBenchmarks(benchmarksRaw),
       emitter,
+      conversationCatalog,
     );
     return DashboardPanel.instance;
   }
@@ -247,6 +270,7 @@ export class DashboardPanel {
     modelsData: ModelsData,
     benchmarksRaw: unknown,
     emitter: vscode.EventEmitter<void>,
+    conversationCatalog: () => import("./generated/types").ConversationCatalog | undefined = () => undefined,
   ): vscode.Disposable {
     return vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       async deserializeWebviewPanel(panel: vscode.WebviewPanel) {
@@ -257,6 +281,7 @@ export class DashboardPanel {
           modelsData,
           asBenchmarks(benchmarksRaw),
           emitter,
+          conversationCatalog,
         );
       },
     });
@@ -268,6 +293,12 @@ export class DashboardPanel {
 
   async refresh(): Promise<void> {
     if (this.disposed) return;
+    const revision = ++this.refreshRevision;
+    const promptState = !this.promptState.files.length ? await this.loadPromptCatalog() : undefined;
+    const models = await this.modelsCell();
+    const consumption = await this.consumptionCell();
+    if (this.disposed || revision !== this.refreshRevision) return;
+    if (promptState) this.promptState = promptState;
     const cells: CellUpdate[] = [
       this.statusCell(),
       this.apiKeysCell(),
@@ -275,10 +306,16 @@ export class DashboardPanel {
       this.benchmarkDataCell(),
       this.displayCell(),
       this.agentsCell(),
-      await this.modelsCell(),
-      await this.consumptionCell(),
+      models,
+      consumption,
       this.benchmarksCell(),
       this.recommendationsCell(),
+      { id: "comparison", title: "Agent and model comparison", content: comparisonRows(
+        readOrg(), this.conversationCatalog(), this.benchmarksData.benchmarks, readAgentRuns(),
+      ) },
+      { id: "prompt-workspace", title: "Prompt workspace", content: [{
+        kind: "prompt-workspace", ...this.promptState,
+      }] },
     ];
     for (const cell of cells) {
       this.panel.webview.postMessage({ type: "cellUpdate", cell });
@@ -293,11 +330,71 @@ export class DashboardPanel {
     url?: string;
     benchmarkId?: string;
     sourceRole?: "evaluation" | "score" | "methodology";
+    value?: string;
+    path?: string;
+    content?: string;
+    digest?: string;
+    action?: PromptAction;
+    explicit?: boolean;
+    message?: string;
+    endpoint?: string;
+    tokenFile?: string;
   }): Promise<void> {
+    if (msg.type === "promptSelect" || msg.type === "promptSave" || msg.type === "promptAction") {
+      this.refreshRevision += 1;
+    }
     switch (msg.type) {
       case "ready":
         this.refresh();
         break;
+      case "promptSelect":
+        if (typeof msg.path === "string") await this.loadPrompt(msg.path);
+        this.refresh();
+        break;
+      case "promptSave":
+        if (typeof msg.path === "string" && typeof msg.content === "string" && typeof msg.digest === "string") {
+          const result = await this.promptCall(["write", msg.path, msg.digest], msg.content);
+          if (result.ok) await this.loadPrompt(msg.path);
+          else {
+            let conflict = false;
+            try { conflict = JSON.parse(result.output).code === "conflict"; } catch { /* bounded generic error */ }
+            this.promptState = { ...this.promptState, content: msg.content, digest: msg.digest,
+              status: conflict
+                ? "Conflict: your draft is preserved. Reload from disk explicitly to review the external change."
+                : this.promptMessage(result.output) };
+          }
+        }
+        this.refresh();
+        break;
+      case "promptAction": {
+        const metadata = PROMPT_ACTIONS.find((candidate) => candidate.id === msg.action);
+        if (!metadata || metadata.remote !== (msg.explicit === true)) break;
+        const args: string[] = [metadata.id];
+        if (metadata.id === "commit") {
+          if (!msg.message?.trim()) {
+            this.promptState = { ...this.promptState, status: "A commit message is required." };
+            this.refresh();
+            break;
+          }
+          args.push("--message", msg.message.trim());
+        } else if (metadata.id === "publish") {
+          let endpoint: URL;
+          try { endpoint = new URL(msg.endpoint ?? ""); }
+          catch { endpoint = new URL("about:blank"); }
+          const localHttp = endpoint.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname);
+          if ((endpoint.protocol !== "https:" && !localHttp) || !msg.tokenFile || !path.isAbsolute(msg.tokenFile)) {
+            this.promptState = { ...this.promptState,
+              status: "Publish needs an HTTPS or local HTTP service and an absolute token file path." };
+            this.refresh();
+            break;
+          }
+          args.push("--endpoint", endpoint.toString().replace(/\/$/, ""), "--token-file", msg.tokenFile);
+        }
+        const result = await this.promptCall(args);
+        this.promptState = { ...this.promptState, status: this.promptMessage(result.output) };
+        this.refresh();
+        break;
+      }
       case "configureProvider": {
         if (!msg.provider) return;
         await ensureKeys(msg.provider, this.modelsData, this.keyManager, this.emitter);
@@ -320,9 +417,26 @@ export class DashboardPanel {
         this.refresh();
         break;
       }
-      case "changeSetting": {
-        const setting = SETTINGS.find((s) => s.key === msg.setting);
-        if (setting) await this.editSetting(setting);
+      case "saveSetting": {
+        const setting = SETTINGS.find((candidate) => candidate.key === msg.setting);
+        if (!setting || setting.kind === "model" || typeof msg.value !== "string") break;
+        let value: string | number | boolean | undefined = msg.value || undefined;
+        if (setting.kind === "bool") {
+          if (msg.value !== "true" && msg.value !== "false") break;
+          value = msg.value === "true";
+        } else if (setting.kind === "int") {
+          if (msg.value) {
+            const parsed = Number(msg.value);
+            if (!Number.isSafeInteger(parsed) || (setting.minimum != null && parsed < setting.minimum)) break;
+            value = parsed;
+          }
+        } else if (setting.kind === "enum") {
+          if (!(setting.options ?? []).some((option) => option.value === msg.value)) break;
+        } else if (msg.value && setting.pattern && !new RegExp(setting.pattern).test(msg.value)) {
+          break;
+        }
+        await cfg().update(setting.key, value, vscode.ConfigurationTarget.Global);
+        this.refresh();
         break;
       }
       case "setBenchmarkKey": {
@@ -393,37 +507,44 @@ export class DashboardPanel {
     }
   }
 
-  /** Prompt for a setting's new value with the control its kind implies (enum/bool → quick-pick,
-   *  numbers/strings/paths → input box), then persist it. Empty clears the override (→ default). */
-  private async editSetting(s: Setting): Promise<void> {
-    const current = cfg().get<string | number | boolean>(s.key);
-    let value: string | number | boolean | undefined;
-    if (s.kind === "bool") {
-      const pick = await vscode.window.showQuickPick(["on", "off"], {
-        placeHolder: `${s.label} — ${s.description}`,
-      });
-      if (pick === undefined) return;
-      value = pick === "on";
-    } else if (s.kind === "enum") {
-      const pick = await vscode.window.showQuickPick(
-        (s.options ?? []).map((o) => ({ label: o.label, value: o.value })),
-        { placeHolder: `${s.label} — ${s.description}` },
-      );
-      if (!pick) return;
-      value = pick.value;
-    } else {
-      const text = await vscode.window.showInputBox({
-        prompt: `${s.label} — ${s.description}`,
-        value: current === undefined ? "" : String(current),
-        placeHolder: s.default ? `default: ${s.default}` : "",
-        ignoreFocusOut: true,
-      });
-      if (text === undefined) return;
-      value =
-        text === "" ? undefined : s.kind === "int" ? Number(text) : text;
-    }
-    await cfg().update(s.key, value, vscode.ConfigurationTarget.Global);
-    this.refresh();
+  private promptMessage(output: string): string {
+    try { return JSON.parse(output).error ?? output.slice(0, 4096); }
+    catch { return output.trim().slice(0, 4096); }
+  }
+
+  private async promptCall(args: string[], stdin = ""): Promise<{ ok: boolean; output: string }> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) return { ok: false, output: "Open a workspace before using prompts." };
+    const backend = await resolveConversationBackend({
+      projectPath: cfg().get<string>("projectPath") || process.env.INTERACT_PROJECT_PATH,
+      extensionVersion: conversationExtensionVersion(), workspaceRoot,
+    });
+    if (!backend.available) return { ok: false, output: backend.reason };
+    return promptRequest(backend, args, stdin);
+  }
+
+  private async loadPromptCatalog(): Promise<PromptEditorState> {
+    const result = await this.promptCall(["catalog"]);
+    if (!result.ok) return { files: [], status: this.promptMessage(result.output) };
+    try {
+      const payload = JSON.parse(result.output) as { files: string[] };
+      const state: PromptEditorState = { files: payload.files };
+      return payload.files[0] ? await this.readPrompt(payload.files[0], state) : state;
+    } catch { return { files: [], status: "The prompt catalog response was invalid." }; }
+  }
+
+  private async loadPrompt(path: string): Promise<void> {
+    this.promptState = await this.readPrompt(path, this.promptState);
+  }
+
+  private async readPrompt(path: string, state: PromptEditorState): Promise<PromptEditorState> {
+    const result = await this.promptCall(["read", path]);
+    if (!result.ok) return { ...state, status: this.promptMessage(result.output) };
+    try {
+      const payload = JSON.parse(result.output) as { path: string; content: string; digest: string };
+      return { ...state, selected: payload.path, content: payload.content,
+        digest: payload.digest, status: undefined, revision: (state.revision ?? 0) + 1 };
+    } catch { return { ...state, status: "The prompt source response was invalid." }; }
   }
 
   private statusCell(): CellUpdate {
@@ -484,22 +605,31 @@ export class DashboardPanel {
     const raw = cfg().get<string | number | boolean>(s.key);
     const isSet = raw !== undefined && raw !== "";
     let value = isSet ? String(raw) : `auto · ${s.default || "default"}`;
-    const action = s.kind === "model" ? "changeModel" : "changeSetting";
+    const action = "changeModel";
     if (s.kind === "model" && isSet) {
       const meta = metaOf(String(raw), this.modelsData);
       if (meta?.input_cost_per_million) {
         value += ` — $${meta.input_cost_per_million}/M in, $${meta.output_cost_per_million ?? 0}/M out`;
       }
     }
-    const rows: CellContent[] = [
-      {
+    const rows: CellContent[] = s.kind === "model" ? [{
         kind: "row",
         label: s.label,
         value,
         tooltip: s.description,
         actions: [{ type: action, label: "Change", data: { setting: s.key } }],
-      },
-    ];
+      }] : [{
+        kind: "setting",
+        key: s.key,
+        label: s.label,
+        description: s.description,
+        input: s.kind,
+        value: isSet ? String(raw) : s.kind === "int" ? String(s.default) : "",
+        defaultValue: s.default,
+        minimum: s.minimum ?? undefined,
+        pattern: s.pattern ?? undefined,
+        options: s.options ?? undefined,
+      }];
     if (s.kind === "model") {
       const chain = (recs[s.role ?? ""] || []).filter((m) => m !== raw).slice(0, 3);
       if (chain.length) {
@@ -594,6 +724,15 @@ export class DashboardPanel {
     };
   }
 
+  /** Asked BY NAME, because every run names a model the ranking may not carry verbatim
+   *  (sonnet, claude-sonnet-5): only a named ask resolves it, and the board on disk fills
+   *  whatever the CLI could not. */
+  private ensureCompetence(runs: readonly { model?: string | null }[]): void {
+    const models = [...new Set(runs.map((r) => r.model).filter((m): m is string => !!m))];
+    if (!models.length) return;
+    void this.measured.ensure(models).then((known) => { if (known && !this.disposed) this.refresh(); });
+  }
+
   /** The agent team: what is running, what each is doing, and its reported billing path.
    *
    *  A run with no reported cost shows "—", never "$0.00", because unknown is not free. The
@@ -609,6 +748,8 @@ export class DashboardPanel {
     // exempt from it — you switched workspace in the tree and the dashboard kept describing the
     // folder you left.
     const runs = scopeStore()?.runs() ?? readAgentRuns();
+    // Never awaited by a paint: the board draws at once and repaints when the measure lands.
+    this.ensureCompetence(runs as readonly { model?: string | null }[]);
     if (runs.length === 0) {
       return {
         id: "agents",
@@ -635,6 +776,10 @@ export class DashboardPanel {
         name: run.name,
         provider: run.provider,
         model: run.model || undefined,
+        // "compare the most competents and trust one agent more than another in some situations".
+        competence: this.measured.competence(run.model ?? undefined),
+        resolvedModel: this.measured.resolvedId(run.model ?? undefined),
+        score: this.measured.scoreOf(run.model ?? undefined),
         project: cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : undefined,
         cwd,
         task: run.task || undefined,
@@ -705,15 +850,41 @@ export class DashboardPanel {
     }
     const fresh = isLive(cat);
     const age = describeAge(ageSeconds(cat));
-    const rows = pickHighlights(cat, 8).map((m) => [
+    // The top of the board, not a highlight reel: picking N by context length and calling them
+    // "worth showing first" meant this comparison table's own leader was whatever had a million
+    // tokens, and it dropped every Anthropic model while the panel's hero named three of them.
+    const SHOWN = 24;
+    const seeing = seeingModels(cat);
+    // ONE MODEL PER ROW. The catalog lists a model's variants separately — "(batch)" beside the
+    // plain id — so six distinct models filled twelve of the twenty-four rows on a table whose
+    // whole purpose is comparing them. Same reduction the benchmarks tab already applies, and the
+    // best-measured spelling is the one kept.
+    const distinct = new Map<string, typeof seeing[number]>();
+    for (const m of seeing) {
+      const key = bareModelName(m.id);
+      const held = distinct.get(key);
+      if (!held || (this.measured.scoreOf(m.id) ?? -1) > (this.measured.scoreOf(held.id) ?? -1)) {
+        distinct.set(key, m);
+      }
+    }
+    const ranked = [...distinct.values()].sort(
+      (x, y) => (this.measured.scoreOf(y.id) ?? -1) - (this.measured.scoreOf(x.id) ?? -1));
+    const rows = ranked.slice(0, SHOWN).map((m) => [
       m.name,
+      // "Models should also spell out their intelligence score": this table is the product's own
+      // side-by-side comparison and it was the one surface saying nothing about capability.
+      shortCompetence(this.measured.competence(m.id))
+        ?? (this.measured.unavailable ? "not known here" : "—"),
       m.context_length ? `${Math.round(m.context_length / 1000)}k` : "—",
       m.input_cost_per_token ? `$${(m.input_cost_per_token * 1e6).toFixed(2)}/M` : "—",
       (m.input_modalities || []).filter((x) => x !== "text").join(", ") || "text",
     ]);
     return {
       id: "models",
-      title: `Models \u2014 ${cat.models.length} \u00b7 ${fresh ? `live, ${age}` : `${cat.source}, ${age}`}`,
+      // The count says what is ON SCREEN. "Models — 436" over 24 rendered rows is a header
+      // restating the list, and it reads as 412 rows that failed to load.
+      title: `Models \u2014 top ${Math.min(SHOWN, ranked.length)} of ${ranked.length} distinct models that can see`
+        + ` \u00b7 ${fresh ? `live, ${age}` : `${cat.source}, ${age}`}`,
       content: [
         ...(fresh
           ? []
@@ -725,7 +896,8 @@ export class DashboardPanel {
                 dot: "missing",
               },
             ] as CellContent[])),
-        { kind: "table", headers: ["Model", "Context", "Input", "Sees"], rows },
+        { kind: "table",
+          headers: ["Model", "aa.intelligence", "Context", "Input", "Sees"], rows },
       ],
     };
   }

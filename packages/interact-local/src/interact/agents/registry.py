@@ -17,8 +17,11 @@ import signal
 import stat
 import sys
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import BinaryIO, Literal
+
+import fcntl
 
 from pydantic import BaseModel, Field, PrivateAttr
 from interact_core import PromptExecutionRef
@@ -47,9 +50,11 @@ _RUN_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,160}$")
 
 
 class AgentRun(BaseModel):
-    """One supervised run. ``run_id`` is the vendor's own session id where the CLI lets us set it
-    (Claude Code's ``--session-id``), so `claude --resume <run_id>` and this record agree with no
-    mapping table to fall out of date."""
+    """One supervised run.
+
+    ``run_id`` is Interact's owned registry identity. ``provider_session_id`` is the vendor
+    identity used for continuation; Claude lets us make those equal, Codex does not.
+    """
 
     run_id: str
     kind: RunKind = "process"
@@ -61,6 +66,9 @@ class AgentRun(BaseModel):
     #: so it survives even if the directory is later moved or deleted.
     project: str = ""
     pid: int | None = None
+    lifecycle_token: str | None = Field(
+        default_factory=lambda: secrets.token_hex(16), min_length=1, max_length=80,
+    )
     model: str | None = None
     #: The DEFINITION this run is — a name the provider resolves to a file holding its system
     #: prompt and tool set (Claude Code: ``~/.claude/agents/<agent>.md``). None for a plain run.
@@ -84,6 +92,12 @@ class AgentRun(BaseModel):
     connection: ConnectionMode | None = None
     requested_model: str | None = None
     requested_criterion: str | None = None
+    reasoning: str | None = None
+    #: A policy resolved while this session was already active. The vendor queue keeps the
+    #: current session settings, so this is deliberately separate from the effective fields above.
+    pending_model: str | None = None
+    pending_criterion: str | None = None
+    pending_reasoning: str | None = None
     prompt: PromptExecutionRef | None = None
     cataloged_at: float | None = None
     charge_path: ChargePath = "unknown"
@@ -136,6 +150,7 @@ class AgentRun(BaseModel):
             # folder elsewhere, and i can't change and see how they work".
             project=project_for(cwd),
             pid=raw.get("pid"),
+            lifecycle_token=None,
             started_at=(raw.get("startedAt") or 0) / 1000.0,
             last=raw.get("kind") or "",
             status="foreign",
@@ -415,6 +430,46 @@ def raw_events_path(run_id: str) -> Path:
     return agents_dir() / f"{_safe_run_id(run_id)}.raw.jsonl"
 
 
+def lock_path(run_id: str) -> Path:
+    """The cross-process lock for one run's record and delivery state."""
+    return agents_dir() / f"{_safe_run_id(run_id)}.lock"
+
+
+@contextmanager
+def record_lock(run_id: str):
+    """Serialize registry writers across CLI, MCP, dispatcher and provider processes."""
+    descriptor = _open_private(lock_path(run_id), os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def stderr_path(run_id: str) -> Path:
+    """Private bounded-diagnostic source beside a run's raw provider stream."""
+    return agents_dir() / f"{_safe_run_id(run_id)}.stderr"
+
+
+def open_stderr(run_id: str, *, append: bool) -> BinaryIO:
+    """Open private stderr capture; readers must clip it before showing it to a person."""
+    flags = os.O_APPEND if append else os.O_TRUNC
+    descriptor = _open_private(stderr_path(run_id), flags | os.O_WRONLY)
+    return os.fdopen(descriptor, "ab" if append else "wb")
+
+
+def read_stderr(run_id: str, limit: int = 2000) -> str:
+    """Read only a bounded, private diagnostic tail."""
+    try:
+        payload = _read_private(stderr_path(run_id)) or b""
+    except OSError:
+        return ""
+    return payload[-max(0, limit):].decode(errors="replace")
+
+
 def open_raw_events(run_id: str, *, append: bool) -> BinaryIO:
     """Open a provider-owned stream while preserving registry privacy under any umask."""
     flags = os.O_APPEND if append else os.O_TRUNC
@@ -438,13 +493,19 @@ def _terminate(pid: int) -> bool:
 
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
-             agent: str | None = None, permission_mode: str | None = None) -> AgentRun:
+             agent: str | None = None, permission_mode: str | None = None,
+             requested_criterion: str | None = None, reasoning: str | None = None,
+             provider_session_id: str | None = None) -> AgentRun:
     provider_impl = PROVIDERS.get(provider)
     definition = provider_impl.definition_path(agent) if (provider_impl and agent) else None
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
                    agent=agent, definition_path=str(definition) if definition else None,
-                   permission_mode=permission_mode, started_at=time.time())
+                   permission_mode=permission_mode, requested_criterion=requested_criterion,
+                   reasoning=reasoning,
+                   provider_session_id=provider_session_id,
+                   lifecycle_token=secrets.token_hex(16),
+                   started_at=time.time())
     _write(run)
     try:
         descriptor = _open_private(
@@ -457,29 +518,67 @@ def register(*, run_id: str, pid: int | None, provider: str, name: str, task: st
     return run
 
 
-def finish(run_id: str, *, exit_code: int | None) -> None:
-    """Record how a run ended, so its outcome survives the process disappearing."""
-    stored = _read_record(run_id)
-    if stored is None:
-        return
-    stored.finished_at = time.time()
-    stored.exit_code = exit_code
-    stored.status = _status_for(stored)
-    _write(stored)
+def finish(
+    run_id: str, *, exit_code: int | None, expected_pid: int | None = None,
+    expected_lifecycle_token: str | None = None,
+) -> bool:
+    """Record how a run ended, only if this caller still owns its recorded process."""
+    with record_lock(run_id):
+        stored = _read_record(run_id)
+        if stored is None:
+            return False
+        if expected_lifecycle_token is not None and stored.lifecycle_token is None:
+            return False
+        if expected_pid is not None and expected_lifecycle_token is None:
+            return False
+        if expected_pid is not None and stored.pid != expected_pid:
+            return False
+        if (expected_lifecycle_token is not None
+                and stored.lifecycle_token != expected_lifecycle_token):
+            return False
+        finished_at = time.time()
+        status = (
+            "stopped" if exit_code == -signal.SIGTERM
+            else "done" if exit_code == 0
+            else "failed" if exit_code is not None
+            else _status_for(stored)
+        )
+        return _merge_record_locked(run_id, {
+            "finished_at": finished_at,
+            "exit_code": exit_code,
+            "status": status,
+        }) is not None
 
 
-def stop(run_id: str) -> bool:
+def stop(run_id: str, *, expected_lifecycle_token: str | None = None) -> bool:
     """Ask a run to stop. Returns False for an unknown run rather than raising."""
-    stored = _read_record(run_id)
-    if stored is None:
-        return False
-    if stored.pid:
-        _terminate(stored.pid)
-    stored.finished_at = time.time()
-    stored.exit_code = -signal.SIGTERM
-    stored.status = "stopped"
-    _write(stored)
-    return True
+    with record_lock(run_id):
+        stored = _read_record(run_id)
+        if stored is None:
+            return False
+        if stored.lifecycle_token is None:
+            return False
+        token = (
+            expected_lifecycle_token
+            if expected_lifecycle_token is not None
+            else stored.lifecycle_token
+        )
+        if token != stored.lifecycle_token:
+            return False
+        # Cancel first. A failed queue write must not leave a stopped run resumable with old work.
+        try:
+            from interact.agents import agent_queue
+            agent_queue.cancel_pending_locked(run_id)
+        except (ImportError, OSError, ValueError, RuntimeError):
+            return False
+        if stored.pid:
+            _terminate(stored.pid)
+        updated = _merge_record_locked(run_id, {
+            "finished_at": time.time(),
+            "exit_code": -signal.SIGTERM,
+            "status": "stopped",
+        })
+        return updated is not None
 
 
 def _read_record(run_id: str) -> AgentRun | None:
@@ -511,21 +610,116 @@ def _backfill_definition(run: AgentRun) -> AgentRun:
     if resolved is None:
         return run
     run.definition_path = str(resolved)
-    try:
-        _write(run)
-    except OSError:
-        pass  # a read-only or vanished registry must not break reading
     return run
 
 
+def _merge_record_locked(run_id: str, updates: dict) -> AgentRun | None:
+    """Merge owned fields into the current JSON record, retaining unknown future fields."""
+    payload = _read_private(_record_path(run_id))
+    if payload is None:
+        return None
+    try:
+        raw = json.loads(payload)
+        if not isinstance(raw, dict) or raw.get("run_id") != run_id:
+            return None
+        merged = {**raw, **updates}
+        validated = AgentRun.model_validate(merged)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    _replace_private(_record_path(run_id), json.dumps(merged, ensure_ascii=False).encode())
+    return validated
+
+
+def _update_fields(
+    run_id: str, updates: dict, *, expected: dict | None = None,
+) -> AgentRun | None:
+    """Atomically merge only fields owned by one writer.
+
+    ``expected`` lets a derived read avoid publishing a stale value after a lifecycle writer has
+    changed the same field. Unknown JSON keys are copied through unchanged for forward readers.
+    """
+    with record_lock(run_id):
+        payload = _read_private(_record_path(run_id))
+        if payload is None:
+            return None
+        try:
+            raw = json.loads(payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict) or raw.get("run_id") != run_id:
+            return None
+        if expected and any(raw.get(key) != value for key, value in expected.items()):
+            return AgentRun.model_validate(raw)
+        return _merge_record_locked(run_id, updates)
+
+
 def _write(run: AgentRun) -> None:
-    path = _record_path(run.run_id)
-    _replace_private(path, run.model_dump_json().encode())
+    """Write a complete caller-owned snapshot, preserving unknown fields on disk."""
+    with record_lock(run.run_id):
+        payload = _read_private(_record_path(run.run_id))
+        if payload is None:
+            _replace_private(_record_path(run.run_id), run.model_dump_json().encode())
+            return
+        try:
+            raw = json.loads(payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw = {}
+        merged = {**raw, **run.model_dump()}
+        _replace_private(_record_path(run.run_id), json.dumps(merged, ensure_ascii=False).encode())
 
 
 def save_run(run: AgentRun) -> None:
     """Persist a typed run after its owning lifecycle changed it."""
     _write(run)
+
+
+def begin_turn(
+    run_id: str, *, pid: int, model: str | None = None,
+    requested_criterion: str | None = None, reasoning: str | None = None,
+) -> AgentRun | None:
+    """Move one stopped run back to active state for a newly spawned provider turn."""
+    updates = {
+        "pid": pid, "lifecycle_token": secrets.token_hex(16),
+        "exit_code": None, "finished_at": None, "status": "running",
+        "pending_model": None, "pending_criterion": None, "pending_reasoning": None,
+    }
+    if model is not None:
+        updates["model"] = model
+    if requested_criterion is not None:
+        updates["requested_criterion"] = requested_criterion
+    if reasoning is not None:
+        updates["reasoning"] = reasoning
+    return _update_fields(run_id, updates)
+
+
+def begin_turn_locked(
+    run_id: str, *, pid: int, model: str | None = None,
+    requested_criterion: str | None = None, reasoning: str | None = None,
+) -> AgentRun | None:
+    """Same transition for a caller already holding ``record_lock(run_id)``."""
+    updates = {
+        "pid": pid, "lifecycle_token": secrets.token_hex(16),
+        "exit_code": None, "finished_at": None, "status": "running",
+        "pending_model": None, "pending_criterion": None, "pending_reasoning": None,
+    }
+    if model is not None:
+        updates["model"] = model
+    if requested_criterion is not None:
+        updates["requested_criterion"] = requested_criterion
+    if reasoning is not None:
+        updates["reasoning"] = reasoning
+    return _merge_record_locked(run_id, updates)
+
+
+def record_pending_policy(
+    run_id: str, *, model: str | None, criterion: str | None, reasoning: str | None,
+) -> AgentRun | None:
+    """Record a fresh policy without pretending an already-running vendor applied it."""
+    return _update_fields(run_id, {
+        "pending_model": model,
+        "pending_criterion": criterion,
+        "pending_reasoning": reasoning,
+    })
 
 
 def get_run(run_id: str) -> AgentRun | None:
@@ -541,66 +735,63 @@ def append_event(run_id: str, event: AgentEvent) -> None:
     computed only on the Python read path would show up there as blank and free. Folding here
     keeps it O(1) per event and makes the record authoritative for every reader.
     """
-    stored = _read_record(run_id)
-    if stored is None:
-        return
-    terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
-    same_turn = event.turn_id is None or event.turn_id == stored.provider_turn_id
-    newer_root_turn = (
-        stored.kind == "conversation" and event.kind in ("started", "prompt")
-        and event.turn_id is not None and event.turn_id != stored.provider_turn_id
-    )
-    if stored.kind == "conversation" and event.turn_id is not None and not same_turn \
-            and not newer_root_turn:
-        return
-    if terminal and same_turn:
-        return
+    with record_lock(run_id):
+        stored = _read_record(run_id)
+        if stored is None:
+            return
+        terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
+        same_turn = event.turn_id is None or event.turn_id == stored.provider_turn_id
+        newer_root_turn = (
+            stored.kind == "conversation" and event.kind in ("started", "prompt")
+            and event.turn_id is not None and event.turn_id != stored.provider_turn_id
+        )
+        if stored.kind == "conversation" and event.turn_id is not None and not same_turn \
+                and not newer_root_turn:
+            return
+        if terminal and same_turn:
+            return
 
-    _append_private(events_path(run_id), (event.model_dump_json() + "\n").encode())
-    if event.cost_usd is not None:
-        stored.cost_usd = (stored.cost_usd or 0.0) + event.cost_usd
-    if event.kind == "tool" and event.tool is not None and event.tool not in stored.tools:
-        stored.tools.append(event.tool)
-    for field in ("input_tokens", "output_tokens", "cached_input_tokens"):
-        used = getattr(event, field)
-        if used is not None:
-            setattr(stored, field, (getattr(stored, field) or 0) + used)
-    summary = event.summary(viewer=run_id)
-    if summary:  # system/hook events summarise to nothing; they must not blank the row
-        stored.last = summary
-    if stored.kind == "conversation":
-        if newer_root_turn:
-            stored.provider_turn_id = event.turn_id
-            stored.status = "running"
-            stored.finished_at = None
-        if event.kind == "done":
-            stored.status = "done"
-            stored.finished_at = event.at if event.at is not None else time.time()
-        elif event.kind == "cancelled":
-            stored.status = "cancelled"
-            stored.finished_at = event.at if event.at is not None else time.time()
-        elif event.kind == "error":
-            stored.status = "failed"
-            stored.finished_at = event.at if event.at is not None else time.time()
-        elif event.kind == "interaction":
-            stored.status = "waiting"
-        elif not terminal and event.kind in ("started", "prompt", "text", "thinking", "tool"):
-            stored.status = "running"
-    elif stored.kind == "provider_child":
-        was_terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
-        if event.kind == "done":
-            stored.status = "done"
-        elif event.kind == "cancelled":
-            stored.status = "cancelled"
-        elif event.kind == "error":
-            stored.status = "failed"
-        elif event.kind == "interaction" and not was_terminal:
-            stored.status = "waiting"
-        elif not was_terminal and event.kind in ("started", "prompt", "text", "thinking", "tool"):
-            stored.status = "running"
-        if event.kind in ("done", "error", "cancelled") and stored.finished_at is None:
-            stored.finished_at = event.at if event.at is not None else time.time()
-    _write(stored)
+        _append_private(events_path(run_id), (event.model_dump_json() + "\n").encode())
+        updates: dict[str, object] = {}
+        if event.cost_usd is not None:
+            updates["cost_usd"] = (stored.cost_usd or 0.0) + event.cost_usd
+        if event.kind == "tool" and event.tool is not None and event.tool not in stored.tools:
+            updates["tools"] = [*stored.tools, event.tool]
+        for field in ("input_tokens", "output_tokens", "cached_input_tokens"):
+            used = getattr(event, field)
+            if used is not None:
+                updates[field] = (getattr(stored, field) or 0) + used
+        summary = event.summary(viewer=run_id)
+        if summary:  # system/hook events summarise to nothing; they must not blank the row
+            updates["last"] = summary
+        if stored.kind == "conversation":
+            if newer_root_turn:
+                updates.update(provider_turn_id=event.turn_id, status="running", finished_at=None)
+            if event.kind == "done":
+                updates.update(status="done", finished_at=event.at or time.time())
+            elif event.kind == "cancelled":
+                updates.update(status="cancelled", finished_at=event.at or time.time())
+            elif event.kind == "error":
+                updates.update(status="failed", finished_at=event.at or time.time())
+            elif event.kind == "interaction":
+                updates["status"] = "waiting"
+            elif not terminal and event.kind in ("started", "prompt", "text", "thinking", "tool"):
+                updates["status"] = "running"
+        elif stored.kind == "provider_child":
+            was_terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
+            if event.kind == "done":
+                updates["status"] = "done"
+            elif event.kind == "cancelled":
+                updates["status"] = "cancelled"
+            elif event.kind == "error":
+                updates["status"] = "failed"
+            elif event.kind == "interaction" and not was_terminal:
+                updates["status"] = "waiting"
+            elif not was_terminal and event.kind in ("started", "prompt", "text", "thinking", "tool"):
+                updates["status"] = "running"
+            if event.kind in ("done", "error", "cancelled") and stored.finished_at is None:
+                updates["finished_at"] = event.at or time.time()
+        _merge_record_locked(run_id, updates)
 
 
 class _ConversationProjector(BaseModel):
@@ -672,59 +863,98 @@ def upsert_provider_child(
     status: RunStatus, started_at: float | None = None, finished_at: float | None = None,
 ) -> AgentRun:
     """Create or enrich one provider-native child without replay or order regressions."""
-    run = _read_record(run_id)
-    if run is not None and (
-        run.kind != "provider_child"
-        or run.provider != provider
-        or run.root_run_id != root_run_id
-        or run.parent_run_id != parent_run_id
-    ):
-        raise ValueError("provider child identity collision")
-    if run is None:
-        observed_at = time.time()
-        run = AgentRun(
-            run_id=run_id,
-            kind="provider_child",
-            provider=provider,
-            name="subagent",
-            task=task or "",
-            cwd=cwd,
-            project=project_for(cwd),
-            pid=None,
-            model=requested_model,
-            parent_run_id=parent_run_id,
-            root_run_id=root_run_id,
-            spawned_by_event_id=spawned_by_event_id,
-            provider_session_id=run_id,
-            connection="local_session",
-            requested_model=requested_model,
-            charge_path="unknown",
-            cost_certainty="unknown",
-            capabilities=["collaboration"],
-            started_at=started_at if started_at is not None else observed_at,
-            finished_at=finished_at,
-            status=status,
+    with record_lock(run_id):
+        run = _read_record(run_id)
+        if run is not None and (
+            run.kind != "provider_child"
+            or run.provider != provider
+            or run.root_run_id != root_run_id
+            or run.parent_run_id != parent_run_id
+        ):
+            raise ValueError("provider child identity collision")
+        if run is None:
+            observed_at = time.time()
+            run = AgentRun(
+                run_id=run_id,
+                kind="provider_child",
+                provider=provider,
+                name="subagent",
+                task=task or "",
+                cwd=cwd,
+                project=project_for(cwd),
+                pid=None,
+                model=requested_model,
+                parent_run_id=parent_run_id,
+                root_run_id=root_run_id,
+                spawned_by_event_id=spawned_by_event_id,
+                provider_session_id=run_id,
+                connection="local_session",
+                requested_model=requested_model,
+                charge_path="unknown",
+                cost_certainty="unknown",
+                capabilities=["collaboration"],
+                started_at=started_at if started_at is not None else observed_at,
+                finished_at=finished_at,
+                status=status,
+            )
+            _replace_private(_record_path(run_id), run.model_dump_json().encode())
+        rank = {"starting": 0, "running": 1, "waiting": 2, "cancelled": 3,
+                "done": 4, "failed": 4, "crashed": 4, "stopped": 4, "foreign": 4}
+        updates: dict[str, object] = {}
+        if task:
+            updates["task"] = task
+        if requested_model:
+            updates.update(requested_model=requested_model, model=requested_model)
+        if status in ("starting", "running") or run.spawned_by_event_id is None:
+            updates["spawned_by_event_id"] = spawned_by_event_id
+        if rank[status] >= rank[run.status]:
+            updates["status"] = status
+        if started_at is not None:
+            updates["started_at"] = min(run.started_at, started_at)
+        if finished_at is not None:
+            updates["finished_at"] = finished_at
+        elif status in ("done", "failed", "cancelled") and run.finished_at is None:
+            updates["finished_at"] = time.time()
+        current = _merge_record_locked(run_id, updates)
+        return current or run
+
+
+def _record_message_event_locked(
+    *, from_run: str, to_run: str, text: str, event_id: str | None = None,
+) -> str | None:
+    if _read_record(to_run) is None:
+        return None
+    message_id = event_id or secrets.token_hex(16)
+    for side in (from_run, to_run):
+        event = AgentEvent(kind="message", event_id=message_id, text=text,
+                           from_run=from_run, to_run=to_run, at=time.time(),
+                           raw_index=_raw_line_count(side))
+        _append_private(messages_path(side), (event.model_dump_json() + "\n").encode())
+        if _read_record(side) is not None:
+            _merge_record_locked(side, {"last": event.summary(viewer=side)})
+    return message_id
+
+
+def record_message_event(
+    *, from_run: str, to_run: str, text: str, event_id: str | None = None,
+) -> str | None:
+    """Record one exchange and return its stable id for delivery metadata."""
+    _no_follow_flags()
+    with ExitStack() as stack:
+        for side in sorted({from_run, to_run}):
+            stack.enter_context(record_lock(side))
+        return _record_message_event_locked(
+            from_run=from_run, to_run=to_run, text=text, event_id=event_id,
         )
-        _write(run)
-    if task:
-        run.task = task
-    if requested_model:
-        run.requested_model = requested_model
-        run.model = requested_model
-    if status in ("starting", "running") or run.spawned_by_event_id is None:
-        run.spawned_by_event_id = spawned_by_event_id
-    rank = {"starting": 0, "running": 1, "waiting": 2, "cancelled": 3,
-            "done": 4, "failed": 4, "crashed": 4, "stopped": 4, "foreign": 4}
-    if rank[status] >= rank[run.status]:
-        run.status = status
-    if started_at is not None:
-        run.started_at = min(run.started_at, started_at)
-    if finished_at is not None:
-        run.finished_at = finished_at
-    elif run.status in ("done", "failed", "cancelled") and run.finished_at is None:
-        run.finished_at = time.time()
-    _write(run)
-    return run
+
+
+def record_message_event_locked(
+    *, from_run: str, to_run: str, text: str, event_id: str | None = None,
+) -> str | None:
+    """Record an exchange while the caller owns every needed run lock."""
+    return _record_message_event_locked(
+        from_run=from_run, to_run=to_run, text=text, event_id=event_id,
+    )
 
 
 def record_message(*, from_run: str, to_run: str, text: str) -> bool:
@@ -735,31 +965,7 @@ def record_message(*, from_run: str, to_run: str, text: str) -> bool:
     directly above whatever it did next. Returns False for an unknown recipient rather than
     writing a message nobody can receive.
     """
-    _no_follow_flags()
-    if _read_record(to_run) is None:
-        return False
-    for side in (from_run, to_run):
-        # Anchored to THIS side's raw stream: the message belongs before whatever that agent
-        # writes next, and the two sides are at different points in their own streams.
-        # Stamped here rather than by the mirror: an exchange is recorded as it happens, so this
-        # clock is exact rather than "when we next noticed". It is what lets the workplace animate
-        # a conversation once, at the right moment — and on a cold open, replay the last minute of
-        # traffic honestly instead of guessing from what a previous render happened to remember.
-        event = AgentEvent(kind="message", text=text, from_run=from_run, to_run=to_run,
-                           at=time.time(), raw_index=_raw_line_count(side))
-        _append_private(
-            messages_path(side), (event.model_dump_json() + "\n").encode()
-        )
-    # Keep the run rows current: a message is the most recent thing that happened to both.
-    # Each side sees the exchange from its own point of view: the recipient reads "← sender",
-    # the sender "→ recipient". One shared string would show one of them an arrow pointing at
-    # itself, which is what made real messaging indistinguishable from noise.
-    for side in (from_run, to_run):
-        stored = _read_record(side)
-        if stored is not None:
-            stored.last = event.summary(viewer=side)
-            _write(stored)
-    return True
+    return record_message_event(from_run=from_run, to_run=to_run, text=text) is not None
 
 
 def _raw_line_count(run_id: str) -> int:
@@ -769,6 +975,11 @@ def _raw_line_count(run_id: str) -> int:
         return 0 if payload is None else len(payload.splitlines())
     except OSError:
         return 0
+
+
+def message_for(run_id: str, message_id: str) -> AgentEvent | None:
+    """Find one recipient-side message without copying its text into queue metadata."""
+    return next((event for event in _read_messages(run_id) if event.event_id == message_id), None)
 
 
 def _interleave(parsed: list[AgentEvent], messages: list[AgentEvent],
@@ -852,6 +1063,25 @@ def read_events(run_id: str) -> list[AgentEvent]:
                 continue
             if event is not None:
                 parsed.append(event.model_copy(update={"raw_index": index}))
+        if stored is not None:
+            session_id = next((event.session_id for event in parsed if event.session_id), None)
+            turn_id = next((event.turn_id for event in reversed(parsed) if event.turn_id), None)
+            changed = False
+            if session_id and stored.provider_session_id != session_id:
+                stored.provider_session_id = session_id
+                changed = True
+            if turn_id and stored.provider_turn_id != turn_id:
+                stored.provider_turn_id = turn_id
+                changed = True
+            if changed:
+                updates = {}
+                if session_id:
+                    updates["provider_session_id"] = session_id
+                if turn_id:
+                    updates["provider_turn_id"] = turn_id
+                current = _update_fields(run_id, updates)
+                if current is not None:
+                    stored = current
         merged = _interleave(parsed, _read_messages(run_id), len(raw_lines))
         # The mirror is what the VS Code panel reads, so it must carry the WHOLE conversation.
         # Written without messages, the chat showed the agent talking to nobody.
@@ -945,6 +1175,7 @@ def _status_for(run: AgentRun) -> RunStatus:
 
 
 def _derive(run: AgentRun) -> AgentRun:
+    original = run.model_dump()
     if not run.project and run.cwd:
         run.project = project_for(run.cwd)
     """Re-check liveness, and SELF-HEAL the record from the child's own stream.
@@ -960,6 +1191,9 @@ def _derive(run: AgentRun) -> AgentRun:
     # whose supervisor died reports "crashed" while its transcript plainly says it completed.
     if run.exit_code is None and events:
         terminal = next((e for e in reversed(events) if e.kind in ("done", "error")), None)
+        latest_activity = events[-1]
+        if latest_activity.kind not in ("done", "error"):
+            terminal = None
         if terminal is not None:
             run.status = (
                 "waiting" if run.kind == "conversation" and terminal.kind == "done"
@@ -990,8 +1224,24 @@ def _derive(run: AgentRun) -> AgentRun:
     # Persist whatever we healed — status included. The panel reads these files directly and does
     # its own (downgrade-only) liveness check, so a status left stale on disk reappears there as
     # "crashed" no matter what Python worked out in memory.
-    if _read_record(run.run_id) != run:
-        _write(run)
+    owned = (
+        "project", "status", "finished_at", "cost_usd", "input_tokens", "output_tokens",
+        "last",
+    )
+    updates = {
+        field: getattr(run, field) for field in owned
+        if getattr(run, field) != original.get(field)
+    }
+    if updates:
+        current = _update_fields(
+            run.run_id, updates,
+            expected={
+                field: original.get(field)
+                for field in ("pid", "exit_code", "status", "lifecycle_token")
+            },
+        )
+        if current is not None:
+            run = current
     return run
 
 
@@ -1048,7 +1298,8 @@ def forget(run_id: str) -> bool:
     if run is None or _status_for(run) == "running":
         return False
     for path in (_record_path(resolved), events_path(resolved),
-                 messages_path(resolved), raw_events_path(resolved)):
+                 messages_path(resolved), raw_events_path(resolved), stderr_path(resolved),
+                 agents_dir() / f"{_safe_run_id(resolved)}.queue.json"):
         try:
             path.unlink()
         except OSError:

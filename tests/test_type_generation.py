@@ -15,6 +15,9 @@ def test_type_generation_disables_external_catalog_discovery() -> None:
 
     assert 'export LITELLM_LOCAL_MODEL_COST_MAP="True"' in script
     assert 'export OLLAMA_DISCOVERY="0"' in script
+    assert 'CORE_SOURCE_DIR="$REPO_DIR/../interact-core"' in script
+    assert 'UV_RUN+=(--no-sources)' in script
+    assert 'installed interact-core detected' in script
 
 
 def test_generation_emits_exhaustive_runtime_decoders_from_python_wire_union() -> None:

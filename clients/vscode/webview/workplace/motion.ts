@@ -35,8 +35,12 @@ export const SCRIPT =
     try { sessionStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
   }
 
-  var still = false;
-  try { still = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
+  function prefersStill() {
+    var reduced = false;
+    try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
+    return reduced || !!(document.body && document.body.classList.contains("vscode-reduce-motion"));
+  }
+  var still = prefersStill();
 
   /* Handles kept so the motion can be MEASURED rather than eyeballed. A video only ever shows
      that motion is PERCEPTIBLE; the numbers are what say it is correct. */
@@ -48,6 +52,24 @@ export const SCRIPT =
 ` +
   SIM +
   String.raw`
+  var clockStarted = false;
+  function startClock() {
+    if (clockStarted) return;
+    clockStarted = true;
+    requestAnimationFrame(function (ts) { TICK.t = ts; frame(ts); });
+  }
+  function syncMotionPreference() {
+    still = prefersStill();
+    window.__wp.still = still;
+    TICK.on = !still;
+    if (!still) startClock();
+  }
+  try {
+    new MutationObserver(syncMotionPreference).observe(document.body, {
+      attributes: true, attributeFilter: ["class"]
+    });
+  } catch (e) {}
+
   /* ── binding a fresh cast to the bodies that already exist ───────────────────────────────── */
 
   function bind() {
@@ -397,7 +419,7 @@ export const SCRIPT =
          camera. Every ANIMATION is off in that mode, and decide() never sends anybody anywhere
          because the stylesheet is what would show it. */
       TICK.on = !still;
-      if (!still) requestAnimationFrame(function (ts) { TICK.t = ts; frame(ts); });
+      if (!still) startClock();
       window.__wp.run = function (on) {
         TICK.on = !still && !!on;
         return TICK.on;

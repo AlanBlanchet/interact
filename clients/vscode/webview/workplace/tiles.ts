@@ -5,10 +5,10 @@
  *  a COMPOSITION of 16x16 cells from three CC0 Kenney packs (media/world/CREDITS.md): the RPG
  *  Urban Pack for the site and the walls, Roguelike Indoors for the furniture, Roguelike
  *  Characters for the people. This file owns WHICH cells make a desk, a tree or a piano; the
- *  atlas owns the pixels; nothing in the plan (`world.ts`) changed its vocabulary.
+ *  atlas owns the pixels; nothing in the plan (world.ts) changed its vocabulary.
  *
- *  A tile is anchored at its walkability cell. Cells with `dy < 0` rise ABOVE the anchor (a
- *  tree's crown, a wardrobe's upper half) and never block movement; `foot` is how many ground
+ *  A tile is anchored at its walkability cell. Cells with dy < 0 rise ABOVE the anchor (a
+ *  tree's crown, a wardrobe's upper half) and never block movement; foot is how many ground
  *  cells wide the thing stands (a two-seat couch is two). The map's user units are CELLS —
  *  sixteen per tile — and a tile is drawn at 32 CSS pixels, so one source pixel is two device
  *  pixels at zoom 1 and the camera's half-step ladder keeps every rung pixel-exact.
@@ -25,7 +25,7 @@ export interface Placement {
 
 export interface Tile {
   cells: Placement[];
-  /** Solid tiles block movement — the anchor cell plus `foot - 1` cells to its east. */
+  /** Solid tiles block movement — the anchor cell plus foot - 1 cells to its east. */
   solid?: boolean;
   /** Ground cells wide. Only >1 for genuinely wide furniture (a couch, a piano, a parked car). */
   foot?: number;
@@ -52,7 +52,7 @@ const big = (tl: CellName, tr: CellName, bl: CellName, br: CellName): Tile => ({
 });
 
 export const TILES = {
-  /* ── ground (never solid, drawn as pattern runs) ────────────────────────── */
+  /* ── ground (never solid, drawn as pattern runs) ── */
   floor: flat("plazaGrey"),
   carpet: flat("plazaTan"),
   dais: flat("plazaTan"),
@@ -71,7 +71,7 @@ export const TILES = {
   roadCross: flat("roadCross"),
   roadP: flat("roadP"),
 
-  /* ── walls & doors ──────────────────────────────────────────────────────── */
+  /* ── walls & doors ── */
   wall: { cells: [{ n: "roofO", dx: 0, dy: 0 }], solid: true } as Tile,
   face: { cells: [{ n: "roofOEdge", dx: 0, dy: 0 }], solid: true } as Tile,
   window: one("winTall"),
@@ -82,7 +82,7 @@ export const TILES = {
   doorLeaf: one("doorWhite", false),
   matt: flat("kerbTan"),
 
-  /* ── furniture ──────────────────────────────────────────────────────────── */
+  /* ── furniture ── */
   desk: one("counterPaper"),
   drafting: one("counterPlain"),
   shelf: one("dresser"),
@@ -120,7 +120,7 @@ export const TILES = {
   mirror: tall("mirrorT", "mirrorB"),
   ward: big("wardTL", "wardTR", "wardBL", "wardBR"),
 
-  /* ── on the wall face (flat: the face row is already solid masonry) ─────── */
+  /* ── on the wall face (flat: the face row is already solid masonry) ── */
   winFace: flat("winArch"),
   whiteboard: flat("boardBeige"),
   clock: flat("fOrange"),
@@ -131,7 +131,7 @@ export const TILES = {
   screenWall: flat("aquaM"),
   lamp: flat("sconce"),
 
-  /* ── outdoors ───────────────────────────────────────────────────────────── */
+  /* ── outdoors ── */
   tree: tall("treeAC", "treeAT"),
   treeBig: tall("autumnC", "autumnT"),
   pine: tall("treeBC", "treeBT"),

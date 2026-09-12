@@ -128,7 +128,7 @@ def test_env_shaped_key_stored_verbatim(temp_cfg, env_name):
     [("image.model", "INTERACT_IMAGE_MODEL"),
      ("desktop.target", "INTERACT_DESKTOP_TARGET"),
      ("desktop-target", "INTERACT_DESKTOP_TARGET"),
-     ("desktop.nestedHeadless", "INTERACT_DESKTOP_NESTEDHEADLESS"),
+     ("desktop.nestedHeadless", "INTERACT_NESTED_HEADLESS"),
      ("INTERACT_DEBUG_DIR", "INTERACT_DEBUG_DIR")],
 )
 def test_friendly_keys_still_map_to_interact_env(friendly, expected):

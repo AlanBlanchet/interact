@@ -1,15 +1,15 @@
 """Clean up sandbox X servers whose owner is gone.
 
 Every interact MCP server owns its own sandbox, so a user with several editor windows genuinely
-has several servers — and each spawns its own Xephyr on first launch. That part is by design.
+has several servers — each spawns its own Xephyr on first launch. That part is by design.
 
-What is NOT by design: when a server dies without tearing down (a crash, a reload, a killed
-session), its X server survives. It is reparented to init, so nothing remembers it exists, and it
-sits on the user's screen until they kill it by hand. This finds those and removes them.
+What is NOT by design: when a server dies without tearing down (crash, reload, killed session),
+its X server survives — reparented to init, nothing remembers it exists, sits on the user's
+screen until killed by hand. This finds those and removes them.
 
-An orphan has to satisfy BOTH conditions — it is one of OURS (spawned with our own flags) and its
-parent is gone. Killing on either alone would destroy a display someone is still using, or a
-Xephyr the user started themselves for their own reasons.
+An orphan must satisfy BOTH conditions — one of OURS (spawned with our own flags) AND its parent
+is gone. Killing on either alone would destroy a display someone's still using, or a Xephyr the
+user started themselves.
 """
 
 import os
@@ -22,15 +22,15 @@ from dataclasses import dataclass
 from interact.desktop.backend import SANDBOX_TITLE
 from pathlib import Path
 
-#: What one of OUR sandbox displays looks like. These re-state flags owned by
+#: What one of OUR sandbox displays looks like. Re-states flags owned by
 #: `backend.nested_server_command`; `test_the_markers_still_match_the_command_we_actually_spawn`
-#: binds them to it, so changing that builder fails a test instead of silently switching the
+#: binds them together, so changing that builder fails a test instead of silently switching the
 #: reaper off.
 #:
-#: HEADLESS (Xvfb) displays are deliberately NOT reaped. They render no window, so they cause none
-#: of the symptoms this exists for, and their flags (`-screen`, `-nolisten tcp`) are what ANY Xvfb
-#: carries — we could not tell ours from one the user started. Not reclaiming a resource is a much
-#: cheaper mistake than killing someone else's server.
+#: HEADLESS (Xvfb) displays are deliberately NOT reaped. They render no window, cause none of
+#: the symptoms this exists for, and their flags (`-screen`, `-nolisten tcp`) are what ANY Xvfb
+#: carries — we couldn't tell ours from one the user started. Not reclaiming a resource is a
+#: much cheaper mistake than killing someone else's server.
 _OUR_EXECUTABLE = "Xephyr"
 #: Our own window title, which nobody else sets — unlike `-noreset -no-host-grab`, which is
 #: exactly the line a person types by hand and so never really identified anything.
@@ -55,8 +55,8 @@ def _list_x_servers() -> list[XServer]:
         if len(parts) < 3:
             continue
         # Match the EXECUTABLE, never the text. Testing `"Xephyr" in cmdline` matched the very
-        # command hunting for orphans (it mentions the name), and a grep, and anything else that
-        # says the word — then signalled them. Same self-match trap as `pkill -f <own pattern>`.
+        # command hunting for orphans (mentions the name), a grep, anything else saying the word
+        # — then signalled them. Same self-match trap as `pkill -f <own pattern>`.
         argv0 = parts[2].split()[0]
         if os.path.basename(argv0) != _OUR_EXECUTABLE:
             continue
@@ -68,10 +68,10 @@ def _list_x_servers() -> list[XServer]:
 
 
 def process_alive(pid: int) -> bool:
-    """Whether a pid is running. PermissionError means it EXISTS and is not ours — alive.
+    """Whether a pid is running. PermissionError means it EXISTS and isn't ours — alive.
 
-    One definition, because the two copies of this disagreed on exactly that case (one read it as
-    dead) and this one decides whether something gets killed.
+    One definition: the two copies of this used to disagree on exactly that case (one read it
+    as dead), and this one decides whether something gets killed.
     """
     try:
         os.kill(pid, 0)
@@ -91,9 +91,9 @@ def _terminate(pid: int) -> bool:
 
 
 #: Processes that ADOPT orphans. A modern Linux user session registers `systemd --user` as a
-#: child-subreaper, so a dead owner's children are reparented to IT rather than to pid 1 —
-#: observed directly on this machine, where a leaked Xephyr sat under systemd and a
-#: pid-1-only rule never fired.
+#: child-subreaper, so a dead owner's children reparent to IT rather than pid 1 — observed
+#: directly on this machine, where a leaked Xephyr sat under systemd and a pid-1-only rule
+#: never fired.
 _REAPER_NAMES = ("systemd", "init", "launchd")
 
 
@@ -128,7 +128,7 @@ def _process_table() -> list[tuple[int, str]]:
 
     NOT via ``ps -o args=``, which truncates to the terminal width: Chromium puts
     ``--user-data-dir`` far into a several-thousand-character command line, so the flag fell off
-    the end and the sweep matched nothing while ``pgrep`` found four processes holding the profile.
+    the end — sweep matched nothing while ``pgrep`` found four processes holding the profile.
     """
     rows: list[tuple[int, str]] = []
     for pid in _all_pids():
@@ -143,11 +143,11 @@ def _process_table() -> list[tuple[int, str]]:
 def profile_clients(profile: str) -> list[int]:
     """Processes holding one of OUR sandbox profiles — minus this one.
 
-    Sweeping by DISPLAY is not enough. An editor launched into the sandbox can end up on the real
+    Sweeping by DISPLAY isn't enough. An editor launched into the sandbox can end up on the real
     display while still using the sandbox profile (measured: `--user-data-dir=…/editor-99` with
-    `DISPLAY=:1`), where a display sweep must never follow it. It then keeps the profile's
-    singleton, so every later launch is handed to that stale instance instead of starting fresh —
-    which looks like a rebuilt extension not changing, or a launch opening nothing at all.
+    `DISPLAY=:1`), which a display sweep must never follow. It then keeps the profile's
+    singleton, so every later launch hands to that stale instance instead of starting fresh —
+    looks like a rebuilt extension not changing, or a launch opening nothing.
 
     Refuses any path outside our own profile directory: that constraint is the entire safety
     argument, since the user's real editor profile would otherwise match.
@@ -173,9 +173,9 @@ def sweep_if_owned(display: str | None, *, owned: bool) -> list[int]:
     """Sweep a display's clients only while WE still hold it.
 
     Display numbers are reclaimed the instant an X server's lock drops, and several interact
-    servers at once is the normal state — so a sweep keyed on a display string must first prove
-    our own X server is still running on it. Otherwise a server whose Xephyr died would kill the
-    live sandbox of whichever server has since claimed that number.
+    servers at once is normal — so a sweep keyed on a display string must first prove our own X
+    server is still running on it. Otherwise a server whose Xephyr died would kill the live
+    sandbox of whichever server has since claimed that number.
     """
     return kill_display_clients(display) if owned else []
 
@@ -194,9 +194,9 @@ def reap_orphaned_displays() -> list[int]:
     for server in servers:
         if not is_orphan(server):
             continue
-        # Its CLIENTS outlive it: they keep running bound to a dead display and hold the editor
+        # Its CLIENTS outlive it: keep running bound to a dead display, hold the editor
         # profile's socket, so the next launch hands its window to a zombie and opens nothing.
-        # Killing the X server alone fixes the window on screen and leaves the real breakage.
+        # Killing the X server alone fixes the window on screen, leaves the real breakage.
         kill_display_clients(display_of(server.cmdline))
         if _terminate(server.pid):
             killed.append(server.pid)
@@ -235,8 +235,8 @@ def display_clients(display: str | None) -> list[int]:
     """Every process still bound to a sandbox display — minus this one.
 
     Killing the launcher's process GROUP misses these: Chromium (so VS Code and every Electron
-    app) puts its helpers in their own session, so `killpg` never reaches them. They then outlive
-    the display, hold the profile lock, and push the next launch onto a different display.
+    app) puts its helpers in their own session, so `killpg` never reaches them. They outlive the
+    display, hold the profile lock, push the next launch onto a different display.
     """
     if not display or display == os.environ.get("DISPLAY"):
         return []  # never sweep the user's real session — that would kill their whole desktop
@@ -251,7 +251,7 @@ def _still_alive(pid: int) -> bool:
 def kill_display_clients(display: str | None, *, grace: float = 1.5) -> list[int]:
     """Terminate everything left on a sandbox display, escalating; returns the pids signalled.
 
-    A polite SIGTERM is not always enough — a survivor that ignores it keeps the profile's IPC
+    A polite SIGTERM isn't always enough — a survivor that ignores it keeps the profile's IPC
     socket open, and the next launch hands its window to that displayless zombie instead of
     opening one, so the sandbox stays empty with no error anywhere.
     """

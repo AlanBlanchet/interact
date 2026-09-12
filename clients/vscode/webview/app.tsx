@@ -10,13 +10,15 @@ import type {
   AgentGroupBy,
   AgentStatus,
 } from "../src/shared";
+import { PROMPT_ACTIONS } from "../src/promptActions";
+import { amongYours, shortCompetence } from "../src/competence";
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 
 const vscode = acquireVsCodeApi();
 
 const TABS = [
-  { id: "dashboard", label: "Dashboard", cells: ["status", "agents", "models", "consumption"] },
+  { id: "dashboard", label: "Dashboard", cells: ["status", "agents", "comparison", "models", "consumption"] },
   {
     id: "benchmarks",
     label: "Benchmarks",
@@ -35,12 +37,15 @@ const TABS = [
       "cfg-display",
     ],
   },
+  { id: "prompts", label: "Prompts", cells: ["prompt-workspace"] },
 ] as const;
 
 let activeTab: string = "dashboard";
 const cellCache = new Map<string, CellUpdate>();
+let promptInputGeneration = 0;
+let pendingPromptAction: { kind: "reload" | "save"; generation: number } | null = null;
 
-function post(type: string, data?: Record<string, string>): void {
+function post(type: string, data?: Record<string, unknown>): void {
   vscode.postMessage({ type, ...data });
 }
 
@@ -99,6 +104,78 @@ function Row({ item }: { item: CellContent & { kind: "row" } }): Node {
       )}
     </div>
   );
+}
+
+function SettingEditor({ item }: { item: CellContent & { kind: "setting" } }): Node {
+  const save = (event: Event): void => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const control = form.elements.namedItem("value") as HTMLInputElement | HTMLSelectElement;
+    post("saveSetting", { setting: item.key, value: control.value });
+  };
+  const input = item.input === "bool" || item.input === "enum"
+    ? <select name="value" aria-label={item.label}>
+        {(item.input === "bool" ? [{ label: "On", value: "true" }, { label: "Off", value: "false" }]
+          : item.options ?? []).map((option) =>
+          <option value={option.value} selected={option.value === item.value || undefined}>{option.label}</option>) }
+      </select>
+    : <input name="value" type={item.input === "int" ? "number" : "text"}
+        value={item.value} placeholder={item.defaultValue} aria-label={item.label}
+        min={item.minimum} step={item.input === "int" ? 1 : undefined} pattern={item.pattern}
+        onInvalid={(event: Event) => (event.currentTarget as HTMLInputElement).setAttribute("aria-invalid", "true")}
+        onInput={(event: Event) => {
+          const control = event.currentTarget as HTMLInputElement;
+          if (control.validity.valid) control.removeAttribute("aria-invalid");
+        }} />;
+  return <form className="setting-editor" title={item.description} onSubmit={save}>
+    <label>{item.label}{input}</label>
+    <span className="row-actions">
+      <button type="submit">Save</button>
+      <button type="reset" className="secondary">Cancel</button>
+    </span>
+  </form>;
+}
+
+function PromptWorkspace({ item }: { item: CellContent & { kind: "prompt-workspace" } }): Node {
+  const send = (type: string, data: Record<string, unknown>): void => post(type, data);
+  return <section className="prompt-workspace" data-selected={item.selected ?? ""} data-digest={item.digest ?? ""}
+    data-revision={item.revision ?? 0}>
+    <p>Editing the canonical personal Git source. Installed projections, product defaults, and runtime system prompts are read-only and are not listed here.</p>
+    <label>Prompt file<select aria-label="Prompt file" onChange={(event: Event) =>
+      send("promptSelect", { path: (event.currentTarget as HTMLSelectElement).value })}>
+      {item.files.map((file) => <option value={file} selected={file === item.selected || undefined}>{file}</option>)}
+    </select></label>
+    <textarea id="prompt-buffer" aria-label="Prompt content" onInput={() => { promptInputGeneration += 1; }}>
+      {item.content ?? ""}
+    </textarea>
+    <input id="prompt-commit-message" aria-label="Prompt commit message" placeholder="Commit message" />
+    <label>Publication service endpoint<input id="prompt-publish-endpoint" type="url"
+      placeholder="https://prompts.example" aria-label="Publication service endpoint" /></label>
+    <label>Private token file<input id="prompt-publish-token-file" type="text"
+      placeholder="/path/to/private-token" aria-label="Private token file read by Interact" /></label>
+    {item.status && <p role="status">{item.status}</p>}
+    <div className="row-actions">
+      <button onClick={(event: Event) => {
+        pendingPromptAction = { kind: "save", generation: promptInputGeneration };
+        send("promptSave", { path: item.selected,
+        digest: (event.currentTarget as HTMLButtonElement).closest<HTMLElement>(".prompt-workspace")?.dataset.digest,
+        content: (document.getElementById("prompt-buffer") as HTMLTextAreaElement).value });
+      }}>Save</button>
+      <button className="secondary" onClick={() => {
+        pendingPromptAction = { kind: "reload", generation: promptInputGeneration };
+        send("promptSelect", { path: item.selected });
+      }}>
+        Reload from disk
+      </button>
+      {PROMPT_ACTIONS.map((action) => <button className="secondary" onClick={() =>
+        send("promptAction", { action: action.id, explicit: action.remote,
+          message: (document.getElementById("prompt-commit-message") as HTMLInputElement).value,
+          endpoint: action.id === "publish"
+            ? (document.getElementById("prompt-publish-endpoint") as HTMLInputElement).value : undefined,
+          tokenFile: action.id === "publish"
+            ? (document.getElementById("prompt-publish-token-file") as HTMLInputElement).value : undefined })}>{action.id}</button>)}
+    </div>
+  </section>;
 }
 
 function Table({ item }: { item: CellContent & { kind: "table" } }): Node {
@@ -678,7 +755,7 @@ function laneEnd(lane: AgentLane, now: number): number | null {
 function groupKeyOf(lane: AgentLane, by: AgentGroupBy): string {
   if (by === "project") return lane.project || "(no project)";
   if (by === "provider") return lane.provider || "(unknown)";
-  if (by === "model") return lane.model || "(model not recorded)";
+  if (by === "model") return lane.resolvedModel || lane.model || "(model not recorded)";
   return "all";
 }
 
@@ -835,6 +912,15 @@ function ConcurrencyRibbon({ lanes, axis }: { lanes: AgentLane[]; axis: Axis }):
           {unknown > 0 && <span className="aside-note"> · {String(unknown)} unknown end</span>}
         </div>
       </div>
+      {/* The column says WHAT it is. "Spell out their intelligence score" was the ask, and the
+          column carried bare numbers with the metric's name nowhere on the surface — only inside
+          a hover title, which at rest is nowhere at all. Split so BOTH halves fit the column: one
+          line needed 197px in a 118px cell, and the user's own noun leads the second. */}
+      <div className="board-score-col score-head"
+           title="Artificial Analysis intelligence index — one measure, never a verdict">
+        <span className="score-head-name">Artificial Analysis</span>
+        <span className="score-head-hedge">intelligence · not a verdict</span>
+      </div>
       <div className="lane-track ribbon-track">
         {gridLines(axis)}
         <svg
@@ -867,12 +953,16 @@ function Lane({
   threads,
   localDepth,
   externalParent,
+  fleet,
 }: {
   lane: AgentLane;
   axis: Axis;
   threads: { x: number; kind: "start" | "through" | "end"; hue: string }[];
   localDepth: number;
   externalParent?: string;
+  /** Every lane on the board, not just this group's — the rank a row shows is against the models
+   *  the COMPANY runs, and splitting by model would otherwise give each group a field of one. */
+  fleet: AgentLane[];
 }): Node {
   const end = laneEnd(lane, axis.now);
   const unknownEnd = end == null;
@@ -927,7 +1017,16 @@ function Lane({
               <span className="chip-dot" style={{ background: hue }} />
               {lane.provider}
             </span>
-            {lane.model && <span className="chip chip-model">{lane.model}</span>}
+            {/* The RESOLVED spelling: one model under two provider prefixes read as two
+                colleagues, inside a group whose own header had already resolved them to one. */}
+            {(lane.resolvedModel || lane.model) && (
+              <span className="chip chip-model"
+                    title={lane.resolvedModel && lane.resolvedModel !== lane.model
+                      ? `${lane.resolvedModel} — served as ${lane.model}`
+                      : lane.model}>
+                {lane.resolvedModel || lane.model}
+              </span>
+            )}
           </span>
           <span className="lane-doing">
             {lane.status === "running" && <span className="doing-pip" />}
@@ -936,6 +1035,30 @@ function Lane({
             </span>
           </span>
         </span>
+      </div>
+
+      {/* The ask's second half — "trust one agent more than another" — read DOWN the board. Its
+          own grid column, never squeezed into a neighbour's row: on the name line it starved to
+          "44.4 · …" on every lane, and as its own line it made the lane bleed. */}
+      <div
+        className={`board-score-col${lane.competence ? "" : " score-none"}`}
+        title={lane.competence
+          ? `${lane.model ?? "this model"} — ${lane.competence}`
+            + (amongYours(lane.score, fleet) ? ` — ${amongYours(lane.score, fleet)}` : "")
+            + " — one measure, never a verdict"
+          : lane.model
+            ? `${lane.model} — no ranking carries this model`
+            : "this run did not record which model it used"}
+      >
+        {/* The ROW carries the rank among the models YOU run; the board-wide place stays in the
+            title. "24th of 450" was identical on every lane — a denominator none of them
+            competes against. An EMPTY cell read as a failed fetch, so a dash says the ranking
+            does not place this model, which is ordinary. */}
+        {lane.competence
+          ? (amongYours(lane.score, fleet)
+              ? `${(lane.score ?? 0).toFixed(1)} · ${amongYours(lane.score, fleet)}`
+              : shortCompetence(lane.competence))
+          : "—"}
       </div>
 
       <div className="lane-track">
@@ -1057,6 +1180,7 @@ function AgentBoard({ item }: { item: CellContent & { kind: "agent-board" } }): 
 
       <div className="board-row board-axis-row">
         <div className="board-aside" />
+        <div className="board-score-col" />
         <div className="lane-track axis-track">
           {gridLines(axis)}
           {axis.ticks.map((t) => (
@@ -1136,6 +1260,7 @@ function AgentBoard({ item }: { item: CellContent & { kind: "agent-board" } }): 
                   threads={threadsFor[i]}
                   localDepth={localDepth[i]}
                   externalParent={externalParent[i]}
+                  fleet={lanes}
                 />
               ))}
           </div>
@@ -1165,6 +1290,10 @@ function renderContent(item: CellContent): Node | null {
   switch (item.kind) {
     case "row":
       return <Row item={item} />;
+    case "setting":
+      return <SettingEditor item={item} />;
+    case "prompt-workspace":
+      return <PromptWorkspace item={item} />;
     case "table":
       return <Table item={item} />;
     case "chart":
@@ -1217,8 +1346,54 @@ function renderCell(cellId: string): void {
     renderAll();
     return;
   }
+  const prompt = cellId === "prompt-workspace"
+    ? el.querySelector<HTMLTextAreaElement>("#prompt-buffer") : null;
+  const workspace = prompt?.closest<HTMLElement>(".prompt-workspace");
+  const draft = prompt?.value;
+  const selected = workspace?.dataset.selected;
+  const revision = workspace?.dataset.revision;
+  const pending = pendingPromptAction;
+  const active = document.activeElement;
+  const edited = active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)
+    ? active as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement : null;
+  const preserveControl = edited && el.contains(edited) ? {
+    label: edited.getAttribute("aria-label"),
+    value: edited.value,
+    start: edited.tagName === "INPUT" || edited.tagName === "TEXTAREA"
+      ? (edited as HTMLInputElement | HTMLTextAreaElement).selectionStart : null,
+    end: edited.tagName === "INPUT" || edited.tagName === "TEXTAREA"
+      ? (edited as HTMLInputElement | HTMLTextAreaElement).selectionEnd : null,
+  } : null;
   el.replaceChildren();
   buildCellContent(cellId, el);
+  const refreshedWorkspace = el.querySelector<HTMLElement>(".prompt-workspace");
+  const refreshedPrompt = el.querySelector<HTMLTextAreaElement>("#prompt-buffer");
+  const promptChanged = refreshedWorkspace?.dataset.revision !== revision;
+  const typedAfterDispatch = pending != null && promptInputGeneration !== pending.generation;
+  const preservePrompt = draft !== undefined && refreshedPrompt && refreshedWorkspace
+    && refreshedWorkspace.dataset.selected === selected
+    && (!promptChanged || pending == null || typedAfterDispatch);
+  if (preservePrompt) {
+    refreshedPrompt.value = draft;
+    if (workspace?.dataset.digest && !(pending?.kind === "save" && promptChanged)) {
+      refreshedWorkspace.dataset.digest = workspace.dataset.digest;
+    }
+  }
+  if (promptChanged && pending) pendingPromptAction = null;
+  if (preserveControl?.label) {
+    const refreshed = Array.from(el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+      "input[aria-label], textarea[aria-label], select[aria-label]",
+    )).find((control) => control.getAttribute("aria-label") === preserveControl.label);
+    if (refreshed) {
+      if (refreshed !== refreshedPrompt || preservePrompt) refreshed.value = preserveControl.value;
+      refreshed.focus();
+      if ((refreshed.tagName === "INPUT" || refreshed.tagName === "TEXTAREA")
+          && preserveControl.start != null && preserveControl.end != null) {
+        (refreshed as HTMLInputElement | HTMLTextAreaElement)
+          .setSelectionRange(preserveControl.start, preserveControl.end);
+      }
+    }
+  }
 }
 
 function renderAll(): void {

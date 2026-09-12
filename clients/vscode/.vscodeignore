@@ -3,6 +3,9 @@ src/**
 scripts/**
 node_modules/**
 webview/**
+test/**
+*.html
+tsconfig.test.json
 tsconfig.json
 package-lock.json
 .gitignore

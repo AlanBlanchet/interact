@@ -1,8 +1,11 @@
 """Local-first prompt authoring commands backed by Git."""
 
 import os
+import hashlib
+import json
 from pathlib import Path, PurePosixPath
 import subprocess
+import stat
 import sys
 from typing import Annotated
 
@@ -13,6 +16,7 @@ from interact.prompt_publisher import publish_projection
 from interact.prompt_secret import read_prompt_token
 
 prompts_app = App(name="prompts", help="Author and synchronize prompts through local Git.")
+_MAX_EDITOR_BYTES = 1 << 20
 
 
 def _data_home() -> Path:
@@ -34,6 +38,11 @@ def _state_home() -> Path:
     return Path(configured) if configured else Path.home() / ".local" / "state"
 
 
+def _consumer_home() -> Path:
+    configured = os.environ.get("INTERACT_PROMPT_CONSUMER_ROOT")
+    return Path(configured) if configured else Path.home()
+
+
 def _projection(repository: Path) -> Path:
     commit_id = _run("rev-parse", "HEAD", repository=repository, output=False).stdout.strip()
     return _cache_home() / "interact" / "prompts" / commit_id
@@ -43,7 +52,7 @@ def _compile(repository: Path) -> Path:
     _require_clean(repository)
     projection = _projection(repository)
     if not projection.exists():
-        compile_prompt_projection(repository, "HEAD", projection, Path.home())
+        compile_prompt_projection(repository, "HEAD", projection, _consumer_home())
     return projection
 
 
@@ -54,7 +63,7 @@ def _install(repository: Path) -> Path:
     ))
     state = _state_home() / "interact" / "prompts" / "installed.json"
     adoption = state.parent / "bootstrap-adoption.json"
-    install_prompt_projection(projection, Path.home(), vscode_root, state, adoption)
+    install_prompt_projection(projection, _consumer_home(), vscode_root, state, adoption)
     return projection
 
 
@@ -62,15 +71,20 @@ def _run(
     *arguments: str,
     repository: Path | None = None,
     output: bool = True,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     command = ["git"]
     if repository is not None:
         command.extend(("-C", str(repository)))
     command.extend(arguments)
-    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    environment = os.environ.copy()
+    for key in ("GIT_ASKPASS", "SSH_ASKPASS", "GIT_BROWSER", "BROWSER"):
+        environment.pop(key, None)
+    environment.update({"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""})
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60, env=environment)
     if output and result.stdout:
         print(result.stdout, end="")
-    if result.returncode:
+    if result.returncode and check:
         message = result.stderr.strip() or f"git exited {result.returncode}"
         print(f"ERROR: {message}", file=sys.stderr)
         raise SystemExit(result.returncode)
@@ -84,6 +98,136 @@ def _require_clean(repository: Path) -> None:
     if status:
         print("ERROR: prompt worktree has uncommitted changes or conflicts", file=sys.stderr)
         raise SystemExit(2)
+
+
+def _source_parent(value: str) -> tuple[Path, int, str]:
+    if not hasattr(os, "O_NOFOLLOW") or not all(
+        function in os.supports_dir_fd for function in (os.open, os.rename, os.unlink)
+    ):
+        raise OSError("secure prompt source access is unavailable on this platform")
+    relative = PurePosixPath(value)
+    repository = _repository().resolve(strict=True)
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise ValueError("prompt path is outside the source worktree")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    parent = os.open(repository, flags)
+    try:
+        for component in relative.parts[:-1]:
+            child = os.open(component, flags, dir_fd=parent)
+            os.close(parent)
+            parent = child
+    except BaseException:
+        os.close(parent)
+        raise
+    return repository.joinpath(*relative.parts), parent, relative.parts[-1]
+
+
+def _source_file(value: str) -> tuple[Path, str]:
+    target, parent, name = _source_parent(value)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("prompt path is not a regular source file")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = None
+            data = stream.read(_MAX_EDITOR_BYTES + 1)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+    if len(data) > _MAX_EDITOR_BYTES:
+        raise ValueError("prompt source is too large")
+    try:
+        content = data.decode("utf-8")
+    except UnicodeError as error:
+        raise ValueError("prompt path is not a regular source file")
+    return target, content
+
+
+def _editor_error(message: str, code: str = "invalid") -> None:
+    print(json.dumps({"ok": False, "code": code, "error": message}, separators=(",", ":")))
+    raise SystemExit(2)
+
+
+@prompts_app.command
+def catalog() -> None:
+    """Return the finite editable prompt-source catalog as JSON."""
+    repository = _repository().resolve(strict=True)
+    files: list[str] = []
+    for target in sorted(repository.rglob("*")):
+        if target.suffix.lower() not in {".md", ".json", ".yaml", ".yml"}:
+            continue
+        try:
+            source, _ = _source_file(target.relative_to(repository).as_posix())
+        except (OSError, UnicodeError, ValueError):
+            continue
+        files.append(source.relative_to(repository).as_posix())
+    print(json.dumps({"ok": True, "files": files}, separators=(",", ":")))
+
+
+@prompts_app.command
+def read(path: str) -> None:
+    """Read one allowlisted UTF-8 prompt source with its CAS digest as JSON."""
+    try:
+        _, content = _source_file(path)
+    except (OSError, UnicodeError, ValueError) as error:
+        _editor_error(str(error))
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    print(json.dumps({"ok": True, "path": path, "content": content, "digest": digest}, separators=(",", ":")))
+
+
+@prompts_app.command
+def write(path: str, digest: str) -> None:
+    """CAS-write one prompt source; CONTENT is bounded UTF-8 on stdin."""
+    data = sys.stdin.buffer.read(_MAX_EDITOR_BYTES + 1)
+    if len(data) > _MAX_EDITOR_BYTES:
+        _editor_error("prompt source is too large")
+    parent: int | None = None
+    descriptor: int | None = None
+    temporary: str | None = None
+    lock_name: str | None = None
+    owns_lock = False
+    try:
+        content = data.decode("utf-8")
+        target, parent, name = _source_parent(path)
+        lock_name = f".{name}.interact.lock"
+        try:
+            descriptor = os.open(lock_name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600, dir_fd=parent)
+            owns_lock = True
+        except FileExistsError:
+            _editor_error("prompt source has a competing editor; preserve the buffer and reload", "conflict")
+        current_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(current_fd, "rb") as stream:
+            current = stream.read(_MAX_EDITOR_BYTES + 1)
+        if hashlib.sha256(current).hexdigest() != digest:
+            _editor_error("prompt source changed; preserve the editor buffer and reload", "conflict")
+        temporary = f".{name}.interact-{os.getpid()}"
+        temporary_fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600, dir_fd=parent)
+        with os.fdopen(temporary_fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.rename(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+    except (OSError, UnicodeError, ValueError) as error:
+        _editor_error(str(error))
+    finally:
+        if parent is not None and temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent is not None and lock_name is not None and owns_lock:
+            try:
+                os.unlink(lock_name, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        if parent is not None:
+            os.close(parent)
+    print(json.dumps({"ok": True, "path": path, "digest": hashlib.sha256(data).hexdigest()}, separators=(",", ":")))
 
 
 @prompts_app.command
@@ -117,6 +261,12 @@ def commit(message: Annotated[str, Parameter(name=["--message", "-m"])]) -> None
     if conflicts:
         print("ERROR: resolve every conflict before committing", file=sys.stderr)
         raise SystemExit(2)
+    identity = _run("var", "GIT_AUTHOR_IDENT", repository=repository, output=False, check=False)
+    if identity.returncode:
+        _editor_error(
+            "Git author identity is unavailable; configure user.name and user.email, then commit again.",
+            "git_identity",
+        )
     _run("add", "-A", "--", ".", repository=repository)
     _run("commit", "-m", message, repository=repository)
 
@@ -142,9 +292,9 @@ def pull() -> None:
 def push() -> None:
     """Push local prompt commits using ordinary Git conflict protection."""
     repository = _repository()
-    upstream = subprocess.run(
-        ["git", "-C", str(repository), "rev-parse", "--abbrev-ref", "@{upstream}"],
-        capture_output=True, text=True, timeout=30,
+    upstream = _run(
+        "rev-parse", "--abbrev-ref", "@{upstream}", repository=repository,
+        output=False, check=False,
     )
     if upstream.returncode:
         _run("push", "--set-upstream", "origin", "HEAD", repository=repository)
@@ -187,6 +337,29 @@ def compile() -> None:
 def install() -> None:
     """Atomically install the exact compiled projection into managed consumers."""
     print(_install(_repository()))
+
+
+@prompts_app.command
+def scope(name: str, project: Path = Path(".")) -> None:
+    """Link one installed domain scope (its agents + skills) into a project's .claude/."""
+    held = _consumer_home() / ".claude" / "scopes" / name
+    if not held.is_dir():
+        print(f"ERROR: scope {name!r} is not installed under {held}", file=sys.stderr)
+        raise SystemExit(2)
+    root = project.resolve() / ".claude"
+    linked = 0
+    for source in sorted(held.rglob("*.md")):
+        relative = source.relative_to(held)
+        target = root / relative
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() and target.resolve() == source.resolve():
+                continue
+            print(f"ERROR: {target} exists and is not this scope's link", file=sys.stderr)
+            raise SystemExit(2)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(source)
+        linked += 1
+    print(f"scope {name}: {linked} link(s) into {root}")
 
 
 @prompts_app.command

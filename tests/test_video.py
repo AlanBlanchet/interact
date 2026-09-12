@@ -15,7 +15,8 @@ import pytest
 from interact.config import Config
 import interact.vision.core as vision
 import interact.vision.session as vision_session
-from interact.vision import _extract_frames, evenly_sampled
+from interact.vision import evenly_sampled
+from interact.vision.core import _extract_frames
 
 
 @pytest.mark.asyncio

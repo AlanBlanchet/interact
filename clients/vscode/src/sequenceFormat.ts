@@ -2,12 +2,12 @@
  *
  *  A tree answers "what is running"; a transcript answers "what did ONE agent do". Neither shows
  *  a TEAM — that a reviewer is waiting on a lead, that a spawn happened before a message. So:
- *  one lane per agent, time flowing downward, an arrow for every spawn and every message. It is
+ *  one lane per agent, time flowing downward, an arrow for every spawn and every message. It's
  *  the standard shape for interacting participants because it carries three facts at once —
  *  who, what, and in what order — which a node-graph loses (no time) and a plain log loses (no
  *  participants).
  *
- *  Pure layout, no `vscode` import, so the decisions that go quietly wrong here are unit-tested.
+ *  Pure layout, no vscode import, so the decisions that go quietly wrong here are unit-tested.
  */
 
 export interface SeqRun {
@@ -124,13 +124,13 @@ function esc(v: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** The same mix as `themeTokens.DIM_FOREGROUND`, spelled out rather than imported.
+/** The same mix as themeTokens.DIM_FOREGROUND, spelled out rather than imported.
  *
- *  This module is loaded directly by `sequence.test.ts` under `--experimental-strip-types`, which
- *  needs an explicit `.ts` specifier on every import, while `tsc` refuses one when it emits. So a
+ *  This module is loaded directly by sequence.test.ts under --experimental-strip-types, which
+ *  needs an explicit ".ts" specifier on every import, while tsc refuses one when it emits. So a
  *  file the tests reach this way stays import-free, and the theme tokens live beside the status
- *  colours below, which are already spelled here for the same reason. `themeTokens.test.ts` fails
- *  if the two copies ever drift.
+ *  colours below, already spelled here for the same reason. themeTokens.test.ts fails if the
+ *  two copies ever drift.
  */
 const DIM_FOREGROUND =
   "color-mix(in srgb, var(--vscode-descriptionForeground, #9a9a9a) 70%, " +
@@ -144,7 +144,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 /** The diagram as inline SVG. Colours are theme variables so it works in light and dark, and the
- *  arrowhead is drawn per-arrow rather than via a shared `<marker>` — a marker inherits the
+ *  arrowhead is drawn per-arrow rather than via a shared <marker> — a marker inherits the
  *  marker element's own colour, not the line's, so a themed stroke would silently lose its head. */
 export function renderSequence(seq: Sequence): string {
   if (seq.lanes.length === 0) {

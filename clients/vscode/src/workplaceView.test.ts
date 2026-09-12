@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { ROSTER_VIEWS, type RosterView } from "./railHtml.ts";
 import { test } from "node:test";
 
 import { createRequire } from "node:module";
@@ -84,61 +85,134 @@ test("the scene can be rendered on its own, for pushing into a live document", (
   assert.ok(!/<html|<body|<script/i.test(html), "a fragment, not a document");
 });
 
-test("a narrow team panel keeps the world primary and makes the roster optional", () => {
+test("the roster fills the panel at every width", () => {
+  /* Superseded contract: the world used to be primary and the roster a toggle-open overlay under
+     560px. His words — "remove the game like features and orient it more like we're doing in the
+     web" — invert that, and with no room beside it the roster has no reason to hide or overlay. */
   const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
   const html = renderWorkplace({ workers: [], links: [], zones: [] }, "n1", undefined, {
     style: "", body: "<p>Roster</p>", script: "",
   });
-  assert.match(html, /class="wp-roster-toggle"[^>]*aria-expanded="false"/);
-  assert.match(html, /@container \(max-width: 560px\)[\s\S]*\.wp-list \{ display: none/);
-  assert.match(html, /roster-open[\s\S]*\.wp-list \{ display: block/);
+  assert.doesNotMatch(html, /\.wp-list \{ display: none/, "never hidden behind a toggle");
+  assert.match(html, /<p>Roster<\/p>/);
 });
 
-test("rendered narrow workplaces leave usable map space and contain their roster overlay", () => {
+test("a narrow panel gives the whole width to the roster", () => {
+  /* Superseded: this asserted the 207px panel still left "usable map space" and contained the
+     roster OVERLAY. There is no map and no overlay — the roster is the panel, so the only thing
+     worth measuring is that it gets the width and does not scroll sideways. */
+  const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
+  const html = renderWorkplace({ workers: [], links: [], zones: [] }, "n1", undefined, {
+    style: "", body: "<p>Roster</p>", script: "",
+  });
+  assert.doesNotMatch(html, /position: absolute; z-index: 800/, "no overlay layer remains");
+  assert.match(html, /\.wp-split > \.wp-list \{[^}]*flex: 1 1 auto/, "it takes the width");
+});
+
+test("a live workplace stops and restores motion when the VS Code body class changes", () => {
   const chrome = process.env.CHROME_BIN ?? "/usr/bin/google-chrome";
   assert.ok(fs.existsSync(chrome));
   const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
-  for (const width of [207, 299, 458]) {
-    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "out", "tests",
-      `workplace-${width}-contract`);
-    const page = path.join(root, "page.html");
-    const profile = path.join(root, `profile-${process.pid}-${Date.now()}`);
-    fs.mkdirSync(root, { recursive: true });
-    const html = renderWorkplace({ workers: STATE.workers, links: [], zones: [] }, "n1", undefined, {
-      style: "", body: "<p>Roster</p>", script: "",
-    }).replace("</body>", `<script nonce="n1">
-document.documentElement.style.width="${width}px"; document.body.style.width="${width}px";
-document.querySelector('.wp-split').style.width="${width}px";
-const room=document.querySelector('.wp-room'); const roster=document.querySelector('.wp-list');
-const toggle=document.querySelector('.wp-roster-toggle');
-const usable=room?.getBoundingClientRect().width>0;
-const noOverflow=document.body.scrollWidth<=${width};
-const contained=!roster || roster.getBoundingClientRect().right<=${width};
-const controlled=toggle && getComputedStyle(toggle).display!=="none" &&
-  toggle.getAttribute('aria-controls')==='wp-roster';
-const toggleRect=toggle?.getBoundingClientRect();
-const hudItems=[...document.querySelectorAll('.wp-hud > *')]
-  .filter((item)=>getComputedStyle(item).display!=="none");
-const overlapsHud=!!toggleRect && hudItems.some((item)=>{
-  const rect=item.getBoundingClientRect();
-  return toggleRect.left<rect.right && toggleRect.right>rect.left &&
-    toggleRect.top<rect.bottom && toggleRect.bottom>rect.top;
-});
-toggle?.click();
-const openRect=roster?.getBoundingClientRect();
-const openContained=!!openRect && openRect.width>0 && openRect.left>=0 &&
-  openRect.right<=${width} && openRect.top>=toggleRect.bottom;
-const expanded=toggle?.getAttribute('aria-expanded')==='true';
-const openNoOverflow=document.body.scrollWidth<=${width};
-document.body.dataset.narrowContract=usable && noOverflow && (contained || controlled) && !overlapsHud && openContained && expanded && openNoOverflow ?
-  'ok-map-'+room.getBoundingClientRect().width+'-roster-'+openRect.width+'-overflow-'+document.body.scrollWidth :
-  'failed-map-'+(room?.getBoundingClientRect().width ?? -1)+'-roster-'+(openRect?.width ?? -1)+'-overflow-'+document.documentElement.scrollWidth+'-hud-overlap-'+overlapsHud+'-expanded-'+expanded;
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "out", "tests",
+    "workplace-reduced-motion-contract");
+  const page = path.join(root, "page.html");
+  const profile = path.join(root, `profile-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(root, { recursive: true });
+  const html = renderWorkplace(STATE, "n1").replace("</body>", `<script nonce="n1">
+const animated=()=>[...document.querySelectorAll('*')]
+  .filter((node)=>getComputedStyle(node).animationName!=='none').length;
+const before=animated();
+document.body.classList.add('vscode-reduce-motion');
+setTimeout(()=>{
+  const stopped=animated(); const still=window.__wp?.still===true;
+  document.body.classList.remove('vscode-reduce-motion');
+  setTimeout(()=>{
+    const restored=animated(); const moving=window.__wp?.still===false;
+    document.body.dataset.motionContract=before>0 && stopped===0 && still && restored>0 && moving
+      ? 'ok-'+before+'-'+restored : 'failed-'+before+'-'+stopped+'-'+restored+'-'+still+'-'+moving;
+  }, 25);
+}, 25);
 </script></body>`);
-    fs.writeFileSync(page, html);
-    const rendered = execFileSync(chrome, ["--headless=new", "--no-sandbox", "--disable-gpu",
-      "--window-size=800,800", `--user-data-dir=${profile}`, "--dump-dom", `file://${page}`],
-    { encoding: "utf8" });
-    assert.match(rendered, new RegExp(`data-narrow-contract="ok-map-${width}-roster-${width}-overflow-${width}`),
-      `${width}px workplace must keep its map, separate its controls, and contain the open roster`);
-  }
+  fs.writeFileSync(page, html);
+  const rendered = execFileSync(chrome, ["--headless=new", "--no-sandbox", "--disable-gpu",
+    `--user-data-dir=${profile}`, "--virtual-time-budget=1000", "--dump-dom", `file://${page}`],
+  { encoding: "utf8" });
+  assert.match(rendered, /data-motion-contract="ok-\d+-\d+"/,
+    "the live body class must pause both CSS and the simulation, then restore normal motion");
+});
+
+test("the chosen roster view is remembered, and an unknown one is refused", () => {
+  /* "All views so we can chose and store in configs (cache) so it reuses the same next time."
+     The value round-trips through the same memento the agents tree uses for its grouping, and it
+     arrives from a WEBVIEW — so it is validated against the known set rather than trusted and
+     written straight into the class attribute of the roster. */
+  const store = new Map<string, unknown>();
+  const memento = {
+    get: <T,>(k: string, d?: T) => (store.has(k) ? store.get(k) as T : d),
+    update: async (k: string, v: unknown) => { store.set(k, v); },
+  };
+  const viewOf = (stored: unknown): RosterView => {
+    store.set("interact.workplace.rosterView", stored);
+    const got = memento.get<RosterView>("interact.workplace.rosterView");
+    return ROSTER_VIEWS.some((v) => v.id === got) ? got as RosterView : "grouped";
+  };
+  assert.equal(viewOf("table"), "table", "a stored choice comes back");
+  assert.equal(viewOf("cards"), "grouped", "a view that no longer exists falls back, never renders");
+  assert.equal(viewOf("<script>"), "grouped", "an unknown value falls back, never renders");
+  assert.equal(viewOf(undefined), "grouped", "and a first run has a default");
+});
+
+test("the Team tab opens on the roster, and the world simulation is not mounted", () => {
+  /* "the Interact - Team is just super laggy. Maybe we should remove the game like features and
+     orient it more like we're doing in the web."
+
+     The lag is not subtle and it is not the roster: the tile world is ~9,700 lines across
+     world/sim/scene/tiles, it drove the renderer to 149% CPU and 2.99 GB RSS, and the project's
+     own `test_forty_eight_actors_hold_frame_budget` fails at 23.7ms against a 20ms budget. A
+     surface you cannot type into is not a surface. The roster is what the tab shows now; the
+     scene is not rendered, so the simulation never starts. */
+  const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
+  const html = renderWorkplace({ workers: [], links: [], zones: [] }, "n1", undefined, {
+    style: "", body: "<div id='roster'>rows</div>", script: "",
+  });
+  assert.doesNotMatch(html, /class="wp-room"/, "no room element to mount a scene into");
+  assert.doesNotMatch(html, /wp-roster-toggle/, "the roster is not a thing you toggle open");
+  assert.match(html, /id='roster'/, "the roster IS the surface");
+});
+
+test("the roster keeps the container its repaint handler looks for", () => {
+  /* Round 46 FAIL, and self-inflicted: `.wp-list` was the roster's container in the old split.
+     Collapsing the layout deleted it, and `railScript` opens every repaint with
+     `querySelector(".wp-list"); if (!host) return;` — so pushRoster() was dropped on the floor.
+     Not chooser-specific: the roster never repainted at all, so live agent updates and drill-in
+     died with it. Same class as the `.rail`/`.runs` bug: a selector naming a deleted element. */
+  const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
+  const html = renderWorkplace({ workers: [], links: [], zones: [] }, "n1", undefined, {
+    style: "", body: "<p>Roster</p>", script: "",
+  });
+  assert.match(html, /class="wp-list"/, "the repaint host must exist");
+  const { railScript } = createRequire(import.meta.url)("../out/railHtml.js");
+  const host = railScript().match(/querySelector\("([^"]+)"\)[^;]*;\s*if \(!host\)/);
+  assert.ok(host, "the script still resolves a host");
+  assert.match(html, new RegExp(`class="${host[1].replace(".", "")}"`),
+    `the script looks for ${host[1]} and the document must contain it`);
+});
+
+test("the roster gets the whole panel — one rule, not two fighting", () => {
+  /* Round 47, BLOCKING: two `.wp-split > .wp-list` rules at equal specificity, the later one
+     winning with `flex: 0 0 clamp(240px, 26%, 380px)` — the old sidebar width from when a world
+     sat beside it. Live full-width Team tab: 367px of roster against 1045px of empty, 1540px at
+     1920. It also made the 560px container query permanently true, so the table could never
+     render as a table. Same shape as the duplicate `min-width` that silently deleted a floor. */
+  const { renderWorkplace } = createRequire(import.meta.url)("../out/workplaceView.js");
+  const html = renderWorkplace({ workers: [], links: [], zones: [] }, "n1", undefined, {
+    style: "", body: "<p>Roster</p>", script: "",
+  });
+  // The invariant is about WIDTH, not about the selector text: `railHtml` legitimately raises
+  // specificity on the same element to restore the board background, and sets no width at all.
+  const widths = [...html.matchAll(/\.wp-split > (?:div\.)?\.?wp-list \{[^}]*?(flex:[^;]+;)/g)]
+    .map((m) => m[1]);
+  assert.equal(widths.length, 1, `exactly one rule may set the width, found ${widths.length}: ${widths}`);
+  assert.match(widths[0], /flex: 1 1 auto/, "and it gives the roster the panel");
+  assert.doesNotMatch(html, /clamp\(240px/, "the old sidebar cap is gone");
 });

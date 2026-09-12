@@ -200,8 +200,8 @@ class InteractTUI(App):
     """
     BINDINGS = [
         ("ctrl+s", "save_config", "Save config"),
-        # priority=True so the tab chords fire even when a focused Input/Select would otherwise
-        # swallow ctrl+arrow (word-nav) — the footer advertised these but they were dead in-terminal.
+        # priority=True so tab chords fire even when a focused Input/Select would otherwise
+        # swallow ctrl+arrow (word-nav) — footer advertised these but they were dead in-terminal.
         Binding("ctrl+right", "next_tab", "Next tab", priority=True),
         Binding("ctrl+left", "prev_tab", "Prev tab", priority=True),
         ("r", "refresh", "Refresh"),
@@ -294,8 +294,8 @@ class InteractTUI(App):
                 pass
 
     def on_app_focus(self, event: events.AppFocus) -> None:
-        # When the terminal regains focus (you clicked back into it), restore a focused
-        # widget so the keyboard works again without having to click a panel first.
+        # When the terminal regains focus (clicked back into it), restore a focused widget so
+        # the keyboard works again without clicking a panel first.
         self._ensure_focus()
 
     # ── tab navigation (works regardless of which widget has focus) ────────────
@@ -444,8 +444,8 @@ class InteractTUI(App):
         for setting in SETTINGS:
             self._persist(setting, self._widget_value(setting))
         self.query_one("#save-status", Static).update("✓ saved to ~/.interact/config.env")
-        # A toast too: the inline #save-status sits at the bottom of a scrolling pane and is easily
-        # off-screen, so Ctrl+S / Save looked like it did nothing (it saved silently). Match the keys.
+        # A toast too: inline #save-status sits at the bottom of a scrolling pane, easily
+        # off-screen — Ctrl+S/Save once looked like it did nothing (saved silently).
         self.notify("✓ Saved to ~/.interact/config.env")
         self.query_one("#status-body", Static).update(self._status_text())
         self.run_worker(self._load_registry_info, thread=True, exclusive=True, group="registry")  # auto-resolution may change
@@ -488,7 +488,7 @@ class InteractTUI(App):
             return
         UserConfig.set(name, value)
         os.environ[name] = value  # live in THIS process now — config.env only seeds os.environ at
-        # startup, so without this the status + model menus wouldn't reflect the key until restart
+        # startup; without this, status/model menus wouldn't reflect the key until restart
         self.query_one(f"#in-{name}", Input).value = ""
         self.query_one(f"#state-{name}", Static).update(_key_state(name))
         self._rebuild_model_options()  # this provider's models are now usable → show them
@@ -497,9 +497,9 @@ class InteractTUI(App):
     def _clear_key(self, name: str) -> None:
         removed = UserConfig.unset(name)
         if removed:
-            # drop the copy apply() seeded into os.environ at startup, so the provider really
-            # disappears from the status + menus — not just from config.env. A key that came from
-            # the real shell env (removed=False) isn't ours to unset, so it's left untouched.
+            # Drop the copy apply() seeded into os.environ at startup, so the provider really
+            # disappears from status/menus, not just config.env. A key from the real shell env
+            # (removed=False) isn't ours to unset — left untouched.
             os.environ.pop(name, None)
         self.query_one(f"#state-{name}", Static).update(_key_state(name))
         self._rebuild_model_options()  # provider no longer keyed → drop its models from the menus

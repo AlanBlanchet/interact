@@ -14,7 +14,8 @@ import interact.server as srv
 import interact.vision.core as vis
 from interact.config import Config
 from interact.models import ModelChain
-from interact.vision import MediaItem, VLMResult, _audio_content, transcribe_audio
+from interact.vision import MediaItem, VLMResult
+from interact.vision.core import _audio_content, transcribe_audio
 
 
 class _FakeConfig:

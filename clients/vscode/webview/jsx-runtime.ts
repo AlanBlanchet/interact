@@ -86,6 +86,10 @@ export function jsx(
 
   for (const [key, value] of Object.entries(rest)) {
     if (value == null) continue;
+    if (typeof value === "boolean") {
+      if (value) el.setAttribute(key, "");
+      continue;
+    }
     if (key === "className") {
       if (el instanceof SVGElement) el.setAttribute("class", value as string);
       else (el as HTMLElement).className = value as string;

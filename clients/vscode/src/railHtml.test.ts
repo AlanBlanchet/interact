@@ -7,7 +7,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { buildRail } from "./rail.ts";
-import { railHtml, railBody, railStyle, headerLine } from "./railHtml.ts";
+import { railHtml, railBody, railStyle, headerLine, railScript, modelsOnScreen,
+  ROSTER_VIEWS, type RosterView } from "./railHtml.ts";
 import { voiceOf } from "./statusLanguage.ts";
 import { conversationTitle, roleOf } from "./roster.ts";
 import { actionsFor } from "./agentActions.ts";
@@ -31,6 +32,8 @@ test("every destination is in the document at rest, with its word", () => {
   for (const label of ["Team", "+ Session", "Staff"]) {
     assert.ok(doc.includes(`>${label}<`), `"${label}" is not present without hovering`);
   }
+  assert.match(doc, /data-command="interact\.openDashboard"[^>]*>⚙ Settings</,
+    "the Team gear must open the same Interact settings workspace as Conversation");
 });
 
 test("the scope is stated on the surface, not hidden in a dialog", () => {
@@ -141,15 +144,12 @@ test("every action carries a title, since a bare glyph is a guess", () => {
   }
 });
 
-test("the rail and the world stay quiet about the same states", () => {
-  /* The coherence rule, updated with the design: the world dropped its DONE stamp — a finished
-     agent SITS at rest, and captioning the obvious is noise ("Agents keep saying 'finished'.
-     Instead, we should not have that"). So the shared vocabulary carries QUIET, and the rail obeys
-     the same bit: a finished row is a green ✓ and nothing else, while ERROR still says its word on
-     both surfaces, because that is a state that needs him. */
+test("the rail and the world use the same status vocabulary", () => {
+  /* The rail now has enough width to say every status at rest. The word still comes from the
+     shared vocabulary, so the wider metadata grid does not create a second state language. */
   const doneRow = html([run({ status: "completed" })]);
-  assert.ok(!doneRow.includes(">DONE<"), "a finished row must not caption itself");
-  assert.ok(doneRow.includes(voiceOf("finished").mark), "the mark carries the state alone");
+  assert.ok(doneRow.includes(`>${voiceOf("finished").word}`), "a finished row says its state");
+  assert.ok(doneRow.includes(voiceOf("finished").mark), "the mark reinforces the state");
 
   const errRow = html([run({ status: "failed" })]);
   const err = voiceOf("error");
@@ -167,11 +167,31 @@ test("each state carries its own accent, so colour still separates them", () => 
 
 /* ——— Rest density: outcomes at rest, machinery behind intent ——— */
 
-test("row actions are invisible until the row is hovered or focused", () => {
+test("the wide rail shows the row's facts and actions at rest", () => {
   const css = railStyle();
-  assert.match(css, /\.acts\s*{[^}]*opacity:\s*0/, "actions hidden at rest");
-  assert.match(css, /\.row:hover \.acts[^{]*{[^}]*opacity:\s*1/, "revealed by intent");
-  assert.match(css, /\.row:focus-within \.acts/, "and reachable by keyboard");
+  assert.match(css, /\.runs \.row, \.columnHead\s*{[^}]*display:\s*grid/, "wide rows use the full rail");
+  assert.match(css, /\.acts\s*{[^}]*opacity:\s*1/, "actions are visible at rest");
+  assert.match(css, /\.actText/, "actions explain themselves without hover");
+  assert.match(css, /@container \(max-width: 1160px\)/, "narrow rails have a responsive fallback");
+});
+
+test("a row surfaces status, provider, model and effort only from its run", () => {
+  const doc = railHtml(
+    buildRail([run({ provider: "codex", model: "gpt-5.6-luna", reasoning: "high" })] as never[], "interact", () => 0),
+    "N0NCE", voiceOf, (r) => conversationTitle(r as never),
+    (r) => ({ id: roleOf(r as never).id, label: roleOf(r as never).id }),
+    () => actionsFor({ run_id: "r1", status: "running" }),
+    () => ({ text: "90 · 1st", title: "gpt-5.6-luna — aa.intelligence 90 · 1st" }),
+    (r) => (r as { model?: string }).model,
+  );
+  assert.match(doc, /class="stamp"[^>]*>.*WORKING/, "status word is readable, not only a dot");
+  assert.match(doc, /class="columnHead"[^>]*>.*<span>Status<\/span>/,
+    "metadata columns say what each value means");
+  assert.match(doc, /class="provider"[^>]*>codex<\/span>/);
+  assert.match(doc, /class="model"[^>]*>gpt-5\.6-luna<\/span>/);
+  assert.match(doc, /class="effort"[^>]*>high<\/span>/);
+  assert.match(doc, /class="score"[^>]*>90 · 1st<\/span>/);
+  assert.match(doc, /data-action="message"[^>]*aria-label="Say something to them"/);
 });
 
 test("the ledger is one line that opens, not seven rows that shout", () => {
@@ -206,10 +226,198 @@ test("a one-line row: the title never wraps into a paragraph", () => {
     "a task sentence is clipped, not a wall");
 });
 
-test("searching opens the folded bands; clearing folds them back", () => {
-  /* The filter hid non-matching rows but left History and On-staff CLOSED — a match inside a
-     collapsed fold was silently invisible, which teaches you the search is broken. */
-  const script = railHtml(buildRail([], "x", () => 0), "N", voiceOf as never,
-    ((r: { name: string }) => r.name) as never, (() => ({ id: "x", label: "x" })) as never);
-  assert.match(script, /querySelectorAll\("details"\)\.forEach\(\(d\) => \{ d\.open = Boolean\(q\); \}\)/);
+
+test("a roster repaint keeps what the reader had opened, typed and scrolled", () => {
+  /* The Team tab's ON STAFF section folded on every repaint — a model picked, a run finishing —
+     because the roster is swapped wholesale by innerHTML and <details> state lives only in the
+     DOM. The swap must snapshot and reapply it; this pins the script to that shape. */
+  const script = railScript();
+  const swap = script.indexOf("host.innerHTML = html");
+  assert.ok(swap > 0, "the roster swap must exist");
+  const before = script.slice(0, swap), after = script.slice(swap);
+  assert.match(before, /open\[d\.className\] = d\.open/, "snapshot each details' open state BEFORE the swap");
+  assert.match(after, /d\.open = open\[d\.className\]/, "reapply it AFTER the swap");
+  assert.match(after, /host\.scrollTop = top/, "and the scroll position");
+});
+
+test("clearing the filter gives the reader back the folds THEY had open", () => {
+  /* Searching opens every fold so a match cannot hide; clearing used to re-fold everything to a
+     "resting state" — which folded an expanded ON STAFF shut on every clear. The script must
+     remember the reader's own state when a search starts and restore it when it ends. */
+  const script = railScript();
+  assert.doesNotMatch(script, /d\.open = Boolean\(q\)/, "the blanket re-fold must be gone");
+  assert.match(script, /folded = details\.map\(\(d\) => d\.open\)/, "remember the folds when a search starts");
+  assert.match(script, /d\.open = fold\.folded\[i\]/, "restore them when it ends");
+});
+
+test("the remembered folds survive a repaint during the search", () => {
+  /* A model picked while a filter was on repainted the roster; the fold snapshot lived in the
+     closure that repaint re-bound, so the search's forced-open state was "restored" on clear —
+     History left open, ON STAFF pushed below the fold. The snapshot lives on the window. */
+  const script = railScript();
+  assert.match(script, /window\.__railFold = window\.__railFold \|\| \{ folded: null \}/);
+  assert.match(script, /d\.open = fold\.folded\[i\]/, "restore from the window-held snapshot");
+});
+
+test("a repaint waits while the reader's keyboard is on a row", () => {
+  /* Twelve trusted Tabs never reached a row. Each Tab stepped into the list, the ~1/s wholesale
+     swap destroyed the element under it, focus fell back to <body>, and the next Tab started over
+     from the first control — a loop. Putting focus back onto a row rescues focus already ON one;
+     it cannot rescue focus trying to ENTER. The repaint has to wait instead. */
+  const script = railScript();
+  assert.match(script, /window\.__railPending = m\.html/, "the newest roster is held, never dropped");
+  assert.match(script, /host\.contains\(act\)/, "deferred while focus is on a row inside the list");
+  assert.match(script, /"focusout"/, "and applied when the keyboard leaves");
+  assert.match(script, /host\.contains\(ev\.relatedTarget\)/, "row-to-row movement keeps waiting");
+  assert.match(script, /window\.addEventListener\("blur", flush\)/,
+    "and a backgrounded window catches up rather than freezing on a parked row");
+  // Three ways this could wedge, each closed: armed while the window was ALREADY blurred (blur
+  // would never fire again), a held roster applied into a node a re-render detached, and no
+  // backstop at all if neither event ever comes.
+  assert.match(script, /document\.hasFocus\(\)/, "never defer for a reader who is not there");
+  assert.match(script, /document\.querySelector\("\.wp-list"\) \|\| host/,
+    "flush re-queries the host rather than using the one it captured");
+  assert.match(script, /setTimeout\(flush, 30000\)/, "and a cap releases it regardless");
+});
+
+test("a roster row says WHICH kind of nothing it has, and never a bare blank", () => {
+  /* A visual critic caught these cells three separate rounds and no test held them. Three
+     different facts were being told with one sentence, or with none at all:
+       - a colleague with a measure shows it;
+       - a colleague whose model is simply not on the board says so;
+       - a colleague with NO model recorded inherits, and the vendor picks at spawn — printing
+         "no ranking places inherit" told 22 rows the wrong thing about a sentinel.
+     `railBody` is pure, so all three are checkable here rather than in a screenshot. */
+  const rail = buildRail(
+    [
+      { run_id: "a1", name: "tester", agent: "tester", status: "done", started_at: 1,
+        model: "claude-sonnet-5" },
+      { run_id: "b2", name: "scraper", agent: "scraper", status: "done", started_at: 2,
+        model: "some-unranked-model" },
+      { run_id: "c3", name: "advocate", agent: "advocate", status: "done", started_at: 3 },
+    ] as never[],
+    "", () => 0, undefined, undefined,
+    (r) => ({ id: (r as { agent?: string }).agent ?? "main", label: (r as { name: string }).name }),
+    Date.now(),
+  );
+  const html = railBody(
+    rail, voiceOf, (r) => conversationTitle(r as never),
+    (r) => ({ id: (r as { agent?: string }).agent ?? "main", label: (r as { name: string }).name }),
+    () => [],
+    (r) => ((r as { model?: string }).model === "claude-sonnet-5"
+      ? { text: "38.4 · 24th", title: "claude-sonnet-5 — aa.intelligence 38.4 · 24th of 450 scored" }
+      : undefined),
+    (r) => (r as { model?: string }).model,
+  );
+
+  assert.match(html, /38\.4 · 24th/, "a measured colleague shows its number");
+  assert.match(html, /aa\.intelligence 38\.4 · 24th of 450 scored/, "and the full sentence titles it");
+  // The two absences are DIFFERENT and must not share a sentence.
+  assert.doesNotMatch(html, /no ranking places inherit/,
+    "`inherit` is the sentinel for nothing-recorded, never a model name");
+  // The legend appears only once something carries a measure — it names the source, which
+  // otherwise exists nowhere at rest.
+  assert.match(html, /Artificial Analysis intelligence · one measure, not a verdict/);
+});
+
+test("every bucket that renders a row is one the roster asks about", () => {
+  /* `railBody` draws rows from FOUR collections — the live runs, your own sessions, the history
+     ledger and the staff fold — and two separate things only looked at the first. The legend
+     vanished exactly when rows had numbers; and the panel asked the ranking about one bucket's
+     models, so a colleague sitting in "on staff" was rendered with `no ranking places sonnet`
+     beside five `claude-sonnet-5` rows showing `38.4 · 24th`. One model, two answers, one screen.
+
+     Fixing the legend without fixing the ask was solving the instance instead of the class, so
+     the enumeration now lives in ONE place and both callers use it. */
+  const rail = {
+    runs: [{ run: { run_id: "a", model: "claude-sonnet-5" } }],
+    yours: [{ run: { run_id: "b", model: "gpt-6-astra" } }],
+    ledger: { done: 1, stopped: 0, failed: 0, cost: 0,
+              runs: [{ run: { run_id: "c", model: "claude-opus-5" } }] },
+    staff: [{ run: { run_id: "d", model: "sonnet" } }],
+  } as never;
+  assert.deepEqual(modelsOnScreen(rail).sort(),
+    ["claude-opus-5", "claude-sonnet-5", "gpt-6-astra", "sonnet"],
+    "a model is asked about wherever it is drawn, not only in the first collection");
+
+  // Absent buckets are ordinary, and a run with no model recorded is not a model.
+  assert.deepEqual(modelsOnScreen({ runs: [{ run: { run_id: "e" } }] } as never), []);
+});
+
+test("the roster renders in whichever of the three views you chose", () => {
+  /* "All views so we can chose and store in configs (cache) so it reuses the same next time."
+     One row model, three layouts: the view is a property of the CONTAINER, not of the row, so a
+     table, a card grid and today's grouped list are three CSS regimes over identical markup
+     rather than three renderers to keep in step. */
+  const built = { header: { scope: "interact", working: 0, needsYou: 0, finished: 0 },
+    chips: [], ledger: null,
+    runs: [{ run: { run_id: "r1", name: "tester", provider: "claude", status: "running",
+                    started_at: 100 },
+             attention: "working", brain: false, depth: 0, note: "working" }] } as never;
+  const of = (view: RosterView) => railBody(built, voiceOf as never,
+    (r: { name: string }) => r.name as never, (r: { name: string }) => ({ id: r.name, label: r.name }) as never,
+    () => [], () => undefined, () => undefined, view);
+
+  for (const view of ROSTER_VIEWS) {
+    const html = of(view.id);
+    assert.match(html, new RegExp(`class="roster view-${view.id}"`), `${view.id} names itself on the container`);
+    assert.match(html, new RegExp(`data-view="${view.id}"[^>]*aria-pressed="true"`),
+      `${view.id} reads as the current choice in the chooser`);
+    // Every view offers every other view, or a choice made once cannot be unmade.
+    for (const other of ROSTER_VIEWS) assert.match(html, new RegExp(`data-view="${other.id}"`));
+  }
+  // The row markup itself is identical across views — that is what makes them cheap.
+  const rowOf = (html: string) => html.slice(html.indexOf('<li class="row"'), html.indexOf("</li>"));
+  assert.equal(rowOf(of("table")), rowOf(of("grouped")));
+});
+
+test("each roster view brings a layout, not just a name", () => {
+  /* A chooser that changes a class and nothing else is a chooser that does nothing. */
+  const style = railStyle();
+  assert.match(style, /\.view-table [^{]*\.row \{[^}]*display: *grid/, "table aligns its columns");
+  assert.doesNotMatch(style, /view-cards/, "cards was removed for costing 1.735x the height");
+});
+
+test("the view class sits on an ancestor of the rows it restyles", () => {
+  /* VERDICT FAIL, round 45: `.rail` and `.runs` are SIBLINGS, so every `.view-table .runs .row`
+     rule could never match — the chooser set a class that styled nothing. The unit test that
+     passed asserted the class was PRESENT; presence is not containment. */
+  const built = { header: { scope: "interact", working: 0, needsYou: 0, finished: 0 },
+    chips: [], ledger: null,
+    runs: [{ run: { run_id: "r1", name: "tester", provider: "claude", status: "running",
+                    started_at: 100 },
+             attention: "working", brain: false, depth: 0, note: "working" }] } as never;
+  const html = railBody(built, voiceOf as never, (r: { name: string }) => r.name as never,
+    (r: { name: string }) => ({ id: r.name, label: r.name }) as never,
+    () => [], () => undefined, () => undefined, "table");
+  const open = html.indexOf('class="roster view-table"');
+  assert.ok(open >= 0, "a container carries the view");
+  assert.ok(open < html.indexOf('<ul class="runs"'), "and it OPENS before the rows it restyles");
+  assert.ok(html.trimEnd().endsWith("</div>"), "and closes around them");
+});
+
+test("table columns are fixed, so they line up down the whole list", () => {
+  /* Forcing the class on proved the rules otherwise sound but the columns still did not align:
+     `auto` tracks size per ROW, so each row picked its own widths — 8 distinct score-cell x
+     positions spread over 267px. Fixed trailing tracks make every row compute identically. */
+  const style = railStyle();
+  const rule = style.slice(style.indexOf(".view-table .runs .row"));
+  const cols = rule.slice(rule.indexOf("grid-template-columns"), rule.indexOf(";", rule.indexOf("grid-template-columns")));
+  assert.ok(!/\bauto\b/.test(cols), `trailing tracks must not be auto-sized: ${cols}`);
+  assert.match(style, /\.runs \.who \{[^}]*min-width/, "the name keeps a floor, never 0px");
+});
+
+test("a repaint waits for a reader on a ROW, never for the control that asked for it", () => {
+  /* Round 48, blocking, 30.2 s measured flip latency. The deferral exists so a live repaint does
+     not yank focus out of the list while someone is tabbing through ROWS. But it tested "focus is
+     anywhere inside .wp-list" — and the view chooser lives inside .wp-list, so clicking a view
+     focused the button, which deferred the very repaint that click had just requested. It read as
+     intermittent only because any unrelated click flushed the queue.
+
+     The guard belongs on what it was protecting: a focused ROW. */
+  const script = railScript();
+  assert.doesNotMatch(script, /host\.contains\(document\.activeElement\)/,
+    "containment in the list is too broad — the controls live there too");
+  assert.match(script, /closest\(["']li\.row["']\)/,
+    "defer only while the keyboard is on a row, which is what the deferral was for");
 });

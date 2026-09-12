@@ -180,6 +180,27 @@ def test_reap_drops_exited_apps_and_unlinks_logs():
         p.terminate()
 
 
+def test_close_kills_through_the_sweeps_and_forgets_its_apps(monkeypatch):
+    """#118: `close` was the only path that reached an app's helpers OUTSIDE its process group (the
+    display + profile sweeps) — it must share ONE kill path with `kill_apps`, and once torn down it
+    holds no app: it kept `_procs` populated, so a closed backend still claimed the apps it killed."""
+    nb = _bare_backend()
+    nb.display = ":88"
+    nb._video_sessions = {}
+    nb._xserver = type("X", (), {"poll": lambda self: None, "terminate": lambda self: None,
+                                 "wait": lambda self, timeout: 0})()
+    swept: list[tuple[str, bool]] = []
+    monkeypatch.setattr("interact.desktop.orphans.sweep_if_owned",
+                        lambda display, *, owned: swept.append((display, owned)) or [])
+    monkeypatch.setattr("interact.desktop.orphans.display_clients", lambda display: [])
+    monkeypatch.setattr("interact.launch.sandbox_profiles", lambda display: [])
+    proc = nb.spawn([sys.executable, "-c", "import time; time.sleep(30)"])
+    nb.close()
+    assert proc.poll() is not None
+    assert swept == [(":88", True)]
+    assert nb._procs == []
+
+
 # --- reset_sandbox tool ---
 
 

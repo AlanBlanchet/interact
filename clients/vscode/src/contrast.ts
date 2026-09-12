@@ -1,30 +1,29 @@
-/**
- * WCAG contrast over the workplace's own colour algebra.
+/** WCAG contrast over the workplace's own colour algebra.
  *
- * The workplace paints text on translucent plates that sit over room art, so a plate's
- * effective contrast is a COMPOSITE — it depends on what is behind it and on any opacity
- * applied to an ancestor. Two contrast defects shipped on this surface because that stack
- * was judged by eye (and once by a computed-style read, which cannot see an ancestor's
- * `opacity` at all). This module makes the stack computable so a test can hold the floor.
+ *  The workplace paints text on translucent plates that sit over room art, so a plate's
+ *  effective contrast is a COMPOSITE — it depends on what's behind it and on any opacity applied
+ *  to an ancestor. Two contrast defects shipped on this surface because that stack was judged by
+ *  eye (and once by a computed-style read, which can't see an ancestor's opacity at all). This
+ *  module makes the stack computable so a test can hold the floor.
  */
 
 export type Rgb = readonly [number, number, number];
 
 const clamp = (n: number): number => (n < 0 ? 0 : n > 255 ? 255 : n);
 
-/** `color-mix(in srgb, a <aPct>%, b)` — sRGB, the space the stylesheet mixes in. */
+/** color-mix(in srgb, a <aPct>%, b) — sRGB, the space the stylesheet mixes in. */
 export function mix(a: Rgb, b: Rgb, aPct: number): Rgb {
   const w = aPct / 100;
   return [0, 1, 2].map((i) => clamp(a[i] * w + b[i] * (1 - w))) as unknown as Rgb;
 }
 
-/** Source-over compositing: `fg` at `alpha` painted on opaque `bg`. */
+/** Source-over compositing: fg at alpha painted on opaque bg. */
 export function over(fg: Rgb, bg: Rgb, alpha: number): Rgb {
   return mix(fg, bg, alpha * 100);
 }
 
-/** `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa`. Alpha is parsed and dropped — these colours are
- *  composited explicitly by `over`, so silently treating "#fff8" as "#fff" (and its alpha as part
+/** #rgb, #rgba, #rrggbb and #rrggbbaa. Alpha is parsed and dropped — these colours are
+ *  composited explicitly by over, so silently treating "#fff8" as "#fff" (and its alpha as part
  *  of the red channel) would have quietly corrupted every ratio computed from it. */
 export function parseHex(hex: string): Rgb {
   const h = hex.replace("#", "").trim();

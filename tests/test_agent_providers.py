@@ -16,6 +16,128 @@ import pytest
 from interact.agents.events import AgentEvent
 from interact.agents.providers import PROVIDERS, ClaudeCodeProvider, CodexProvider, provider_for
 
+
+def test_codex_command_uses_the_effort_resolved_by_the_launcher():
+    command = CodexProvider().command(
+        "Reply once", cwd="/tmp", model="fixture-model", mcp_config=None,
+        run_id="fixture-run", reasoning="medium",
+    )
+    assert 'model_reasoning_effort="medium"' in command
+
+
+def test_codex_command_honors_the_requested_write_scope():
+    provider = CodexProvider()
+    command = provider.command(
+        "Edit the assigned file", cwd="/tmp", model="fixture-model", mcp_config=None,
+        run_id="fixture-run", permission_mode="workspace-write",
+    )
+    assert command[command.index("--sandbox") + 1] == "workspace-write"
+    with pytest.raises(ValueError, match="not a permission mode"):
+        provider.command(
+            "Edit the assigned file", cwd="/tmp", model="fixture-model", mcp_config=None,
+            run_id="fixture-run", permission_mode="invented-mode",
+        )
+
+
+def test_codex_image_support_is_verified_from_installed_help(monkeypatch):
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "executable", lambda: "/usr/bin/codex")
+
+    class _Help:
+        returncode = 0
+        stdout = "  -i, --image <FILE>...  Optional image(s)"
+
+    monkeypatch.setattr("interact.agents.providers.subprocess.run", lambda *a, **k: _Help())
+    assert provider.image_attachment_support() is True
+
+    _Help.stdout = "  -m, --model <MODEL>"
+    assert provider.image_attachment_support() is False
+
+
+def test_codex_command_emits_one_image_flag_per_attachment(monkeypatch, tmp_path):
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "image_attachment_support", lambda: True)
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.webp"
+    command = provider.command(
+        "Inspect", cwd="/tmp", model="fixture-model", mcp_config=None,
+        run_id="fixture-run", image_paths=(first, second),
+    )
+    assert command[-3:] == ["--image", str(first), str(second)]
+
+
+def test_unsupported_provider_refuses_image_attachments(tmp_path):
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+    with pytest.raises(ValueError, match="does not support image attachments"):
+        ClaudeCodeProvider().command(
+            "Inspect", cwd="/tmp", model="fixture-model", mcp_config=None,
+            run_id="fixture-run", image_paths=(image,),
+        )
+
+
+def test_codex_failed_command_is_a_tool_result_not_a_terminal_agent_failure():
+    event = CodexProvider().parse(json.dumps({
+        "type": "item.completed", "item": {
+            "id": "item_6", "type": "command_execution", "command": "pytest",
+            "aggregated_output": "1 failed", "exit_code": 1, "status": "completed",
+        },
+    }))
+    assert event is not None
+    assert event.kind == "tool_result" and event.status == "failed"
+    assert event.tool_id == "item_6" and event.text == "1 failed"
+
+
+def test_codex_command_start_exposes_the_actual_tool_and_command():
+    event = CodexProvider().parse(json.dumps({
+        "type": "item.started", "item": {
+            "id": "item_6", "type": "command_execution", "command": "pytest",
+            "status": "in_progress",
+        },
+    }))
+    assert event is not None
+    assert event.kind == "tool" and event.tool == "Shell"
+    assert event.tool_id == "item_6" and event.tool_input == "pytest"
+
+
+def test_codex_delivery_commands_use_the_vendor_thread_id():
+    provider = CodexProvider()
+    assert provider.queue_command("vendor-thread", "ping") == [
+        "codex", "queue", "--thread", "vendor-thread", "--message", "ping",
+    ]
+    resumed = provider.resume_command(
+        "vendor-thread", "ping", model="fresh-model", reasoning="high",
+        permission_mode="workspace-write",
+    )
+    assert resumed[:5] == ["codex", "exec", "resume", "vendor-thread", "ping"]
+    assert "--json" in resumed and "--model" in resumed
+    assert 'model_reasoning_effort="high"' in resumed
+    assert "--sandbox" not in resumed
+    assert 'sandbox_mode="workspace-write"' in resumed
+
+
+def test_codex_resume_injects_the_named_role_definition(monkeypatch, tmp_path):
+    root = tmp_path / "interact" / "prompts" / "agents"
+    root.mkdir(parents=True)
+    (root / "tester.md").write_text(
+        "---\nname: tester\n---\nAGENT_ROLE: tester\nDo the assigned check.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    resumed = CodexProvider().resume_command("vendor-thread", "continue", agent="tester")
+
+    assert resumed[4].startswith("AGENT_ROLE: tester\n")
+    assert "Do the assigned check." in resumed[4]
+    assert "Delegated task:\ncontinue" in resumed[4]
+
+
+def test_codex_thread_start_keeps_vendor_session_identity():
+    event = CodexProvider().parse(json.dumps({
+        "type": "thread.started", "thread_id": "vendor-thread",
+    }))
+    assert event is not None and event.session_id == "vendor-thread"
+
 FIXTURE = Path(__file__).parent / "fixtures" / "agents" / "claude_stream.jsonl"
 
 
@@ -198,7 +320,8 @@ def test_resume_continues_the_same_session_with_the_message():
 
 
 def test_a_provider_that_cannot_resume_says_so():
-    assert CodexProvider().can_resume is False
+    assert CodexProvider().can_resume is True
+    assert CodexProvider().can_queue is True
     assert ClaudeCodeProvider().can_resume is True
 
 
@@ -280,11 +403,15 @@ def test_no_definitions_directory_is_an_empty_list_not_an_error(tmp_path, monkey
     assert ClaudeCodeProvider().agent_definitions() == []
 
 
-def test_a_provider_that_has_no_such_concept_lists_nothing():
-    """Codex has no agent-definition files, so it must answer emptily rather than guess."""
-    from interact.agents.providers import CodexProvider
-
-    assert CodexProvider().agent_definitions() == []
+def test_codex_lists_installed_role_definitions(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    provider = CodexProvider()
+    assert provider.agent_definitions() == []
+    root = tmp_path / "interact/prompts/agents"
+    root.mkdir(parents=True)
+    (root / "tester.md").write_text("Verify the assigned change.")
+    assert provider.agent_definitions() == ["tester"]
+    assert provider.definition_path("tester") == root / "tester.md"
 
 
 # ── Context means CONTEXT ───────────────────────────────────────────────────────────────────
@@ -366,13 +493,10 @@ def test_definitions_command_is_silent_when_there_are_none(capsys, tmp_path, mon
 # the docs would produce.
 
 
-def test_a_provider_offers_no_permission_modes_unless_its_flags_are_verified():
-    """A provider whose real flag we have not checked offers nothing, rather than an invented one.
-
-    Passing a guessed flag to someone's CLI is worse than offering no control: the spawn fails, or
-    worse, silently runs with permissions nobody chose.
-    """
-    assert CodexProvider().permission_modes() == []
+def test_codex_offers_the_verified_bounded_sandbox_scopes():
+    modes = CodexProvider().permission_modes()
+    assert {mode.id for mode in modes} == {"read-only", "workspace-write"}
+    assert all(mode.label and mode.detail and not mode.unrestricted for mode in modes)
 
 
 def test_claude_offers_the_modes_its_binary_actually_accepts():
@@ -430,3 +554,14 @@ def test_a_tool_call_and_its_result_share_the_vendor_tool_id():
     answer = _parse({"type": "user", "session_id": "s", "message": {"content": [
         {"type": "tool_result", "tool_use_id": "toolu_42", "content": "a\nb"}]}})
     assert answer.tool_id == "toolu_42", "the result must carry the id that names its question"
+
+
+def test_codex_initial_and_resumed_delegates_cannot_bypass_shared_role_policy():
+    provider = CodexProvider()
+    commands = (
+        provider.command("Read", cwd="/tmp", model="fixture-model", mcp_config=None, run_id="fixture"),
+        provider.resume_command("fixture-session", "Continue", model="fixture-model"),
+    )
+    for command in commands:
+        assert "features.multi_agent=false" in command
+        assert "features.multi_agent_v2=false" in command

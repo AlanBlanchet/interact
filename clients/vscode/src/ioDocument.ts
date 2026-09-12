@@ -4,7 +4,7 @@
  *  Python on purpose (300 chars of arguments, 2000 of result), because a 50k dump is scrolled
  *  past, not read. The WHOLE thing lives in the run's raw stream, keyed by the vendor's
  *  tool_use id, and opens here in its own tab — the same read-only scheme discipline as
- *  `activityDocument.ts` (an untitled document would nag about saving a log nobody wrote).
+ *  activityDocument.ts (an untitled document would nag about saving a log nobody wrote).
  */
 
 export const IO_SCHEME = "interact-agent-io";

@@ -7,7 +7,7 @@ import litellm
 import pytest
 
 import interact.vision.core as v
-from interact.vision import VisionError
+from interact.vision.core import VisionError
 
 _MSGS = [{"role": "user", "content": [{"type": "text", "text": "what is this"}]}]
 # The shape litellm really hands back for #124: its own stacked prefixes, the provider's sentence,

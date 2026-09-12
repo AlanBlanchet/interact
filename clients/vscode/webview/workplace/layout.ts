@@ -24,7 +24,7 @@ export const FLOORS: readonly (readonly ZoneId[])[] = [
   ["idle", "entry"],
 ];
 
-/** Outside the building. Kept out of `FLOORS` because it is not a room and must not inherit a
+/** Outside the building. Kept out of FLOORS because it's not a room and must not inherit a
  *  room's walls. */
 export const OUTDOOR: ZoneId = "web";
 
@@ -38,7 +38,7 @@ export interface Pod {
   lead: Worker;
   /** The lead first, then everyone under them, breadth-first — the order they were sent out. */
   members: Member[];
-  /** `var(--wp-hN)`, taken from the lead's id so a pod keeps its colour across snapshots. */
+  /** var(--wp-hN), taken from the lead's id so a pod keeps its colour across snapshots. */
   accent: string;
 }
 
@@ -125,10 +125,10 @@ export interface Tally {
 
 /** The board by the door: how the shift is going.
  *
- *  `idle` is HELD — a run that is still open and has not moved for two minutes. It used to be
- *  counted across every status, which put finished and foreign runs in the count: a DONE run's
- *  idle clock is only how long ago it ended, and the desk never counted those. One rule, in
- *  status.ts, so the two panels cannot report different numbers for the same fact. */
+ *  idle is HELD — a run still open, not moved for two minutes. Used to be counted across every
+ *  status, putting finished and foreign runs in the count: a DONE run's idle clock is only how
+ *  long ago it ended, and the desk never counted those. One rule, in status.ts, so the two
+ *  panels can't report different numbers for the same fact. */
 export function tally(state: TeamState): Tally {
   const t: Tally = { running: 0, done: 0, error: 0, foreign: 0, idle: 0, cost: 0, projects: [] };
   const seen = new Set<string>();
@@ -147,7 +147,7 @@ export function tally(state: TeamState): Tally {
   return t;
 }
 
-/* ── who is talking to whom ───────────────────────────────────────────────────────────────── */
+/* ── who is talking to whom ── */
 
 /** A message between two workers, as the view needs it: a stable key so the same exchange is not
  *  re-announced on every refresh, and both ends guaranteed present (the registry filters those). */

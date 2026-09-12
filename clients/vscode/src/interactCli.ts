@@ -1,7 +1,7 @@
-/** One way to ask the `interact` CLI a question.
+/** One way to ask the interact CLI a question.
  *
  *  This call was written ten times across the extension with ten different levels of care — one
- *  set a timeout, none set `maxBuffer`, several dropped the error entirely. That divergence is not
+ *  set a timeout, none set maxBuffer, several dropped the error entirely. That divergence isn't
  *  cosmetic: a hung binary with no timeout leaves whatever guard the caller set stuck forever, and
  *  a swallowed error is indistinguishable from a legitimate empty answer, so a panel caches
  *  "nothing" and re-caches "nothing" every refresh with no line anywhere saying why.
@@ -19,7 +19,7 @@ export interface CliResult {
 }
 
 /** Ten seconds. Long enough for a cold start on a loaded machine, short enough that a wedged
- *  binary does not silently disable a feature until the window is closed. */
+ *  binary doesn't silently disable a feature until the window is closed. */
 const TIMEOUT_MS = 10_000;
 /** 8 MB. A registry answer is kilobytes; anything approaching this is a bug, and the default 1 MB
  *  truncates silently, which reads as corrupt output rather than as too much of it. */

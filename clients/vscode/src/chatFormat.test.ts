@@ -197,6 +197,38 @@ test("the transcript can be rendered on its own, for patching in", () => {
   assert.ok(!/<html|<body|<script/.test(html), "a fragment, not a document");
 });
 
+test("an unsupported external provider run keeps its history without offering a send route", () => {
+  const html = chatDocument({
+    nonce: "n", commands: [], turns: [{ kind: "text", text: "existing external history" }],
+    name: "Claude session", status: "foreign", readOnly: true,
+    run: { ...RUN, provider: "claude", kind: "provider_root", run_id: "external-1" },
+  });
+  assert.match(html, /existing external history/);
+  assert.match(html, /read.only|own session|cannot send/i);
+  assert.doesNotMatch(html, /data-route-id=.*claude/i,
+    "detecting an external provider must not invent a supported conversation route");
+});
+
+test("the Conversation gear opens the Interact settings workspace", () => {
+  const rendered = chatDocument({ nonce: "n", commands: [], turns: [], name: "agent",
+    status: "waiting", run: RUN });
+  assert.match(rendered, /id="openSettings"[^>]*>⚙/);
+  assert.match(rendered, /command: "interact\.openDashboard"/);
+});
+
+test("the answer stays primary while agent activity is a truthful collapsed disclosure", () => {
+  const rendered = chatDocument({ nonce: "n", commands: [], turns: [{ kind: "text", text: "visible answer" }],
+    name: "agent", status: "waiting", run: RUN, activity: [{ run: RUN, current_tool: null,
+      transcript: [], children: [], omitted_children: 0 }] });
+  assert.ok(rendered.indexOf("visible answer") < rendered.indexOf("Agent activity"));
+  assert.doesNotMatch(rendered, /No transcript reported yet/);
+  assert.match(rendered, /<details class="details"[^>]*><summary>about this agent<\/summary>/);
+  assert.doesNotMatch(rendered, /<details class="details"[^>]* open/);
+  assert.match(rendered, /<details class="activity-run"[^>]*>/);
+  assert.doesNotMatch(rendered, /<details class="activity-run"[^>]* open/);
+  assert.match(rendered, /<summary><span>[^<]+<\/span><b>[^<]+<\/b><\/summary>/);
+});
+
 test("the fragment carries the answering state too", () => {
   const html = transcriptFragment({ turns: [], name: "r", awaitingReply: true });
   assert.match(html, /answering/i);

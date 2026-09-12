@@ -348,10 +348,9 @@ body {
   position: absolute;
   left: 6px; top: 7px;
   width: 12px; height: 12px;
-  /* Round, because a punched hole is. It is the one curve in a panel of hard edges and it earns
-     the exception: a 12px square filled with the rod gradient read as a BUTTON, not as steel seen
-     through paper. The fill is the rod's own gradient at the rod's own x-offset, so it is
-     pixel-identical to seeing the rod through the hole. */
+  /* Round, because a punched hole is — the one curve in a panel of hard edges, earning the
+     exception: a 12px square filled with the same gradient read as a BUTTON, not as steel seen
+     through paper. */
   border-radius: 50%;
   background: var(--sp-rod-fill);
   box-shadow:

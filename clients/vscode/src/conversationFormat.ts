@@ -37,8 +37,6 @@ export interface Turn {
   to_run?: string | null;
 }
 
-/** Escape for HTML text AND attribute contexts. The webview's CSP blocks inline scripts, but a
- *  broken-out tag would still wreck the layout — and a tool result is arbitrary bytes. */
 /* ── the small subset of Markdown agents actually write ────────────────────────────────────────
  *
  *  Agents write in Markdown by habit — bold for emphasis, backticks for a path, a dash list for
@@ -201,6 +199,8 @@ export function renderMarkdown(escaped: string): string {
   return renderMarkdownBlocks(escaped).join("");
 }
 
+/** Escape for HTML text AND attribute contexts. The webview's CSP blocks inline scripts, but a
+ *  broken-out tag would still wreck the layout — and a tool result is arbitrary bytes. */
 export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -306,18 +306,6 @@ function messageLabel(turn: Turn): string {
   return `from ${from}`;
 }
 
-/** One turn as HTML. A tool call leads with its NAME and carries its arguments beneath, because
- *  the name alone ("used Bash") is the status line the tree already shows. */
-/** A command and what it returned, as ONE box.
- *
- *  "We can't see IN/OUT when an agent uses a command like in claude code in a box." They used to
- *  render as two unrelated blocks — a wrench and some arguments, then, somewhere below, a separate
- *  block of output with nothing saying it was the answer to the first, and nothing naming which
- *  was which.
- *
- *  Both halves stay VERBATIM inside `<pre>`: a command is not prose, and tool output is some
- *  program's bytes, where `# comment` is a shell comment and a pipe-shaped line is not a table.
- */
 /** The tools that ACT ON A FILE, each with the verb a person would say. */
 const FILE_TOOLS: Record<string, string> = {
   Edit: "edited", Write: "wrote", Read: "read", NotebookEdit: "edited",
@@ -386,6 +374,14 @@ function gistOf(input: string): string {
   return input.split("\n")[0];
 }
 
+/** A command and what it returned, as ONE box.
+ *
+ *  "We can't see IN/OUT when an agent uses a command like in claude code in a box." They used to
+ *  render as two unrelated blocks — a wrench and some arguments, then, somewhere below, a separate
+ *  block of output with nothing saying it was the answer to the first, and nothing naming which
+ *  was which. Both halves stay VERBATIM inside a pre: a command is not prose, and tool output is
+ *  some program's bytes, where a # line is a shell comment and a pipe-shaped line is not a table.
+ */
 /** A tool call as ONE resting row — "⌕ Bash · npm test · ✓ 41 lines".
  *
  *  "bash isn't well shown (not enough vertical spacing, too much text shown...)" — the box used
@@ -458,6 +454,8 @@ function toolBox(call: Turn, answer: Turn | undefined, path: string | null = nul
     `</div></details>`;
 }
 
+/** One turn as HTML. A tool call leads with its NAME and carries its arguments beneath, because
+ *  the name alone ("used Bash") is the status line the tree already shows. */
 export function renderTurn(turn: Turn): string {
   const cls = turnClass(turn.kind);
   if (turn.kind === "tool") {
@@ -570,7 +568,6 @@ export function renderTranscript(turns: Turn[]): string {
  *  agent's name, its output, and a tool result are all arbitrary bytes from a file or a web page.
  */
 
-/** Shown when nothing is selected — a blank panel reads as broken rather than as ready. */
 /** What an empty panel says. It used to point at "the list above" — a surface that no longer
  *  exists there (the roster moved to the Team tab), so a first-timer stared at 740px of void with
  *  directions to a place that was not on the map. An empty state must be a DOOR, not a caption. */
@@ -1067,13 +1064,13 @@ function activityNode(view: ConversationActivityView, depth: number): string {
     `<dt>${escapeHtml(String(label))}</dt><dd>${escapeHtml(String(value))}</dd>`).join("");
   const transcript = view.transcript.length
     ? `<div class="activity-transcript">${renderTranscript(view.transcript)}</div>`
-    : '<p class="activity-empty">No transcript reported yet.</p>';
+    : '<p class="activity-empty">No additional activity transcript.</p>';
   const omitted = view.omitted_children
     ? `<p class="activity-omitted">${view.omitted_children} earlier child runs omitted from this summary. ` +
       `Open Team or session navigation to inspect every run.</p>`
     : "";
   return `<details class="activity-run" data-run="${escapeHtml(run.run_id)}" data-depth="${depth}"` +
-    `${depth === 0 ? " open" : ""}>
+    `>
       <summary><span>${escapeHtml(run.name)}</span><b>${escapeHtml(run.status ?? "unknown")}</b></summary>
       <dl>${details}</dl>${transcript}
       ${view.children.map((child) => activityNode(child, depth + 1)).join("")}${omitted}
@@ -1094,9 +1091,9 @@ function activityTree(
     ? `<p class="billing-summary" aria-label="${escapeHtml(billing.ariaSummary)}"><b>${escapeHtml(billing.heading)}</b>: ` +
       `${billing.lines.map((line) => escapeHtml(line.text)).join("; ")}</p>`
     : "";
-  return `<section class="activity-tree" aria-label="Agent activity">
-    <h2>Agent activity</h2>${spendRow}${billingSummary}${activity.map((view) => activityNode(view, 0)).join("")}
-  </section>`;
+  return `<details class="activity-tree"><summary>Agent activity</summary>
+    ${spendRow}${billingSummary}${activity.map((view) => activityNode(view, 0)).join("")}
+  </details>`;
 }
 
 /** The live-patched portion around a transcript.  Keeping it separate lets child/approval events
@@ -1134,7 +1131,8 @@ export function chatDocument(
     // the label-lie class the professional sweep hunts (ux-critic LOW).
     ? `<header><div class="head-row"><button class="back" id="back" title="Close this conversation">← Close</button>${up}` +
       `<span class="who">${escapeHtml(name)}</span>` +
-      `<span class="status">${escapeHtml(status ?? "")}</span></div>` +
+      `<span class="status">${escapeHtml(status ?? "")}</span>` +
+      `<button type="button" class="settings" id="openSettings" title="Interact settings">⚙</button></div>` +
       (facts.length ? `<div class="facts">${facts.join("")}</div>` : "") +
       `</header>`
     : "";
@@ -1142,8 +1140,7 @@ export function chatDocument(
     ? `<p class="pending">${escapeHtml(name ?? "the agent")} is answering…</p>`
     : "";
   const body = name
-    ? renderDetails(run, files, sentBy, spend) +
-      `<div id="conversation-activity">${conversationActivityFragment(activity, consoleState, billing, spend)}</div>`
+    ? renderDetails(run, files, sentBy, spend)
     : consoleState
       ? consolePicker(consoleState) +
         `<div id="conversation-activity">${approvalCards(consoleState.approvals)}${activityTree(activity, billing, spend)}</div>`
@@ -1151,6 +1148,9 @@ export function chatDocument(
         `<button class="door" id="openTeam">Open the Team</button>` +
         `<p class="hint-sub">Pick a character or a roster row there to talk to it.</p></div>`;
   const transcript = name ? renderTranscript(turns) + pending : "";
+  const activityAfterTranscript = name
+    ? `<div id="conversation-activity">${conversationActivityFragment(activity, consoleState, billing, spend)}</div>`
+    : "";
   // The panel could only SEND. Everything else you might want to do with the agent you are
   // reading — stop it, start another, open the team, change workspace — lived in a tree context
   // menu or the command palette. All three reference tools put this behind a slash menu in the
@@ -1225,7 +1225,7 @@ export function chatDocument(
 <body>
 ${header}
 ${renderTabs(tabs ?? [])}
-<main id="transcript">${body}<div id="transcript-content">${transcript}</div></main>
+<main id="transcript">${body}<div id="transcript-content">${transcript}</div>${activityAfterTranscript}</main>
 ${composer}
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
@@ -1235,6 +1235,9 @@ const vscode = acquireVsCodeApi();
     if (door) door.addEventListener("click", () => vscode.postMessage({ type: "openTeam" }));
     const back = document.getElementById("back");
     if (back) back.addEventListener("click", () => vscode.postMessage({ type: "back" }));
+    const settings = document.getElementById("openSettings");
+    if (settings) settings.addEventListener("click", () =>
+      vscode.postMessage({ type: "command", command: "interact.openDashboard" }));
     // A tab switches the panel to that colleague's own conversation — and back to the entry
     // agent, which is what the first tab is for.
     document.addEventListener("click", (e) => {
@@ -1592,7 +1595,14 @@ window.addEventListener("message", (event) => {
   const msg = event.data;
   if (!msg || msg.type !== "transcript" || !main || !transcriptContent) return;
   const wasAtBottom = atBottom();
+  const expandedTools = new Set(Array.from(
+    transcriptContent.querySelectorAll("details.turn-tool[open][data-tool-id]"),
+    (node) => node.getAttribute("data-tool-id"),
+  ).filter(Boolean));
   transcriptContent.innerHTML = msg.html;
+  transcriptContent.querySelectorAll("details.turn-tool[data-tool-id]").forEach((node) => {
+    if (expandedTools.has(node.getAttribute("data-tool-id"))) node.open = true;
+  });
   follow(wasAtBottom);
 });
 window.addEventListener("message", (event) => {
@@ -1876,6 +1886,9 @@ const STYLE = `
   .tool-ok { color: var(--vscode-charts-green, #89d185); }
   .tool-bad { color: var(--vscode-charts-red, #f48771); font-weight: 700; }
   .tool-live { color: var(--wp-dim); animation: blink 1.2s steps(1) infinite; }
+  body.vscode-reduce-motion .tab-live,
+  body.vscode-reduce-motion .pending::after,
+  body.vscode-reduce-motion .tool-live { animation: none !important; }
   .tool-peek { border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border, #808080) 60%, transparent); }
   .turn-tool .io {
     display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2233,7 +2246,7 @@ export function renderDetails(
   const links = (files ?? []).length
     ? `<div class="grid files">${(files ?? []).map(fileLink).join("")}</div>`
     : "";
-  return `<details class="details" open><summary>about this agent</summary>
+  return `<details class="details"><summary>about this agent</summary>
     <div class="grid">${table}</div>${brief}${links}</details>`;
 }
 

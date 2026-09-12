@@ -1,33 +1,32 @@
-/** The rail: what the panel shows at rest, decided without a `vscode` import.
+/** The rail: what the panel shows at rest, decided without a vscode import.
  *
- *  This is the chosen replacement for the tree + chat split, and the reason it must be a webview
- *  rather than a `TreeView` is measured, not stylistic: VS Code hides a view's title actions until
- *  the pointer enters the header (`.pane-header > .actions { display: none }`) and CLIPS the
- *  overflow with no "…" menu to recover from. So a resting panel rendered ZERO buttons, and the
- *  team view — the thing most worth reaching — could only be found by hovering and guessing among
- *  unlabelled glyphs. No arrangement of icons fixes that inside a tree, at any width. A webview
- *  draws its own chrome, which can simply be visible.
+ *  Chosen replacement for the tree + chat split. Must be a webview rather than a TreeView for a
+ *  measured reason, not a stylistic one: VS Code hides a view's title actions until the pointer
+ *  enters the header (.pane-header > .actions { display: none }) and CLIPS overflow with no "…"
+ *  menu to recover from. A resting panel rendered ZERO buttons, and the team view — the thing
+ *  most worth reaching — could only be found by hovering and guessing among unlabelled glyphs. No
+ *  arrangement of icons fixes that inside a tree, at any width. A webview draws its own chrome,
+ *  which can simply be visible.
  *
- *  Two decisions live here, and they are what make this a SUPERVISION surface rather than a list:
+ *  Two decisions live here, making this a SUPERVISION surface rather than a list:
  *
- *  - the roster is ordered by WHO NEEDS YOU, not by identity. With a couple of dozen seats and ten
- *    runs, alphabetical order buries the one thing that went wrong somewhere in the middle;
- *  - the destinations are LABELLED. An icon you have to hover to identify is not a destination,
- *    it is a guess.
+ *  - roster ordered by WHO NEEDS YOU, not identity. With a couple dozen seats and ten runs,
+ *    alphabetical order buries the one thing that went wrong somewhere in the middle;
+ *  - destinations are LABELLED. An icon you have to hover to identify is not a destination, it's
+ *    a guess.
  */
 
 import type { AgentRun } from "./agents";
 
-/** How long a running agent may say nothing before it is worth your attention. The same threshold
- *  the workplace uses for a stalled worker — one number, or the two surfaces disagree about the
- *  word "stuck". */
-/** Mirrors `HELD_AFTER_SECONDS` in `statusLanguage.ts`, which is the rule's home.
+/** How long a running agent may say nothing before it's worth your attention — the same
+ *  threshold the workplace uses for a stalled worker, one number, or the two surfaces disagree
+ *  about the word "stuck". Mirrors HELD_AFTER_SECONDS in statusLanguage.ts, the rule's home.
  *
- *  It is duplicated rather than imported for one mechanical reason: this module is loaded DIRECTLY
- *  by `node --test`, which cannot resolve an extensionless sibling import, and tsc will not emit
- *  the `.ts` specifier that loader needs. So the value is mirrored and the EQUALITY is enforced by
- *  a test — the divergence is what actually hurts (the roster calling someone stuck while the
- *  world still shows them working), not the second `const`.
+ *  Duplicated rather than imported for one mechanical reason: this module is loaded DIRECTLY by
+ *  node --test, which can't resolve an extensionless sibling import, and tsc won't emit the .ts
+ *  specifier that loader needs. So the value is mirrored and EQUALITY enforced by a test — the
+ *  divergence that actually hurts is the roster calling someone stuck while the world still
+ *  shows them working, not the second const.
  */
 export const HELD_SECONDS = 120;
 
@@ -46,9 +45,9 @@ export interface RailRun {
   /** How many errands this row stands for. Above 1 only at the top level, where a row is an
    *  AGENT — the same unit the map draws — and the worst of its errands speaks for it. */
   tasks?: number;
-  /** The agent's WHOLE bill in scope — every errand, current and aged. The same figure the
-   *  world badges, because the speaking run's own cost beside the world's sum was "one panel,
-   *  two truths": code-reviewer read $2.31 in the rail and $4.28 in the room. */
+  /** The agent's WHOLE bill in scope — every errand, current and aged. Same figure the world
+   *  badges: the speaking run's own cost beside the world's sum was "one panel, two truths" —
+   *  code-reviewer read $2.31 in the rail, $4.28 in the room. */
   cost?: number;
   /** 0 for a lead, 1 for somebody a lead sent out. The rail cannot replace the tree until it
    *  shows the COMPANY rather than a flat list — a sub-agent floating loose beside its lead tells
@@ -60,8 +59,8 @@ export interface RailRun {
 
 /** What a run needs from you right now.
  *
- *  `foreign` sorts last deliberately: one of your own editor sessions is not the team's work, and
- *  you cannot act on it from here, so it must never outrank an agent that actually stopped.
+ *  foreign sorts last deliberately: one of your own editor sessions is not the team's work, and
+ *  you can't act on it from here, so it must never outrank an agent that actually stopped.
  */
 export function attentionOf(run: AgentRun, idleSeconds: number, awaitingReply = false): Attention {
   if (run.status === "foreign") return "not-ours";
@@ -99,18 +98,15 @@ export interface RailChip {
   command: string;
 }
 
-/** The destinations — always visible, always named.
- *
- *  Deliberately few. The old title bar carried seven actions and clipped the seventh at every
- *  width; the fix is not a smaller icon, it is fewer destinations with words on them.
- */
-/** Where this panel can send you.
+/** The destinations — always visible, always named, deliberately few. Old title bar carried
+ *  seven actions and clipped the seventh at every width; the fix isn't a smaller icon, it's
+ *  fewer destinations with words on them.
  *
  *  Two, not four. "The sidepanel is there to view info about who we click on, and view the
- *  conversation... That's all." The dashboard and the sequence view are their own surfaces and stay
- *  in the command palette; a 299px column whose job is the roster and the reply should not spend a
- *  fifth of its header being a launcher for them. What survives is the world you watch and the way
- *  to start someone new — the two things you cannot do anywhere else.
+ *  conversation... That's all." Dashboard and sequence view are their own surfaces, staying in
+ *  the command palette; a 299px column whose job is the roster and the reply shouldn't spend a
+ *  fifth of its header as a launcher for them. What survives: the world you watch, and the way
+ *  to start someone new — the two things you can't do anywhere else.
  */
 export const CHIPS: RailChip[] = [
   { id: "team", label: "Team", command: "interact.agents.team" },
@@ -140,13 +136,13 @@ export interface Rail {
   runs: RailRun[];
   /** Declared colleagues with nothing current — the company at rest, named and quiet. */
   staff?: RailRun[];
-  /** Your OWN editor sessions — the real work this machine is doing right now. They were
-   *  dropped entirely once ("agents that are greyed out"), and that was half right: they do not
-   *  belong INTERLEAVED with the team as grey dead rows. But hiding them hid the company —
-   *  "I don't have a view just like in claude code... of agent building things" — so they stand
-   *  in their own band, titled by project, each opening its transcript. */
+  /** Your OWN editor sessions — the real work this machine is doing right now. Dropped entirely
+   *  once ("agents that are greyed out"), which was half right: they don't belong INTERLEAVED
+   *  with the team as grey dead rows. But hiding them hid the company — "I don't have a view
+   *  just like in claude code... of agent building things" — so they stand in their own band,
+   *  titled by project, each opening its transcript. */
   yours?: RailRun[];
-  /** Terminal work older than `RECENT_SECONDS`, folded to one expandable line. */
+  /** Terminal work older than RECENT_SECONDS, folded to one expandable line. */
   ledger?: RailLedger | null;
   /** The agent whose conversations you are looking at, if you have gone into one. An agent is a
    *  ROLE — you can hold many conversations with it — so "inside tester" is a real place in this
@@ -165,19 +161,13 @@ const NOTES: Record<Attention, string> = {
   "not-ours": "your own session",
 };
 
-/** The whole rail, from the runs in scope.
- *
- *  `idleOf` and `awaitingReply` are passed in rather than read here, so this module stays free of
- *  the filesystem and of `vscode` — the same discipline as `agentsFormat.ts`, and what lets every
- *  decision below be tested without an extension host.
- */
-/** The orchestrator: the earliest ROOT run that is ours — the first agent you asked for
+/** The orchestrator: the earliest ROOT run that's ours — the first agent you asked for
  *  something, which then put the others to work.
  *
- *  DUPLICATED from `teamState.ts` on purpose, and the duplication is pinned by a test that runs
- *  both against the same input. Neither module can import the other: both are loaded directly by
- *  the test runner, which demands ".ts" specifiers that tsc refuses to emit, so a shared import
- *  would make one of them untestable. Six lines copied beats a module that cannot be tested.
+ *  DUPLICATED from teamState.ts on purpose, pinned by a test that runs both against the same
+ *  input. Neither module can import the other: both load directly under the test runner, which
+ *  demands ".ts" specifiers tsc refuses to emit, so a shared import would make one untestable.
+ *  Six lines copied beats a module that can't be tested.
  */
 export function brainOf(runs: readonly AgentRun[], nowSeconds?: number): string | null {
   // The crown EXPIRES. Earliest-root-ever left an 8-day-old smoke probe wearing "the agent you
@@ -198,27 +188,30 @@ export function brainOf(runs: readonly AgentRun[], nowSeconds?: number): string 
         && r.run_id.localeCompare(first.run_id) < 0) ? r : first).run_id;
 }
 
+/** The whole rail, from the runs in scope.
+ *
+ *  idleOf and awaitingReply are passed in rather than read here, so this module stays free of
+ *  the filesystem and of vscode — same discipline as agentsFormat.ts, letting every decision
+ *  below be tested without an extension host.
+ */
 export function buildRail(
   runs: readonly AgentRun[],
   scope: string,
   idleOf: (run: AgentRun) => number,
   awaitingReply: (run: AgentRun) => boolean = () => false,
-  /** Narrow to one agent's conversations. Applied FIRST, so counts, leads and reports all describe
-   *  the thing you are actually looking at rather than the team behind it. */
+  /** Narrow to one agent's conversations. Applied FIRST, so counts, leads and reports all
+   *  describe the thing you're actually looking at, not the team behind it. */
   filter?: { agent: string; roleOf: (run: AgentRun) => string },
   /** WHO holds each run. When present and NOT drilled in, the roster GROUPS: one row per agent,
    *  exactly the unit the map draws — the cold sweep's root coherence finding was one sprite per
-   *  role beside sixteen run-rows, with nothing reconciling them. */
+   *  role beside sixteen run-rows, nothing reconciling them. */
   identify?: (run: AgentRun) => { id: string; label: string },
   /** The clock, when the host wants HISTORY folded away: terminal runs older than
-   *  `RECENT_SECONDS` leave the list for the ledger. Absent (tests, hosts that want it all),
-   *  nothing ages. The owner's own panel is why this exists: it rested on seven 8-day-old
-   *  smoke probes rendered as the team. */
+   *  RECENT_SECONDS leave the list for the ledger. Absent (tests, hosts that want it all),
+   *  nothing ages — see RECENT_SECONDS above for why that matters. */
   nowSeconds?: number,
 ): Rail {
-  // Your own editor sessions get their own band rather than interleaving with the team — they
-  // were greyed dead rows once and he told us so; but dropping them entirely hid the actual
-  // company. See `Rail.yours`.
+  // Own editor sessions get their own band, not interleaved with the team — see Rail.yours.
   const yoursRuns = filter ? [] : runs.filter((r) => r.status === "foreign");
   const held = runs.filter((r) => r.status !== "foreign");
   const inScope = filter ? held.filter((r) => filter.roleOf(r) === filter.agent) : held;
@@ -233,8 +226,8 @@ export function buildRail(
   let rows: RailRun[];
   if (identify && !filter) {
     // One row per AGENT. The errand that most needs him speaks for the row (same rule as the
-    // map's characters), and the count carries the rest; drilling in lists them individually.
-    // Only CURRENT errands speak — a week-old crash must not outshout today's work.
+    // map's characters); count carries the rest, drilling in lists them individually. Only
+    // CURRENT errands speak — a week-old crash must not outshout today's work.
     const byAgent = new Map<string, AgentRun[]>();
     for (const run of fresh) {
       const { id } = identify(run);
@@ -300,10 +293,10 @@ export function buildRail(
   }
 
   const brainId = brainOf(runs, nowSeconds);
-  // Leads sort by ATTENTION, not by rank. Pinning the brain to the top was tried and reverted:
-  // it contradicts what this surface is for — an agent that crashed outranks the orchestrator
-  // quietly working, and burying the crash under a healthy boss is the sort this replaced. The
-  // brain is MARKED instead, so you can find it without it displacing what needs you.
+  // Leads sort by ATTENTION, not rank. Pinning the brain to the top was tried and reverted — it
+  // contradicts what this surface is for: an agent that crashed outranks the orchestrator
+  // quietly working, and burying a crash under a healthy boss is the sort this replaced. Brain
+  // is MARKED instead, findable without displacing what needs you.
   const leads = rows.filter(isLead).sort(byAttention);
 
   const ordered: RailRun[] = [];
@@ -359,16 +352,8 @@ export function buildRail(
   };
 }
 
-/** What the webview asked for, or null.
- *
- *  The rail renders agent output, so every message arriving FROM it is untrusted. A command is
- *  accepted only if the rail actually OFFERS it — not merely because it is one of ours and not
- *  because it exists: running an arbitrary command id because a message named it is a real hole,
- *  and the chat view already validates the same way. Anything unrecognised produces null, which
- *  the caller ignores; guessing at a malformed message is how a webview becomes an exec surface.
- */
-/** The commands a ROW may run. Mirrors `agentActions.ts` and is pinned to it by a test — the two
- *  cannot import each other under the test loader, and an allowlist that drifts from the buttons
+/** The commands a ROW may run. Mirrors agentActions.ts and is pinned to it by a test — the two
+ *  can't import each other under the test loader, and an allowlist drifting from the buttons
  *  either breaks a control or admits one nobody offered. */
 const ROW_COMMANDS = new Set([
   "interact.agents.send",
@@ -397,6 +382,14 @@ export type RailAction =
  *  states the answer it changes. Allow-listed here so the webview can ask for it by name. */
 export const SCOPE_COMMAND = "interact.agents.workspace";
 
+/** What the webview asked for, or null.
+ *
+ *  The rail renders agent output, so every message arriving FROM it is untrusted. A command is
+ *  accepted only if the rail actually OFFERS it — not because it's one of ours or because it
+ *  exists: running an arbitrary command id because a message named it is a real hole, and the
+ *  chat view already validates the same way. Anything unrecognised produces null, which the
+ *  caller ignores; guessing at a malformed message is how a webview becomes an exec surface.
+ */
 export function railAction(message: unknown): RailAction | null {
   if (!message || typeof message !== "object") return null;
   const msg = message as { type?: unknown; command?: unknown; runId?: unknown };
@@ -424,8 +417,8 @@ export function railAction(message: unknown): RailAction | null {
 /** What to do with a message from the webview.
  *
  *  Lives here beside the validation rather than in the provider, so the part that can silently
- *  execute the wrong thing is testable without an extension host — the provider imports `vscode`
- *  and cannot be loaded by the test runner at all.
+ *  execute the wrong thing is testable without an extension host — the provider imports vscode
+ *  and can't be loaded by the test runner at all.
  */
 export interface RailHandlers {
   run: (command: string) => void;

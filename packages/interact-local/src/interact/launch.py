@@ -38,8 +38,8 @@ _SHELL_MARKERS = ("&&", "||", ";", "|", ">", "<", "$(", "`")
 
 def needs_shell(command: str) -> bool:
     """True when a launch command uses shell syntax (`cd X && app`, pipes, redirects, command
-    substitution) that must run via ``bash -c`` rather than raw exec. A quoted argument that merely
-    CONTAINS a marker also routes through bash — harmless, bash parses the quotes identically."""
+    substitution) that must run via ``bash -c`` rather than raw exec. A quoted argument merely
+    CONTAINING a marker also routes through bash — harmless, bash parses quotes identically."""
     return command.lstrip().startswith("cd ") or any(m in command for m in _SHELL_MARKERS)
 
 
@@ -74,12 +74,12 @@ def _argv_executable(argv: list[str]) -> str | None:
 def split_env_assignments(argv: list[str]) -> tuple[dict[str, str], list[str]]:
     """Peel the leading ``VAR=value`` tokens off a command into the environment they mean.
 
-    ``FOO=bar app --x`` is shell phrasing for "run ``app --x`` with FOO set", but it carries no
+    ``FOO=bar app --x`` is shell phrasing for "run ``app --x`` with FOO set", but carries no
     shell marker, so it reached exec verbatim and ``Popen(["FOO=bar", "app"])`` died with
-    ``FileNotFoundError: 'FOO=bar'`` (#117). Splitting it here keeps the command on the exec path,
-    so the launch rewrites still apply (a ``bash -c`` launch would bypass them). An explicit ``env``
-    prefix is left whole — the ``env`` binary applies its own assignments. Returns ``(env, argv)``;
-    an assignments-only command leaves argv empty for the caller to refuse."""
+    ``FileNotFoundError: 'FOO=bar'`` (#117). Splitting it here keeps the command on the exec
+    path, so launch rewrites still apply (a ``bash -c`` launch would bypass them). An explicit
+    ``env`` prefix is left whole — the ``env`` binary applies its own assignments. Returns
+    ``(env, argv)``; an assignments-only command leaves argv empty for the caller to refuse."""
     env: dict[str, str] = {}
     rest = list(argv)
     while rest and _ENV_ASSIGNMENT_RE.match(rest[0]):
@@ -89,11 +89,12 @@ def split_env_assignments(argv: list[str]) -> tuple[dict[str, str], list[str]]:
 
 
 def _flutter_software_render(argv: list[str]) -> tuple[list[str], str]:
-    """A Flutter Linux bundle's GPU compositing — notably a `BackdropFilter`/blur (a `ConvexAppBar`
-    blurred bottom bar) — renders as a solid black strip under the sandbox's software GL (llvmpipe),
-    so the nav is invisible and untappable (#28). Flutter's Skia CPU rasteriser bypasses GL entirely
-    and renders it correctly, so add `--enable-software-rendering` for a detected Flutter bundle.
-    Idempotent; a no-op for non-Flutter commands. Returns (argv, note-for-the-result)."""
+    """A Flutter Linux bundle's GPU compositing — notably a `BackdropFilter`/blur (a
+    `ConvexAppBar` blurred bottom bar) — renders as a solid black strip under the sandbox's
+    software GL (llvmpipe), so the nav is invisible and untappable (#28). Flutter's Skia CPU
+    rasteriser bypasses GL entirely and renders it correctly, so add
+    `--enable-software-rendering` for a detected Flutter bundle. Idempotent; no-op for
+    non-Flutter commands. Returns (argv, note-for-the-result)."""
     if "--enable-software-rendering" in argv:
         return argv, ""
     exe = _argv_executable(argv)
@@ -116,11 +117,11 @@ def _flutter_software_render(argv: list[str]) -> tuple[list[str], str]:
 
 
 def _browser_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
-    """Give a known browser command a sandbox-local profile so it starts a REAL instance inside the
-    sandbox instead of delegating to the user's running browser (the singleton escape above).
-    The profile dir is stable per (display, browser): a relaunch reuses it and may join the
-    in-sandbox instance — which is isolated, so that's correct. A caller who already picked a
-    profile (--user-data-dir / --profile / -P) is left alone. Returns (argv, note-for-the-result)."""
+    """Give a known browser command a sandbox-local profile so it starts a REAL instance inside
+    the sandbox instead of delegating to the user's running browser (the singleton escape
+    above). Profile dir is stable per (display, browser): a relaunch reuses it and may join the
+    in-sandbox instance — isolated, so that's correct. A caller who already picked a profile
+    (--user-data-dir / --profile / -P) is left alone. Returns (argv, note-for-the-result)."""
     exe = _argv_executable(argv)
     if not exe:
         return argv, ""
@@ -147,9 +148,9 @@ def _browser_isolate(argv: list[str], display: str) -> tuple[list[str], str]:
     return [*argv[: exe_i + 1], *inject, *argv[exe_i + 1:]], note
 
 
-# Electron editors with a SINGLETON: launching one while an instance is already running hands the
-# request to that instance, which opens a window on the USER'S desktop. The sandbox then sits
-# empty with no error — the same escape `_browser_isolate` closes for browsers, and just as
+# Electron editors with a SINGLETON: launching one while an instance is already running hands
+# the request to that instance, opening a window on the USER'S desktop. The sandbox then sits
+# empty with no error — the same escape `_browser_isolate` closes for browsers, just as
 # invisible. Matched on the executable basename.
 _EDITORS = ("code", "code-insiders", "codium", "vscodium", "cursor", "windsurf")
 
@@ -185,9 +186,9 @@ def sandbox_profiles(display: str) -> list[Path]:
 def _prepare_profile(profile: Path) -> None:
     """Make a sandbox profile usable before an app is pointed at it.
 
-    Every isolated launch goes through here — browser and editor alike — so a fix to one cannot
-    silently miss the other; clearing the lock only for editors left Chromium, which is what
-    `SingletonLock` is actually named after, still broken.
+    Every isolated launch goes through here — browser and editor alike — so a fix to one can't
+    silently miss the other; clearing the lock only for editors left Chromium (what
+    `SingletonLock` is actually named after) still broken.
     """
     profile.mkdir(parents=True, exist_ok=True)
     _clear_stale_locks(profile)
@@ -196,10 +197,10 @@ def _prepare_profile(profile: Path) -> None:
 def _clear_stale_locks(profile: Path) -> None:
     """Remove a singleton lock whose owning process is gone.
 
-    The profile is keyed per DISPLAY and OUTLIVES it: tearing the sandbox down takes the editor's
-    processes but leaves the lock file naming a pid that no longer exists. The next launch then
-    finds a lock it cannot join and exits without ever mapping a window — the sandbox just looks
-    empty, and nothing in any log says why.
+    The profile is keyed per DISPLAY and OUTLIVES it: tearing the sandbox down takes the
+    editor's processes but leaves the lock file naming a pid that no longer exists. The next
+    launch then finds a lock it can't join and exits without ever mapping a window — the
+    sandbox just looks empty, nothing in any log says why.
 
     Only a lock we can PROVE is dead is removed; an unreadable or unparseable one is left alone.
     """

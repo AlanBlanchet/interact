@@ -49,30 +49,30 @@ def wait_for_device(
     lister: Callable[[], str] | None = None,
 ) -> bool:
     """Block until the X server LISTS an input device called ``name``. Returns True once it does,
-    False if the wait ran out or X could not be asked.
+    False if the wait ran out or X couldn't be asked.
 
     A uinput node exists the moment ``UI_DEV_CREATE`` returns, but X and libinput only learn about
-    it later, through udev — and every event written in that window is discarded by the kernel with
-    no error whatsoever. Because ``key()`` writes the MODIFIERS first, they are what falls in the
-    gap; the target key follows a moment later, once the device is attached, and lands alone.
+    it later, through udev — every event written in that window is discarded by the kernel with no
+    error. Because ``key()`` writes the MODIFIERS first, they fall in the gap; the target key
+    follows a moment later, once the device is attached, and lands alone.
 
     That mechanism is real and worth closing here. It is NOT, however, established as the cause of
     #115, and an earlier version of this docstring claimed it was. Independent verification found
     the gap: this runs only from ``UinputPointer.__init__``, which only ``LocalBackend`` ever
     constructs — while #115 was reported driving the NESTED sandbox, whose backend routes every
     key through ``xdotool`` and never builds a pointer at all. So this code cannot execute on the
-    path the bug was reported from. Eight fresh nested trials also failed to reproduce the symptom
-    (the modifier landed every time), which leaves #115 either intermittent or mis-attributed to
-    the nested path. Treat it as OPEN; if a dropped chord reappears there, ``nested.py``'s xdotool
-    path is the place to look, not this one.
+    path the bug was reported from. Eight fresh nested trials also failed to reproduce it (the
+    modifier landed every time), leaving #115 either intermittent or mis-attributed to the nested
+    path. Treat it as OPEN; if a dropped chord reappears there, ``nested.py``'s xdotool path is
+    the place to look, not this one.
 
-    Waiting on the CONDITION rather than a guessed sleep is what makes this both correct and free:
-    it returns the instant the device is really there, and it cannot silently under-wait on a slow
-    box the way a fixed delay does.
+    Waiting on the CONDITION rather than a guessed sleep makes this both correct and free: returns
+    the instant the device is really there, and can't silently under-wait on a slow box the way a
+    fixed delay does.
 
-    Never raises. No X server, no `xinput`, or a wait that times out all return False and let
+    Never raises. No X server, no `xinput`, or a timed-out wait all return False and let
     injection proceed — a missing wait degrades to today's behaviour instead of breaking input on
-    machines where the check cannot run at all.
+    machines where the check can't run at all.
     """
     deadline = time.monotonic() + timeout
     look = lister or _xinput_names
@@ -105,14 +105,14 @@ def screen_to_abs(
 def kernel_input_device_names() -> list[str]:
     """Names of every input device the KERNEL currently exposes, read from sysfs.
 
-    The display-server-agnostic way to confirm a uinput device was created. ``xinput list`` cannot
-    do this job: under a Wayland session it enumerates only XWayland's own X11 devices, so a real,
-    working ``interact-virtual-pointer`` is invisible there and a check built on it fails on a
-    Wayland host while the device is perfectly fine (#79). Sysfs is populated by the kernel at
-    ``UI_DEV_CREATE``, identically under Xorg and Wayland, and needs no root.
+    The display-server-agnostic way to confirm a uinput device was created. ``xinput list``
+    can't do this job: under a Wayland session it enumerates only XWayland's own X11 devices,
+    so a real, working ``interact-virtual-pointer`` is invisible there and a check built on it
+    fails on a Wayland host while the device is perfectly fine (#79). Sysfs is populated by the
+    kernel at ``UI_DEV_CREATE``, identically under Xorg and Wayland, needs no root.
 
     (Confirming libinput has *claimed* the device is a further step — `libinput list-devices`,
-    which needs root. Creation is what a test can assert unprivileged.)
+    needs root. Creation is what a test can assert unprivileged.)
     """
     names: list[str] = []
     for path in sorted(glob.glob("/sys/class/input/event*/device/name")):
@@ -152,10 +152,10 @@ class XdotoolKeyError(RuntimeError):
 
 
 # Names interact accepts (and the uinput backend maps happily) that are NOT X keysyms. xdotool
-# resolves through XStringToKeysym, which is case-sensitive: `Return` exists, `enter` does not.
-# Handed an unknown name it prints "No such key name" and EXITS 0, so the key vanishes and the
-# caller is told it worked — the silent no-op behind #115's "confusing failure mode". Modifiers
-# are absent on purpose: ctrl/shift/alt/super are xdotool's own aliases and already resolve.
+# resolves through XStringToKeysym, case-sensitive: `Return` exists, `enter` does not. Handed
+# an unknown name it prints "No such key name" and EXITS 0, so the key vanishes and the caller
+# is told it worked — the silent no-op behind #115's "confusing failure mode". Modifiers are
+# absent on purpose: ctrl/shift/alt/super are xdotool's own aliases and already resolve.
 _XDOTOOL_KEYSYMS = {
     "enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape",
     "tab": "Tab", "backspace": "BackSpace", "bksp": "BackSpace", "delete": "Delete",
@@ -179,9 +179,9 @@ _XDOTOOL_MODS = {
 def to_xdotool_key(name: str) -> str:
     """Translate a key or chord into names X actually knows.
 
-    Only the FINAL key is translated — the modifiers in a chord are xdotool's own aliases and
-    resolve already. A name that is a keysym stays untouched (never mangle a caller who speaks X),
-    and a bare letter stays as it is, since `A` means shift+a to X while `a` means the letter.
+    Only the FINAL key is translated — chord modifiers are xdotool's own aliases and resolve
+    already. A name that's a keysym stays untouched (never mangle a caller who speaks X), and a
+    bare letter stays as-is, since `A` means shift+a to X while `a` means the letter.
     """
     mods, final = _parse_chord(name)
     mapped = _XDOTOOL_KEYSYMS.get(final.lower())
@@ -243,9 +243,9 @@ class UinputPointer:
             ) from exc
 
         self._ecodes = ecodes
-        # Set BEFORE the device is opened, so the guard below can never silently no-op: it used to
-        # read through a getattr default, which meant it did nothing at all wherever the attribute
-        # was missing — including in most of its own tests.
+        # Set BEFORE the device is opened, so the guard below can never silently no-op: it used
+        # to read through a getattr default, doing nothing wherever the attribute was missing —
+        # including in most of its own tests.
         self._declared = set(_keyboard_codes(ecodes))
         self.screen_w, self.screen_h, self.abs_max = screen_w, screen_h, abs_max
         capabilities = {
@@ -269,11 +269,11 @@ class UinputPointer:
             # confuses libinput's classification — so typing/keys get their own device.
             self._kbd = UInput({ecodes.EV_KEY: sorted(self._declared)},
                                name="interact-virtual-keyboard")
-            # Both nodes must be ATTACHED before anyone writes to them. The kernel accepts events
-            # into a device X has not picked up yet and drops them silently: the modifiers of a
-            # first chord are written first, so they are what lands in that window and vanishes.
-            # Waiting here (once, on the condition) makes the first chord as reliable as the
-            # hundredth. Pointer too — same race, same silent loss, just harder to notice.
+            # Both nodes must be ATTACHED before anyone writes to them. The kernel accepts
+            # events into a device X hasn't picked up yet and drops them silently: a first
+            # chord's modifiers are written first, so they're what lands in that window and
+            # vanishes. Waiting here (once, on the condition) makes the first chord as reliable
+            # as the hundredth. Pointer too — same race, same silent loss, harder to notice.
             # NB: this path is LocalBackend-only; the nested sandbox drives xdotool instead.
             wait_for_device("interact-virtual-keyboard")
             wait_for_device("interact-virtual-pointer")
@@ -340,18 +340,19 @@ class UinputPointer:
     def key(self, name: str) -> None:
         """Press a key or chord.
 
-        Each transition gets its own SYN frame, which is what real hardware does: the modifier is
-        latched, then the key arrives.
+        Each transition gets its own SYN frame, what real hardware does: the modifier latches,
+        then the key arrives.
 
-        It is NOT the explanation for #115, and an earlier version of this docstring said it was.
-        The theory was that an atomic frame lets the key be evaluated against the modifier state
-        from before it — but ``type_text`` below writes shift-down, key-down, key-up, shift-up and
-        a SINGLE ``syn()``, and typing capitals is this module's most exercised path. If the theory
-        held, every uppercase character would be broken. So the framing here is correctness for its
-        own sake and costs nothing (frames are delimiters, not transactions); the cause of a
-        declared chord arriving unmodified is still unconfirmed. The candidate not yet excluded is
-        a settle race: X and libinput learn about the uinput node through udev AFTER
-        ``UI_DEV_CREATE``, and events written before that are dropped with no error.
+        It is NOT the explanation for #115, and an earlier version of this docstring said it
+        was. The theory was that an atomic frame lets the key be evaluated against the modifier
+        state from before it — but ``type_text`` below writes shift-down, key-down, key-up,
+        shift-up and a SINGLE ``syn()``, and typing capitals is this module's most exercised
+        path. If the theory held, every uppercase character would be broken. So the framing
+        here is correctness for its own sake and costs nothing (frames are delimiters, not
+        transactions); the cause of a declared chord arriving unmodified is still unconfirmed.
+        The candidate not yet excluded is a settle race: X and libinput learn about the uinput
+        node through udev AFTER ``UI_DEV_CREATE``, events written before that are dropped with
+        no error.
 
         Shared chord split with the portable backend via _parse_chord.
         """

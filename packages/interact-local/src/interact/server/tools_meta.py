@@ -47,11 +47,11 @@ async def _subscription_provider_state(provider: AgentProvider) -> dict:
 
 @mcp.tool()
 async def report_issue(title: str, body: str, kind: str = "bug") -> str:
-    """Report a problem, missing capability, or feedback about INTERACT ITSELF — not the site/app
-    you're automating — to its maintainers, so it gets fixed. Use it when interact errors in a way
-    that blocks you, behaves unexpectedly, or is missing something you needed.
+    """Report a problem, missing capability, or feedback about INTERACT ITSELF — not the
+    site/app you're automating — to its maintainers, so it gets fixed. Use when interact errors
+    in a way that blocks you, behaves unexpectedly, or is missing something you needed.
 
-    Files a GitHub issue on interact's repo when gh is authed; otherwise it opens the prefilled
+    Files a GitHub issue on interact's repo when gh is authed; otherwise opens the prefilled
     issue page in the user's browser (they just press Submit — tell them). Don't include
     secrets/credentials; interact appends its version + platform itself.
     kind: bug | limitation | feedback.
@@ -65,8 +65,8 @@ async def report_issue(title: str, body: str, kind: str = "bug") -> str:
 async def list_providers() -> str:
     """Return subscription visual CLIs, API/local providers, and current configuration.
 
-    Use this to discover what models can be passed as the 'model' override
-    to get_interactive_elements and screenshot tools.
+    Use to discover what models can be passed as the 'model' override to
+    get_interactive_elements and screenshot tools.
     """
     from interact.server.core import config
     config.refresh()
@@ -149,8 +149,8 @@ async def list_providers() -> str:
     }
 
     # An agent picking a model over MCP cannot see the user's daemon, so name what it actually
-    # serves — otherwise the only discoverable models are the ones baked into the catalog. Memoised
-    # by the load_registry call above, so this is a dict lookup rather than a second round trip.
+    # serves — otherwise the only discoverable models are the ones baked into the catalog.
+    # Memoised by the load_registry call above, so this is a dict lookup, not a second round trip.
     from interact import ollama
 
     served = ollama.serving()

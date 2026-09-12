@@ -107,8 +107,12 @@ test("the guard covers every file that carries an embedded source", () => {
   // The list version missed sim.ts — the file that then broke the build. Discovery is what keeps
   // a new embedded source from being unguarded simply because nobody remembered it.
   const covered = sheets();
+  // index.ts emits its HTML from a PLAIN template, so a String.raw-only predicate could not
+  // see it — and it is the file that broke the build twice in one afternoon on backticks inside
+  // its comments. The defect belongs to "comment inside an open template", which no tag confers.
   for (const expected of ["webview/workplace/sim.ts", "webview/workplace/motion.ts",
-    "webview/workplace/style.ts", "src/conversationFormat.ts"]) {
+    "webview/workplace/style.ts", "src/conversationFormat.ts",
+    "webview/workplace/index.ts", "src/railHtml.ts"]) {
     assert.ok(covered.some((f) => f.replace(/\\/g, "/").endsWith(expected)),
       `${expected} is not guarded (covered: ${covered.join(", ")})`);
   }
@@ -120,4 +124,22 @@ test("the shipping sources are clean", () => {
     const hits = find(readFileSync(full, "utf8"));
     assert.deepEqual(hits, [], `${file}: backtick in a comment at line(s) ${hits.join(", ")}`);
   }
+});
+
+test("the live reduced-motion body class stops Chat and Team animation clocks", () => {
+  const chat = readFileSync(join(here, "conversationFormat.ts"), "utf8");
+  const dashboard = readFileSync(join(here, "..", "webview", "styles.css"), "utf8");
+  const workplace = readFileSync(join(here, "..", "webview", "workplace", "style.ts"), "utf8");
+
+  assert.match(chat, /body\.vscode-reduce-motion[\s\S]*?animation:\s*none\s*!important/);
+  assert.match(dashboard, /body\.vscode-reduce-motion[\s\S]*?animation:\s*none\s*!important/);
+  assert.match(workplace, /body\.vscode-reduce-motion[\s\S]*?animation:\s*none\s*!important/);
+});
+
+test("an open workplace follows later reduced-motion body class changes", () => {
+  const motion = readFileSync(join(here, "..", "webview", "workplace", "motion.ts"), "utf8");
+
+  assert.match(motion, /MutationObserver/);
+  assert.match(motion, /vscode-reduce-motion/);
+  assert.match(motion, /TICK\.on\s*=\s*!still/);
 });

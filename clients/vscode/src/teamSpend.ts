@@ -5,7 +5,7 @@
  *  whether the agent in front of you is a large part of it.
  *
  *  Cost here is an API-equivalent value only; it does not establish provider charge or account
- *  impact. The typed `charge_path` and `cost_certainty` facts own those billing semantics.
+ *  impact. The typed charge_path and cost_certainty facts own those billing semantics.
  */
 export interface TeamSpendRun {
   run_id: string;
@@ -18,7 +18,7 @@ export interface TeamSpend {
   total: number | null;
   agents: number;
   running: number;
-  /** The open agent's share, or null when its own cost is not known — `null` is unknown, not
+  /** The open agent's share, or null when its own cost is not known — null is unknown, not
    *  zero, and reporting 0% would assert that this agent is free. */
   sharePercent: number | null;
 }

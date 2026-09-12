@@ -105,7 +105,10 @@ body {
    them in one narrow column. */
 #cell-consumption {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  /* `minmax(310px, …)` is a FLOOR, and a floor cannot shrink: below 366px the three 310px cells
+     pushed the document itself sideways. `min(310px, 100%)` keeps the same comfortable width
+     wherever there is room and yields the panel's own width where there is not. */
+  grid-template-columns: repeat(auto-fit, minmax(min(310px, 100%), 1fr));
   gap: 14px 28px;
   align-items: start;
 }
@@ -521,6 +524,11 @@ svg .donut-empty {
 
 .board {
   --id-w: 252px;
+  /* The measure gets a real column of its own. It lived on the name line and starved to
+     "44.4 · …" on every lane, because the identity column was pinned while the timeline beside it
+     ran wide at barely one percent ink. A column that aligns is also what lets the numbers be read
+     DOWN the board, which is the whole of "trust one agent more than another". */
+  --score-w: 150px;
   --meta-w: 112px;
   --lane-h: 38px;
   --board-grid: var(--vscode-charts-lines, var(--vscode-widget-border, rgba(128, 128, 128, 0.22)));
@@ -529,7 +537,7 @@ svg .donut-empty {
 
 .board-row {
   display: grid;
-  grid-template-columns: var(--id-w) minmax(0, 1fr) var(--meta-w);
+  grid-template-columns: var(--id-w) var(--score-w) minmax(0, 1fr) var(--meta-w);
   align-items: center;
   column-gap: 14px;
 }
@@ -629,6 +637,10 @@ svg .donut-empty {
 .group-control {
   display: flex;
   align-items: center;
+  /* It WRAPS. Four segments plus a label want ~296px and the control refused to give any of it
+     back, so below ~340px the whole document scrolled sideways to accommodate one toolbar. */
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 3px;
   margin-left: auto;
   padding: 3px;
@@ -830,6 +842,24 @@ svg .ribbon-line {
 }
 
 /* ---- one lane ---- */
+
+.board-score-col {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: .8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* NEUTRAL on every status, like the name beside it. Inheriting the lane's status hue printed the
+     same 44.4 in red on crashed lanes and green on done ones — a traffic-light verdict on the
+     MODEL, which is exactly what every tooltip here denies. A run's outcome is not its model's. */
+  color: var(--vscode-editor-foreground);
+}
+/* Not a number and not a gap: the ranking simply does not place this model. Legible on purpose —
+   at .35 the dash measured 2.0:1 against the background and read as an empty cell, which is the
+   very thing it was added to prevent. */
+.score-none { opacity: .78; }
 
 .lane {
   height: var(--lane-h);
@@ -1213,6 +1243,18 @@ svg .g-fill {
   }
 }
 
+body.vscode-reduce-motion .hero-pulse,
+body.vscode-reduce-motion .hero-pulse::after,
+body.vscode-reduce-motion .bar-sweep,
+body.vscode-reduce-motion .bar-running .bar-cap,
+body.vscode-reduce-motion .doing-pip,
+body.vscode-reduce-motion .lane-running .glyph,
+body.vscode-reduce-motion svg .empty-slot,
+body.vscode-reduce-motion .bar,
+body.vscode-reduce-motion .barlist-fill {
+  animation: none !important;
+}
+
 /* Provider chip: colour lives in the border + dot, text uses the theme foreground so it clears
    the contrast floor in BOTH themes (chart hues as 10px text failed AA on light). */
 .chip-provider { color: var(--vscode-foreground); }
@@ -1223,4 +1265,16 @@ svg .g-fill {
   border-radius: 50%;
   margin-right: 4px;
   vertical-align: baseline;
+}
+.prompt-workspace textarea {
+  box-sizing: border-box;
+  display: block;
+  min-height: 14rem;
+  resize: vertical;
+  width: 100%;
+}
+
+.prompt-workspace > label {
+  display: block;
+  margin-block: .55rem;
 }

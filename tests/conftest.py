@@ -17,6 +17,12 @@ import pytest
 # `INTERACT_*` var that config.env does not define, and any test whose code path refreshes config
 # (every `@instrumented` MCP tool does) would silently re-enable discovery for the REST of the run.
 os.environ.setdefault("OLLAMA_DISCOVERY", "0")
+
+# Same reason, same timing: the registry is rescored from the live Artificial Analysis board AT
+# LOAD, and importing `interact.runtime` loads it before any fixture can run. A developer box with
+# a real fetch would give the suite different scores from CI — and did. Empty means "no board"; a
+# test that wants one passes its own path to `live_scores`.
+os.environ.setdefault("BENCHMARK_SCORES", "")
 # Unit tests retain the historical mocked-LiteLLM default.  Production Config defaults to the
 # subscription session path; the explicit test override prevents an old test that patches only
 # `_vision_completion` from launching the user's real Claude/Codex login by accident.

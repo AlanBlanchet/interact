@@ -269,8 +269,8 @@ class VisionError(Exception):
 # ``APIConnectionError``). The catch-all is openai's ``APIError``, not litellm's: every litellm
 # exception subclasses its OPENAI counterpart (litellm's documented contract), so
 # ``litellm.RateLimitError`` is a SIBLING of ``litellm.exceptions.APIError`` under
-# ``openai.APIError``, never its child — a catch-all keyed on litellm's class misses every 429 /
-# 5xx / timeout. So an unlisted provider error still gets the ERROR: shape and the way out.
+# ``openai.APIError``, never its child — a catch-all keyed on litellm's class misses every
+# 429/5xx/timeout. So an unlisted provider error still gets the ERROR: shape and the way out.
 _PROVIDER_FAULTS: dict[type[Exception], str] = {
     litellm.exceptions.RateLimitError: "is rate-limited or out of credits",
     litellm.exceptions.AuthenticationError: "rejected the API key",

@@ -1,11 +1,11 @@
 """One normalised event shape across every agent provider.
 
-Each vendor CLI streams its own JSON dialect; the supervisor and the dashboard must not learn all
-of them. Providers translate into :class:`AgentEvent`, so a Claude run and a Codex run render
-identically and a new provider costs one adapter, not a new UI.
+Each vendor CLI streams its own JSON dialect; supervisor and dashboard must not learn all of
+them. Providers translate into :class:`AgentEvent`, so a Claude run and a Codex run render
+identically, and a new provider costs one adapter, not a new UI.
 
-An unrecognised line becomes ``kind="other"`` rather than being dropped — a vendor adding an
-event type must never make a run look idle.
+Unrecognised line becomes ``kind="other"`` rather than dropped — a vendor adding an event type
+must never make a run look idle.
 """
 
 from collections.abc import Mapping
@@ -14,10 +14,10 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 EventKind = Literal[
-    "started",     # the session is up (its id, cwd and tools are known)
+    "started",     # session is up (id, cwd, tools known)
     "text",        # the agent said something
-    "thinking",    # the model's own reasoning, kept distinct so a reader can fold it away
-    "tool",        # the agent used a tool — the live "what is it doing" line
+    "thinking",    # model's own reasoning, kept distinct so a reader can fold it away
+    "tool",        # agent used a tool — the live "what is it doing" line
     "tool_result", # what that tool gave back
     "message",     # one agent addressing another — the edge in a sequence/graph view
     "rate_limit",  # the account's pooled limit spoke; a run can die here
@@ -135,23 +135,23 @@ class AgentEvent(BaseModel):
     text: str = ""
     session_id: str | None = None
     tool: str | None = None
-    #: A compact rendering of the tool's arguments. A conversation view showing "used Bash" without
-    #: the command is a status line, not a transcript — this is what makes it readable.
+    #: Compact rendering of the tool's arguments. A view showing "used Bash" without the
+    #: command is a status line, not a transcript — this is what makes it readable.
     tool_input: str = ""
-    #: The vendor's tool_use id, carried on BOTH the call and its result. The summarised event is
-    #: clipped by design; this is the stable key a viewer uses to pull the FULL input/output for
-    #: one call out of the raw stream — prefix-matching breaks on two identical commands.
+    #: Vendor's tool_use id, carried on BOTH the call and its result. Summarised event is
+    #: clipped by design; this is the stable key a viewer uses to pull the FULL input/output
+    #: for one call out of the raw stream — prefix-matching breaks on two identical commands.
     tool_id: str = ""
-    #: For a "message": which run sent it and which received it. Both sides record the same
+    #: For a "message": which run sent it, which received it. Both sides record the same
     #: exchange, so a sequence view can draw the arrow from either transcript.
     from_run: str | None = None
     to_run: str | None = None
-    #: Where this sits in the vendor's raw stream — for a MESSAGE, how many raw lines existed when
-    #: it was sent. The vendor writes no timestamps, so this is what lets a message be shown where
-    #: it actually happened instead of dumped after every reply it caused.
+    #: Where this sits in the vendor's raw stream — for a MESSAGE, how many raw lines existed
+    #: when sent. Vendor writes no timestamps, so this lets a message show where it actually
+    #: happened, not dumped after every reply it caused.
     raw_index: int | None = None
-    # API-equivalent cost estimates usage value, not billed spend. Charge path and account impact
-    # remain separate typed facts; subscription usage may be included, limited, credited, or charged.
+    # API-equivalent cost estimates usage VALUE, not billed spend. Charge path and account
+    # impact remain separate typed facts; subscription usage may be included, limited, credited, or charged.
     cost_usd: float | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -159,14 +159,14 @@ class AgentEvent(BaseModel):
     raw_type: str = ""
     interaction: ConversationInteraction | None = None
     status: EventStatus | None = None
-    #: True when a terminal event itself carries the provider's final response (Claude structured
-    #: output), rather than only a stop reason.  Media execution must prefer this over an earlier
-    #: free-form assistant block.
+    #: True when a terminal event itself carries the provider's final response (Claude
+    #: structured output), not only a stop reason. Media execution must prefer this over an
+    #: earlier free-form assistant block.
     final_text: bool = False
-    #: When interact FIRST OBSERVED this line, not when the agent produced it — the vendor writes
-    #: no timestamp, but we watch the stream, so this is the one clock that is honestly available.
-    #: It is what lets a view tell an agent that is working from one that has stopped, order a
-    #: conversation, and fire a message animation once at the right moment instead of guessing.
+    #: When interact FIRST OBSERVED this line, not when the agent produced it — vendor writes
+    #: no timestamp, we watch the stream, so this is the one honestly-available clock. Lets a
+    #: view tell a working agent from a stopped one, order a conversation, and fire a message
+    #: animation once at the right moment instead of guessing.
     at: float | None = None
 
     def summary(self, viewer: str | None = None) -> str:
@@ -192,10 +192,10 @@ class AgentEvent(BaseModel):
     def _message_summary(self, viewer: str | None) -> str:
         """A message, from the reading agent's point of view.
 
-        This used to render "→ <to_run>" always, so a message the agent RECEIVED showed an arrow
+        Used to render "→ <to_run>" always, so a message the agent RECEIVED showed an arrow
         pointing at its own id — indistinguishable from the agent-to-agent traffic the panel
-        exists to show, while showing none of it. Direction is relative to whoever is reading, and
-        the other end is named rather than hashed.
+        exists to show, while showing none of it. Direction is relative to whoever is reading;
+        the other end is named, not hashed.
         """
         body = (self.text or "")[:80]
         if not self.to_run:
@@ -208,19 +208,19 @@ class AgentEvent(BaseModel):
 
 
 def _who(run_id: str | None) -> str:
-    """A run's name, for a reader. "operator" is a person, not a run; an id we cannot resolve
-    falls back to its short form rather than a bare empty string.
+    """A run's name, for a reader. "operator" is a person, not a run; an id we can't resolve
+    falls back to its short form, not a bare empty string.
 
-    Reads the stored record DIRECTLY rather than going through ``list_runs``: that derives each
-    run's `last` line, which summarises an event, which asks who it was from — a loop that
-    recursed until the stack ran out.
+    Reads the stored record DIRECTLY, not through ``list_runs``: that derives each run's
+    `last` line, which summarises an event, which asks who it was from — a loop that recursed
+    until the stack ran out.
     """
     if not run_id:
         return "?"
     if run_id == "operator":
         return "operator"
-    # Deliberately local: registry imports AgentEvent from this module, so a module-level import
-    # would create the events <-> registry cycle before either side had declared its models.
+    # Deliberately local: registry imports AgentEvent from this module, so a module-level
+    # import would create the events<->registry cycle before either side declared its models.
     from interact.agents import registry as reg
 
     run = reg._read_record(run_id)

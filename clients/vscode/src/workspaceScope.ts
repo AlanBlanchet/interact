@@ -22,8 +22,8 @@ const PACKAGE_MARKERS = ["pyproject.toml", "package.json", "Cargo.toml", "go.mod
 
 /** The project a directory belongs to — the enclosing REPOSITORY, by name.
  *
- *  Deliberately the same rule as `interact.agents.registry.project_for`, which is what actually
- *  stamps `project` onto a run. If these two ever disagree, the panel filters on a name the
+ *  Deliberately the same rule as interact.agents.registry.project_for, which is what actually
+ *  stamps project onto a run. If these two ever disagree, the panel filters on a name the
  *  registry never wrote and the folder you have open appears to have no agents at all.
  */
 export function projectFor(dir: string): string {
@@ -59,13 +59,39 @@ export function scopeRuns(
   runs: readonly AgentRun[],
   scope: Scope,
   currentProject: string,
+  workspaceFolders: readonly string[] = [],
 ): AgentRun[] {
   if (scope.kind === "all") return [...runs];
   const wanted = scope.kind === "project" ? scope.name : currentProject;
   // No folder open, or one that resolves to nothing: scoping would hide every agent and leave an
   // empty panel that looks broken rather than filtered.
   if (!wanted) return [...runs];
+  if (scope.kind === "current" && workspaceFolders.length > 0) {
+    const roots = workspaceFolders.map(resolvePath);
+    return runs.filter((run) => {
+      // A parent workspace can contain several repositories, each with its own project name. The
+      // run's cwd is the only value that can answer whether it belongs to this folder tree.
+      const cwd = run.cwd;
+      if (cwd) return roots.some((root) => isWithin(root, cwd));
+      // Older/foreign records can lack cwd; retain the previous project-name fallback for those.
+      return run.project === wanted;
+    });
+  }
   return runs.filter((r) => r.project === wanted);
+}
+
+function resolvePath(value: string): string {
+  try {
+    return fs.realpathSync(path.resolve(value));
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, resolvePath(candidate));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative));
 }
 
 /** What the panel is showing, in the words the title bar uses. */
@@ -84,10 +110,9 @@ export interface ScopeChoice {
 
 /** What the workspace switcher offers, in order.
  *
- *  The folder you have open comes first because it is what you want nearly every time; "all"
- *  second because it is the other habitual answer; then every other workspace that has agents,
- *  which is the case he actually hit — a team running in a checkout he was not in, with no way to
- *  go and look at it.
+ *  The folder you have open comes first — it's what you want nearly every time; "all" second,
+ *  the other habitual answer; then every other workspace that has agents, the case he actually
+ *  hit — a team running in a checkout he wasn't in, with no way to go and look at it.
  */
 export function scopeChoices(runs: readonly AgentRun[], currentProject: string): ScopeChoice[] {
   const out: ScopeChoice[] = [];

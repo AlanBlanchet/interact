@@ -41,7 +41,7 @@ from interact.models import (
     ModelSpec,
     ProviderSpec,
 )
-from interact.vision.usage import UsageEntry
+from interact.vision.usage_records import UsageEntry
 
 __all__ = [
     "AgentEvent",

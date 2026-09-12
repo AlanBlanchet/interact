@@ -54,11 +54,11 @@ class InteractiveElement(Element):
     @classmethod
     def _remap_dimensions(cls, values):
         """Normalise raw DOM-scan geometry at construction — the boundary where browser JS dicts
-        enter. Accept ``width``/``height`` as aliases for ``w``/``h``, and round sub-pixel
-        coordinates to pixel ints: ``getBoundingClientRect`` returns fractional px (e.g.
-        ``y=364.390625``) but ``Element.{x,y,w,h}`` are ints, so passing the float straight
-        through crashed ``get_interactive_elements`` with a strict-int validation error. Resolve
-        here once rather than letting floats reach (and fail) the field validators."""
+        enter. Accept ``width``/``height`` as aliases for ``w``/``h``, round sub-pixel coordinates
+        to pixel ints: ``getBoundingClientRect`` returns fractional px (e.g. ``y=364.390625``) but
+        ``Element.{x,y,w,h}`` are ints, so the float straight through once crashed
+        ``get_interactive_elements`` with a strict-int validation error. Resolve here once rather
+        than letting floats reach (and fail) the field validators."""
         if isinstance(values, dict):
             if "width" in values and "w" not in values:
                 values["w"] = values.pop("width")
@@ -142,9 +142,9 @@ def bytes_to_b64(data: bytes) -> str:
 
 async def _visible_text(page: Page, scoped: Locator | None) -> str:
     """The text a user can SEE, capped at ``_TEXT_CAP``. An in-page walker (``js/visible_text.js``)
-    rather than Playwright's ``inner_text``, which keeps ``opacity:0`` text — own or inherited — and
-    so had a rest-state check read a transparent element as visible (#128). A page that makes the
-    walker throw gets the old ``inner_text`` read: the summary must never take the tool down."""
+    rather than Playwright's ``inner_text``, which keeps ``opacity:0`` text (own or inherited) and
+    once had a rest-state check read a transparent element as visible (#128). A page that makes
+    the walker throw gets the old ``inner_text`` read: the summary must never take the tool down."""
     # Locator.evaluate hands the JS (element, arg), Page.evaluate (arg); the walker takes both.
     reader = page if scoped is None else scoped
     try:

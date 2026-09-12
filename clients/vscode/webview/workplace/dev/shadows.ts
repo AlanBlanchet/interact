@@ -11,7 +11,7 @@
  *      below it, and a tile that blocks N ground cells draws on all N — solid on paper and
  *      invisible in pixels is how a body walks through a couch.
  *   2. EVERY CELL A TILE NAMES EXISTS IN THE ATLAS, and every reference the rendered document
- *      makes (`#wt-*`, `#kc-*`) has a definition — a `<use>` with no target renders NOTHING,
+ *      makes (#wt-*, #kc-*) has a definition — a <use> with no target renders NOTHING,
  *      silently, which is the exact shape of the old floating-tree bugs.
  *   3. THE LAYERS PAINT IN THE DECIDED ORDER: grounds, then the wall band, then everything that
  *      stands up — and no remnant of the dead shadow layer survives in the markup.
@@ -36,7 +36,7 @@ function fail(msg: string): void {
   console.log("FAIL  " + msg);
 }
 
-/* ── 1. composition ─────────────────────────────────────────────────────────*/
+/* ── 1. composition ── */
 {
   let checked = 0;
   for (const [id, tile] of Object.entries(TILES)) {
@@ -58,7 +58,7 @@ function fail(msg: string): void {
   console.log(`tiles: ${checked} compositions, anchors and footprints agree`);
 }
 
-/* ── 2. the atlas itself, and every reference the document makes ────────────*/
+/* ── 2. the atlas itself, and every reference the document makes ── */
 const scene = renderScene(fixture());
 {
   const names = Object.keys(K).length;
@@ -79,7 +79,7 @@ const scene = renderScene(fixture());
   console.log(`defs: ${defined.size} defined, ${used.size} referenced, ${missing} dangling`);
 }
 
-/* ── 3. paint order, and no remnant of the dead layer ───────────────────────*/
+/* ── 3. paint order, and no remnant of the dead layer ── */
 {
   const map = scene.indexOf('<svg class="wp-map"');
   const ao = scene.indexOf('class="wp-ao"', map);
@@ -93,7 +93,7 @@ const scene = renderScene(fixture());
   console.log("layers: grounds, wall band, structure — in that order, no remnants");
 }
 
-/* ── 4. every seat reachable from its own door ──────────────────────────────*/
+/* ── 4. every seat reachable from its own door ── */
 {
   const world = worldFor(fixture().workers as Cast[]);
   let rooms = 0;

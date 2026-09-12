@@ -137,11 +137,16 @@ class AgentProvider(ABC):
     #: agent-to-agent messaging possible without inventing a mailbox: the recipient keeps its
     #: own context instead of being handed a cold summary of it.
     can_resume: ClassVar[bool] = False
+    can_queue: ClassVar[bool] = False
     #: False when the flags below were written from documentation but never exercised against a
     #: real binary — the adapter says so instead of pretending to be tested.
     verified: ClassVar[bool] = True
     caveat: ClassVar[str | None] = None
     auth_home_env: ClassVar[tuple[str, ...]] = ()
+    permission_option: ClassVar[str] = "--permission-mode"
+    #: Provider advertises whether its initial-prompt CLI has a native image attachment flag.
+    #: The concrete provider still verifies the installed binary before using it.
+    can_attach_images: ClassVar[bool] = False
 
     def available(self) -> bool:
         """Is the CLI installed? (Being logged in is the CLI's business, never ours.)"""
@@ -159,9 +164,9 @@ class AgentProvider(ABC):
     ) -> dict[str, str]:
         """Minimal environment for a subscription-authenticated child.
 
-        In particular, API keys, auth-token overrides and base URLs are absent.  This makes an
-        existing API key unable to silently take precedence over the user's Claude.ai/ChatGPT
-        subscription and keeps unrelated credentials out of child tools and diagnostics.
+        API keys, auth-token overrides and base URLs are absent — an existing API key can't
+        silently take precedence over the user's Claude.ai/ChatGPT subscription, and unrelated
+        credentials stay out of child tools and diagnostics.
         """
         source = os.environ if base is None else base
         exact = {
@@ -221,7 +226,9 @@ class AgentProvider(ABC):
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
                 permission_mode: str | None = None,
-                allowed_tools: list[str] | None = None) -> list[str]:
+                allowed_tools: list[str] | None = None,
+                reasoning: str | None = None,
+                image_paths: tuple[Path, ...] = ()) -> list[str]:
         """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
         (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
 
@@ -248,7 +255,18 @@ class AgentProvider(ABC):
             known = ", ".join(m.id for m in self.permission_modes()) or "none"
             raise ValueError(
                 f"{mode!r} is not a permission mode {self.name!r} accepts (known: {known})")
-        return ["--permission-mode", mode]
+        return [self.permission_option, mode]
+
+    def image_attachment_support(self) -> bool:
+        """Whether this installed provider can receive image paths on its initial prompt."""
+        return self.can_attach_images
+
+    def _image_args(self, image_paths: tuple[Path, ...]) -> list[str]:
+        if not image_paths:
+            return []
+        if not self.image_attachment_support():
+            raise ValueError(f"{self.name} provider does not support image attachments")
+        return ["--image", *(str(path) for path in image_paths)]
 
     def definition_path(self, agent: str) -> Path | None:
         """The file holding a definition's system prompt, or None when this CLI has no such
@@ -258,11 +276,10 @@ class AgentProvider(ABC):
     def valid_definition(self, agent: str) -> bool:
         """Whether ``agent`` names a definition this CLI actually has.
 
-        Checked at the edge, because the value arrives from a tool caller and ends up as a
-        filesystem path that the VS Code panel offers as a clickable link — so a name like
-        ``../../x`` would walk out of the definitions directory into something a person clicks.
-        A CLI with no definitions concept accepts nothing, which is correct: there is nothing for
-        the name to resolve to.
+        Checked at the edge: the value arrives from a tool caller and ends up as a filesystem
+        path the VS Code panel offers as a clickable link — a name like ``../../x`` would walk
+        out of the definitions directory into something a person clicks. A CLI with no
+        definitions concept accepts nothing, correctly: nothing for the name to resolve to.
         """
         if not agent or "/" in agent or "\\" in agent or agent.startswith("."):
             return False  # absolute: this becomes a path, and a path is what must not escape
@@ -284,9 +301,17 @@ class AgentProvider(ABC):
     def parse(self, line: str) -> AgentEvent | None:
         """One stdout line → a normalised event, or None if the line carries nothing."""
 
-    def resume_command(self, run_id: str, message: str) -> list[str]:
+    def resume_command(
+        self, session_id: str, message: str, *, model: str | None = None,
+        permission_mode: str | None = None, reasoning: str | None = None,
+        agent: str | None = None,
+    ) -> list[str]:
         """The argv that delivers ``message`` into an existing session."""
         raise NotImplementedError(f"{type(self).__name__} cannot resume a session")
+
+    def queue_command(self, session_id: str, message: str) -> list[str]:
+        """The argv that queues ``message`` for a session already served by this CLI."""
+        raise NotImplementedError(f"{type(self).__name__} cannot queue a message")
 
     def discover(self) -> list[dict]:
         """Agent sessions this provider can see that interact did NOT spawn — the user's own
@@ -512,7 +537,11 @@ class ClaudeCodeProvider(AgentProvider):
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
                 permission_mode: str | None = None,
-                allowed_tools: list[str] | None = None) -> list[str]:
+                allowed_tools: list[str] | None = None,
+                reasoning: str | None = None,
+                image_paths: tuple[Path, ...] = ()) -> list[str]:
+        if image_paths:
+            self._image_args(image_paths)
         argv = [
             self.binary, "-p", task,
             "--output-format", "stream-json",
@@ -545,16 +574,18 @@ class ClaudeCodeProvider(AgentProvider):
         except OSError:
             return []
 
-    def resume_command(self, run_id: str, message: str) -> list[str]:
-        """Continue an existing session. Our run_id IS Claude Code's session id (we set it at
-        spawn), so the recipient answers with its full context intact and the reply lands in the
-        same transcript — which is what makes the exchange readable afterwards."""
+    def resume_command(
+        self, session_id: str, message: str, *, model: str | None = None,
+        permission_mode: str | None = None, reasoning: str | None = None,
+        agent: str | None = None,
+    ) -> list[str]:
+        """Continue an existing session using its provider session id."""
         return [
             self.binary, "-p", message,
-            "--resume", run_id,
+            "--resume", session_id,
             "--output-format", "stream-json",
             "--verbose",
-        ]
+        ] + (["--model", model] if model else []) + self._permission_flag(permission_mode)
 
     def parse(self, line: str) -> AgentEvent | None:
         line = line.strip()
@@ -679,8 +710,24 @@ class CodexProvider(AgentProvider):
     name = "codex"
     native_providers = frozenset({"openai", "chatgpt"})
     binary = "codex"
+    can_resume = True
+    can_queue = True
     verified = False
     caveat = "unverified: the general agent adapter has not been exercised end-to-end"
+    permission_option = "--sandbox"
+    can_attach_images = True
+    # Native children bypass Interact's role/model policy when Codex hooks are untrusted.
+    # Delegates must return through the common launcher, including resumed conversations.
+    native_delegation_flags = (
+        "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false",
+    )
+
+    def permission_modes(self) -> list[PermissionMode]:
+        """Sandbox scopes checked against the installed ``codex exec --help``."""
+        return [
+            PermissionMode("read-only", "Read only", "reads files without changing them"),
+            PermissionMode("workspace-write", "May edit workspace", "changes files inside the assigned workspace"),
+        ]
 
     def app_server_command(self) -> list[str]:
         """The installed local-session protocol entry point, resolved before spawning."""
@@ -696,14 +743,81 @@ class CodexProvider(AgentProvider):
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
                 permission_mode: str | None = None,
-                allowed_tools: list[str] | None = None) -> list[str]:
-        # No permission_modes() here: Codex has sandbox and approval flags, but this adapter's
-        # own `verified = False` says these flags were never exercised against a real binary, and
-        # a guessed autonomy setting is the last thing to ship on an unverified adapter.
-        argv = [self.binary, "exec", task, "--json"]
+                allowed_tools: list[str] | None = None,
+                reasoning: str | None = None,
+                image_paths: tuple[Path, ...] = ()) -> list[str]:
+        task = self._inject_definition(agent, task)
+        argv = [self.binary, "exec", task, "--json", *self.native_delegation_flags]
+        argv += self._permission_flag(permission_mode)
         if model:
             argv += ["--model", model]
+        if reasoning is not None:
+            argv += ["-c", f'model_reasoning_effort="{reasoning}"']
+        return argv + self._image_args(image_paths)
+
+    def image_attachment_support(self) -> bool:
+        """Verify ``--image`` against the installed ``codex exec --help`` output."""
+        if not self.can_attach_images:
+            return False
+        try:
+            completed = subprocess.run(
+                [self.executable(), "exec", "--help"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return completed.returncode == 0 and "--image" in (completed.stdout or "")
+
+    def queue_command(self, session_id: str, message: str) -> list[str]:
+        return [self.binary, "queue", "--thread", session_id, "--message", message]
+
+    def resume_command(
+        self, session_id: str, message: str, *, model: str | None = None,
+        permission_mode: str | None = None, reasoning: str | None = None,
+        agent: str | None = None,
+    ) -> list[str]:
+        """Resume a stopped session with fresh model and reasoning policy.
+
+        ``exec resume`` has no ``--sandbox`` option. The saved Codex session owns that scope;
+        callers validate the recorded value before reaching this method and do not widen it here.
+        """
+        message = self._inject_definition(agent, message)
+        argv = [self.binary, "exec", "resume", session_id, message, "--json", *self.native_delegation_flags]
+        if permission_mode is not None:
+            # `exec resume --help` has no `--sandbox`, but accepts config overrides. The recorded
+            # mode is validated at the continuation boundary before it reaches this method.
+            argv += ["-c", f'sandbox_mode="{self._permission_flag(permission_mode)[1]}"']
+        if model:
+            argv += ["--model", model]
+        if reasoning is not None:
+            argv += ["-c", f'model_reasoning_effort="{reasoning}"']
         return argv
+
+    def _inject_definition(self, agent: str | None, task: str) -> str:
+        if not agent:
+            return task
+        definition = self.definition_path(agent)
+        if definition is None:
+            raise ValueError(f"Codex role {agent!r} has no generated prompt definition")
+        instructions = definition.read_text(encoding="utf-8")
+        if instructions.startswith("---\n"):
+            instructions = instructions.split("\n---", 1)[1].strip()
+        return f"AGENT_ROLE: {agent}\n\n{instructions}\n\nDelegated task:\n{task}"
+
+    def definition_path(self, agent: str) -> Path | None:
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", agent):
+            return None
+        root = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "interact/prompts"
+        paths = [root / "agents" / f"{agent}.md", *root.glob(f"scopes/*/agents/{agent}.md")]
+        found = [path for path in paths if path.is_file()]
+        return found[0] if len(found) == 1 else None
+
+    def agent_definitions(self) -> list[str]:
+        root = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "interact/prompts/agents"
+        return sorted(path.stem for path in root.glob("*.md"))
 
     def parse(self, line: str) -> AgentEvent | None:
         line = line.strip()
@@ -716,31 +830,57 @@ class CodexProvider(AgentProvider):
         if not isinstance(raw, dict):
             return None
         kind = str(raw.get("type", ""))
+        session_id = raw.get("thread_id")
+        turn_id = raw.get("turn_id")
         if kind == "thread.started":
-            return AgentEvent(kind="started", session_id=raw.get("thread_id"), raw_type=kind)
+            return AgentEvent(kind="started", session_id=session_id, raw_type=kind)
+        if kind == "turn.started":
+            return AgentEvent(kind="started", session_id=session_id, turn_id=turn_id, raw_type=kind)
         if kind in ("turn.failed", "error"):
             error = raw.get("error") or {}
             text = error.get("message", "") if isinstance(error, dict) else str(error)
-            return AgentEvent(kind="error", raw_type=kind, text=_clip(text or line))
-        if kind == "item.completed":
+            return AgentEvent(kind="error", session_id=session_id, turn_id=turn_id,
+                              raw_type=kind, text=_clip(text or line))
+        if kind in {"item.started", "item.updated", "item.completed"}:
             item = raw.get("item") or {}
             item_type = item.get("type") if isinstance(item, dict) else None
-            if item_type == "agent_message":
-                return AgentEvent(kind="text", raw_type=kind, text=str(item.get("text") or ""))
+            completed = kind == "item.completed"
+            if item_type == "agent_message" and completed:
+                return AgentEvent(kind="text", session_id=session_id, turn_id=turn_id,
+                                  raw_type=kind, text=str(item.get("text") or ""))
             if item_type == "command_execution":
                 failed = item.get("status") == "failed" or bool(item.get("exit_code"))
                 return AgentEvent(
-                    kind="error" if failed else "tool_result",
+                    kind="tool_result" if completed else "tool",
                     raw_type=kind,
+                    session_id=session_id, turn_id=turn_id,
+                    tool="Shell", tool_id=str(item.get("id") or ""),
+                    tool_input=_clip(str(item.get("command") or "")),
+                    status=("failed" if failed else "completed") if completed else "running",
                     text=_clip(str(item.get("aggregated_output") or item.get("status") or "")),
+                )
+            if item_type == "file_change":
+                changes = item.get("changes") or []
+                detail = ", ".join(
+                    f"{change.get('kind', 'change')} {change.get('path', '')}"
+                    for change in changes if isinstance(change, dict)
+                )
+                return AgentEvent(
+                    kind="tool_result" if completed else "tool", session_id=session_id,
+                    turn_id=turn_id, raw_type=kind,
+                    tool="Edit files", tool_id=str(item.get("id") or ""),
+                    tool_input=_clip(detail), text=_clip(detail) if completed else "",
+                    status=("failed" if item.get("status") == "failed" else "completed") if completed else "running",
                 )
         if kind == "turn.completed":
             usage = raw.get("usage") or {}
             return AgentEvent(
                 kind="done",
+                session_id=session_id, turn_id=turn_id,
                 raw_type=kind,
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
+                cached_input_tokens=usage.get("cached_input_tokens"),
             )
         return AgentEvent(kind="other", raw_type=kind, text=_clip(line, 200))
 

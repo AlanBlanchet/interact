@@ -35,18 +35,18 @@ def test_publication_token_file_is_bounded_private_and_regular(tmp_path: Path, c
 
 
 def test_real_prompt_service_publishes_exact_projection_idempotently(tmp_path: Path) -> None:
-    cloud = Path.home() / "dev" / "interact-cloud"
-    python = cloud / ".venv" / "bin" / "python"
+    server = Path(__file__).resolve().parents[2] / "interact-server" / "backend"
+    python = server / ".venv" / "bin" / "python"
     if not python.exists():
         pytest.skip("private prompt service environment unavailable")
-    database, ready = tmp_path / "cloud.sqlite3", tmp_path / "ready.json"
+    database, ready = tmp_path / "server.sqlite3", tmp_path / "ready.json"
     token = "test-token"
     setup = subprocess.run(
         [str(python), "-c", (
-            "from pathlib import Path; from interact_cloud.repository import _PromptRepository; "
+            "from pathlib import Path; from interact_server.repository import _PromptRepository; "
             f"r=_PromptRepository(Path({str(database)!r})); "
             f"r.grant({token!r},'tenant-a',('read','librarian')); r.close()"
-        )], cwd=cloud, capture_output=True, text=True,
+        )], cwd=server, capture_output=True, text=True,
     )
     assert setup.returncode == 0, setup.stderr
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -54,10 +54,10 @@ def test_real_prompt_service_publishes_exact_projection_idempotently(tmp_path: P
         port = listener.getsockname()[1]
     process = subprocess.Popen(
         [
-            str(python), "-m", "interact_cloud", "serve", "--database", str(database),
+            str(python), "-m", "interact_server", "serve", "--database", str(database),
             "--ready", str(ready), "--port", str(port),
         ],
-        cwd=cloud, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=server, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env=os.environ | {"PYTHONDONTWRITEBYTECODE": "1"},
     )
     try:

@@ -1,6 +1,7 @@
 """Deferred command implementations for the lightweight root CLI."""
 
 import asyncio
+import json
 import os
 import platform as _pf
 import shutil
@@ -8,15 +9,16 @@ import subprocess
 import sys
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 from cyclopts import App, Parameter
 
-from interact import feedback, live_sources, ollama
+from interact import feedback, live_sources, model_catalog, ollama
 from interact.agents import messaging
+from interact.agents import providers as agent_providers
 from interact.agents import registry as reg
 from interact.agents.host import run_console
-from interact.agents.policy import Policy, policy_path
+from interact.agents.policy import ParadigmProjection, Policy, PolicyError, policy_path
 from interact.agents.providers import (
     MEDIA_PROVIDERS,
     PROVIDERS,
@@ -30,11 +32,14 @@ from interact.cli.render import CliRenderer
 from interact.cli.update import REPO, available_update, installed_version
 from interact.cli.usage import UsageReport, default_log_path
 from interact.cli.view import View
-from interact.criteria import Variables
+from interact.criteria import Criteria, CriteriaError, Variables
 from interact.desktop import backend as desktop_backend
 from interact.desktop import orphans
 from interact.extension_status import deliver_extension, extension_status
-from interact.models import Model, ModelCapability
+# Shared normalizer: the registry needs it too, to meet a leaderboard NAME with a catalog ID —
+# lives beside the catalog, not this command surface.
+from interact.model_catalog import bare_model_name as _bare_model_name
+from interact.models import Model, ModelCapability, _ordinal
 from interact.runtime import _LiveConfig, config
 from interact.server_registry import kill_stale_servers, latest_version, stale_servers
 
@@ -78,19 +83,36 @@ def _print_media_transport(config: Config | _LiveConfig, indent: str = "  ") -> 
 
 
 def _print_resolved_models(indent: str = "  ") -> None:
-    """Print which model each VLM TASK resolves to with the current keys — the answer to "what runs
-    when I do X, and why that default?". Organised BY TASK (what a user actually picks) with the
-    config knob (the role) named in brackets, so it's clear different jobs can have different defaults
-    — without a separate model setting per task (they'd all resolve to the same best VLM). The real
-    axes are MODALITY (image/component/video/audio) and STAKES: review_ui/verify_ui layer a quality
-    tier on the image model — a cheap private sovereign GLM at low/medium, the frontier image model at
-    high/critical. Shared by status / providers / doctor / version so every surface tells one story."""
+    """Print which model each VLM TASK resolves to with current keys — answers "what runs when I
+    do X, and why that default?". Organised BY TASK (what a user actually picks) with the config
+    knob (the role) named in brackets — different jobs can have different defaults without a
+    separate model setting per task (else all resolve to the same best VLM). Real axes: MODALITY
+    (image/component/video/audio) and STAKES — review_ui/verify_ui layer a quality tier on the
+    image model, a cheap private sovereign GLM at low/medium, frontier at high/critical. Shared by
+    status / providers / doctor / version so every surface tells one story."""
 
     Model.load_registry()
 
     def _resolved(role: str) -> tuple[str, str]:
-        """(display string, bare model id) for a role given the current keys."""
+        """(display string, bare model id) for a role given the current keys.
+
+        A CRITERION outranks the pin-or-chain walk here, same reason as at the call site:
+        `vision/core` parses `media.criteria` and chooses with it, so a doctor reading only the
+        pin once reported a model the real call would never use — the two surfaces disagreeing is
+        how a working criterion looked like it did nothing, and the apparent fix was to pin a
+        model id, the very thing a criterion replaces.
+        """
         pinned = getattr(config, f"{role}_model", "")
+        rule = (config.media_criteria or "").strip() if not pinned else ""
+        if rule:
+            try:
+                chosen = Criteria.parse(rule).choose(
+                    available_only=True, weights=config.media_criteria_weights)
+            except CriteriaError as err:
+                return f"— (criterion: {rule})  ⚠ {err}", ""
+            if chosen is None:
+                return f"— (criterion: {rule})  ⚠ nothing available clears it", ""
+            return f"{chosen.id} (criterion: {rule})", chosen.id
         try:
             mid = config.resolve_model(role)
         except RuntimeError:
@@ -102,9 +124,9 @@ def _print_resolved_models(indent: str = "  ") -> None:
     def _line(task: str, role: str) -> None:
         print(f"{indent}{task:<33}→ {_resolved(role)[0]}  [{role}]")
         # What it stepped over. "Are we using the best model?" is unanswerable from the chosen id
-        # alone — that reads identically whether the walk found the strongest available or a stale
-        # default was returned with no walk at all. Naming the stronger models it could not reach,
-        # and why, is what makes the answer checkable — and shows which key to add to get more.
+        # alone — reads the same whether the walk found the strongest available or a stale default
+        # returned with no walk at all. Naming the stronger models it couldn't reach, and why,
+        # makes the answer checkable and shows which key to add.
         for passed in config.explain_model(role).skipped:
             print(f"{indent}{'':<33}  ↑ {passed.model} — {passed.reason}")
 
@@ -113,8 +135,8 @@ def _print_resolved_models(indent: str = "  ") -> None:
     _line("transcribe", "audio")
     _line("record · video understanding", "video")
 
-    # review_ui / verify_ui pick by STAKES, not role: a cheap private sovereign GLM for a quick look
-    # (low/medium), the frontier image model for a final sign-off (high/critical).
+    # review_ui / verify_ui pick by STAKES, not role: cheap private sovereign GLM for a quick look
+    # (low/medium), frontier image model for final sign-off (high/critical).
     frontier = _resolved("image")[1] or "—"
     sovereign = config.resolve_quality_model("low")
     if sovereign:
@@ -133,17 +155,17 @@ def _print_ollama(indent: str = "  ") -> None:
     """Name what the Ollama daemon actually serves, so "did interact see the model I pulled?" is
     answerable without guessing.
 
-    Vision models are named individually because those are the ones interact can DRIVE; the rest
-    are counted, not listed, because a wall of text-only ids would bury the rest of doctor without
-    telling him anything he can act on. Silent when there is no daemon — someone who does not run
-    Ollama must not read a line about it.
+    Vision models are named individually — those are the ones interact can DRIVE; the rest are
+    counted, not listed, since a wall of text-only ids would bury the rest of doctor with nothing
+    actionable. Silent when there's no daemon — someone not running Ollama must not read a line
+    about it.
     """
 
     found = ollama.serving()
     if not found:
         return
-    # Where they CAME from, not where we looked first — discovery walks a ladder, and this is
-    # also the endpoint a completion will be sent to, so the two are checkable against each other.
+    # Where they CAME from, not where we looked first: discovery walks a ladder, and this is also
+    # the endpoint a completion is sent to — the two stay checkable against each other.
     where = found[0].base or ollama.candidate_bases()[0]
     vision = sorted((m for m in found if m.vision), key=lambda m: m.name)
     rest = sorted((m for m in found if not m.vision), key=lambda m: m.name)
@@ -162,11 +184,11 @@ def _print_ollama(indent: str = "  ") -> None:
 
 def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
     """Flag any RUNNING MCP server that loaded an OLDER version than is now available — the silent
-    stale-server trap (a long-lived `interact mcp` keeps serving the code it imported at startup, so
-    a shipped fix never reaches it until reconnected). Names the pid so the user knows which editor
-    window's interact MCP server to reconnect. With ``fix=True`` (``interact doctor --fix``) it
-    restarts them itself (SIGTERM → the editor respawns interact on current code). Nothing printed
-    when every server is current."""
+    stale-server trap (a long-lived `interact mcp` keeps serving code imported at startup, so a
+    shipped fix never reaches it until reconnected). Names the pid so the user knows which editor
+    window's server to reconnect. With ``fix=True`` (``interact doctor --fix``) it restarts them
+    itself (SIGTERM → editor respawns interact on current code). Nothing printed when every server
+    is current."""
 
     stale = stale_servers()
     if not stale:
@@ -196,9 +218,9 @@ def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
 def _print_extension_status(indent: str = "  ", fix: bool = False) -> None:
     """Flag a VS Code extension the user is running that is not the one in this tree.
 
-    A version or compiled-bundle mismatch needs installation. A current bundle loaded before its
-    build needs only a restart. These remedies are intentionally distinct: neither operation can
-    substitute for the other, and nothing is printed when the running editor has this build.
+    A version or compiled-bundle mismatch needs installation; a current bundle loaded before its
+    build needs only a restart. Remedies are intentionally distinct — neither substitutes for the
+    other — and nothing is printed when the running editor has this build.
     """
 
     st = extension_status()
@@ -216,9 +238,9 @@ def _print_extension_status(indent: str = "  ", fix: bool = False) -> None:
                 "this tree — repackage and reinstall before restarting"
             )
         if fix:
-            # Pair the detection with the remedy. Only on an explicit --fix: installing an
-            # extension makes VS Code reload its extension hosts, which kills whatever session
-            # asked for it — including, often, the one running this command.
+            # Pair detection with remedy, only on explicit --fix: installing an extension makes VS
+            # Code reload its extension hosts, killing whatever session asked for it — often this
+            # command's own.
 
             print(f"{indent}   packaging and installing v{st['tree']}…")
             if deliver_extension():
@@ -238,8 +260,8 @@ def _print_sandboxes(real_display: str | None) -> None:
     """Which sandbox displays exist right now, and who owns each.
 
     Answers "why do I see two Xephyr windows?" — every interact server owns its own sandbox, so
-    one window per server that has launched something is BY DESIGN. What is not by design is a
-    window whose owner is gone, which is called out here and swept on the next launch.
+    one window per server that launched something is BY DESIGN. Not by design: a window whose
+    owner is gone, called out here and swept on the next launch.
     """
 
     try:
@@ -527,14 +549,14 @@ def doctor(*, fix: bool = False) -> None:
     Parameters
     ----------
     fix
-        Deliver this tree to what you are actually running: restart any stale `interact mcp`
-        server (it respawns on current code from your editor), and repackage + reinstall the VS
-        Code extension when the installed one is older than this tree. The one-step cure for "I
-        shipped the fix but the bug persists" — which is a real failure mode here, not a slogan:
-        a day's work once sat undelivered behind a warning this command could only print.
+        Deliver this tree to what you're actually running: restart any stale `interact mcp`
+        server (it respawns on current code from your editor), repackage + reinstall the VS Code
+        extension when the installed one is older than this tree. One-step cure for "I shipped
+        the fix but the bug persists" — a real failure mode here: a day's work once sat
+        undelivered behind a warning this command could only print.
 
-        Installing an extension makes VS Code reload its extension hosts, so expect this to
-        interrupt sessions in your editor windows — which is why it never happens without --fix.
+        Installing an extension makes VS Code reload its extension hosts, interrupting sessions
+        in your editor windows — why it never happens without --fix.
     """
 
 
@@ -552,9 +574,9 @@ def doctor(*, fix: bool = False) -> None:
 
     _print_media_transport(config)
 
-    # Desktop diagnostics are Linux/X11-specific (maim, /dev/uinput, Xephyr). On macOS/Windows
-    # they'd print misleading "MISSING (apt install …)" / "udev rule" advice, so report cleanly
-    # that desktop automation is N/A here and browser automation is the ready path.
+    # Desktop diagnostics are Linux/X11-specific (maim, /dev/uinput, Xephyr) — on macOS/Windows
+    # they'd print misleading "MISSING (apt install …)" advice, so report cleanly that desktop
+    # automation is N/A and browser is the ready path.
     if not desktop_backend.desktop_supported():
 
         print(f"  desktop       : not available on {_pf.system()} — desktop automation is "
@@ -619,9 +641,35 @@ def config_get(key: str) -> None:
 
 @config_app.command(name="set")
 def config_set(key: str, value: str) -> None:
-    """Persist a setting. e.g. `interact config set image.model gpt-4o` or `... OPENAI_API_KEY sk-...`."""
+    """Persist a setting. e.g. `interact config set image.model gpt-4o` or `... OPENAI_API_KEY sk-...`.
+
+    When the setting is a model key or a model pin, a one-second probe follows:
+    a tiny image is analysed through exactly what was just saved and the CLI
+    prints whether it WORKS — a bad key is caught here, not at the first
+    real screenshot.
+    """
     env = UserConfig.set(key, value)
     print(f"✓ {env} = {_mask(env, value)}  →  {UserConfig.PATH}")
+    _maybe_probe(env, key, value)
+
+
+def _maybe_probe(env: str, key: str, value: str) -> None:
+    """Verify a just-set model key or pin with one cheap vision call."""
+    from interact.cli import config_check
+
+    if env.endswith("_API_KEY"):
+        if config_check.ConfigCheck._criterion_for(env) is None:
+            return
+        verdict = config_check.ConfigCheck.run(config_check.ConfigCheck.key(env))
+    elif key in ("image.model", "image-model", "component.model", "video.model"):
+        from interact.config.settings import config
+
+        if config.media_billing != "api_allowed":
+            return  # probe would run through a session backend, not this pin
+        verdict = config_check.ConfigCheck.run(config_check.ConfigCheck.model(value))
+    else:
+        return
+    print(config_check.ConfigCheck.line(verdict))
 
 
 @config_app.command(name="unset")
@@ -638,6 +686,14 @@ def config_path() -> None:
 
 
 agents_app = App(name="agents", help="Spawn and supervise agent runs across providers.")
+
+
+@agents_app.command(name="policy-hook")
+def agents_policy_hook() -> None:
+    """Apply the shared agent policy to Codex lifecycle events on stdin; no model call."""
+    from interact.agents.codex_policy_hook import main
+
+    raise SystemExit(main())
 
 
 @agents_app.command(name="console")
@@ -712,39 +768,25 @@ def refresh_live_data() -> None:
 def agents_send(run_id: str, message: str) -> None:
     """Send a message to a running agent — it answers with its full context intact.
 
-    This is how the VS Code panel lets you join the conversation instead of only watching it: the
-    agent resumes its own session, so it remembers what it has already done and its reply lands in
-    the same transcript the panel shows.
+    How the VS Code panel lets you join the conversation instead of only watching: the agent
+    resumes its own session, so it remembers what it already did and its reply lands in the same
+    transcript the panel shows.
     """
 
 
-    run, error = messaging.check_deliverable(run_id)
-    if error:
-        print(error)
-        return
-    assert run is not None
-    run_id = run.run_id  # deliver against the full id, whatever prefix was typed
-    if error := messaging.record_exchange(messaging.sender_id(), run_id, message):
-        print(error)
-        return
-    argv = provider_for(run.provider).resume_command(run_id, message)
-    with reg.open_raw_events(run_id, append=True) as sink:
-        try:
-            subprocess.Popen(argv, cwd=run.cwd or ".", stdout=sink,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        except OSError as e:
-            print(f"ERROR: could not deliver to {run.name} — {e}")
-            return
-    print(f"Delivered to {run.name} ({run_id[:8]}). It is answering now.")
+    delivery = messaging.deliver_message(run_id, message)
+    print(delivery.text)
+    if delivery.state == "error":
+        raise SystemExit(1)
 
 
 @agents_app.command(name="variables")
 def agents_variables() -> None:
     """Every comparison a model criterion can make, and who measured each one.
 
-    The discovery surface for writing a criterion: you cannot write ``aa.mmmu > 0.7`` if nothing
-    tells you it exists. Each variable is namespaced by its SOURCE — a bare ``intelligence``
-    hides who measured it, and two leaderboards rarely agree.
+    Discovery surface for writing a criterion: can't write ``aa.mmmu > 0.7`` if nothing says it
+    exists. Each variable is namespaced by its SOURCE — a bare ``intelligence`` hides who measured
+    it, and two leaderboards rarely agree.
     """
 
     rows = Variables.all()
@@ -756,16 +798,244 @@ def agents_variables() -> None:
           " clears every term is used, and re-resolved at every spawn.")
 
 
+def _per_vendor(rule: str) -> dict[str, str | None]:
+    """What each switched-on vendor CLI would ACTUALLY run for `rule`, by the spawn's own resolver.
+
+    A criterion has no single answer: the pool is what THAT binary can be pointed at — its own
+    vendor's models through its login, a routed one when its key is here. A surface previewing one
+    catalog-wide winner offers a rule that refuses the moment it's used.
+    """
+    policy = Policy.load()
+    answers: dict[str, str | None] = {}
+    # Read THROUGH the module: which CLIs exist is a fact about the caller's environment — a name
+    # bound at import time would freeze whatever the process started with.
+    for name in agent_providers.PROVIDERS:
+        if not policy.provider_active(name):
+            continue
+        try:
+            answers[name] = resolve_model(
+                rule, dict(os.environ), provider=agent_providers.provider_for(name))[1]
+        except ModelUnavailable:
+            answers[name] = None
+    return answers
+
+
+@agents_app.command(name="criterion")
+def agents_criterion(criterion: str, json_out: bool = False) -> None:
+    """What a CRITERION picks right now — the cheapest model clearing every term.
+
+    "We shouldn't write a model, but resolve a model from the constraints." A pinned id freezes
+    when typed; a criterion is that claim written down instead, re-read every time it's asked.
+    Nothing could ASK one what it currently picks, so every surface that helped choose could only
+    offer a pinned id — the thing criteria exist to replace.
+
+    Refuses loudly rather than falling back: silently resolving to some other model is worse than
+    none — it looks like it worked.
+    """
+    try:
+        parsed = Criteria.parse(criterion)
+    except CriteriaError as err:
+        if json_out:
+            print(json.dumps({"criterion": criterion, "model": None, "why": str(err)}))
+            return
+        print(f"that criterion cannot be evaluated: {err}")
+        raise SystemExit(1)
+    chosen = parsed.choose()
+    why = parsed.explain()
+    if json_out:
+        print(json.dumps({
+            "criterion": criterion,
+            "model": chosen.id if chosen else None,
+            "score": chosen.intelligence_score if chosen else None,
+            "competence": chosen.competence() if chosen else None,
+            # What each switched-on CLI would run: the answer a spawn will actually get.
+            "providers": _per_vendor(criterion),
+            "why": why,
+        }))
+        return
+    if chosen is None:
+        print(f"nothing clears {parsed} right now.\n{why}")
+        raise SystemExit(1)
+    print(f"{parsed}  →  {chosen.id}")
+    print(f"  {chosen.competence()}")
+    print(f"  {why}")
+
+
+@agents_app.command(name="models")
+def agents_models(
+    limit: int = 0, json_out: bool = False, names: list[str] | None = None,
+) -> None:
+    """The models the registry has a capability score for, best first, ONE ROW PER MODEL.
+
+    "Models should also spell out their intelligence score, such that we can compare the most
+    competents and trust one agent more than another in some situations (isn't absolute)" — a
+    choice is only a comparison if candidates are distinct, so a model's provider aliases
+    (`azure/gpt-5.5`, `azure_ai/gpt-5.5-2026-04-23`, `vertex_ai/…`) collapse into one row carrying
+    the plainest id: forty rows of four facts compared nothing. Rank is over distinct models. One
+    measure among several — a lower-scored model is often the better fit for a narrow job.
+    """
+    # RANKED ON ONE VINTAGE. Registry keeps every baked score — selection/criteria need whatever
+    # is known about a model — but a ranking PRINTED beside the panel's Benchmarks tab must be the
+    # board that tab shows, or the two disagree in public about which model leads. Read THROUGH
+    # the module, never bound by name: a board a test points elsewhere must move this command too.
+    live = model_catalog.live_scores()
+
+    class _Row:
+        __slots__ = ("id", "intelligence_score")
+
+        def __init__(self, id: str, intelligence_score: float | None) -> None:
+            self.id, self.intelligence_score = id, intelligence_score
+
+    # Every model this machine can REACH, scored by the board DIRECTLY. Reading the score off the
+    # registry instead inverted the ask: registry holds none of the board's top models, so the
+    # most competent ones printed "nothing scored carries this name" and every number on screen
+    # approximated a superseded model. Ids come from registry AND browse catalogue — a model can
+    # be routable through either.
+    reachable: dict[str, _Row] = {}
+    for model_id in [m.id for m in Model.catalog()] + [
+        m.id for m in (model_catalog.load_catalog().models if live else [])
+    ]:
+        if model_id in reachable:
+            continue
+        measured = live.get(_bare_model_name(model_id)) if live else None
+        if measured is None and live:
+            continue
+        reachable[model_id] = _Row(model_id, measured)
+    if not live:  # no board on disk: fall back to whatever the registry knows
+        reachable = {m.id: _Row(m.id, m.intelligence_score) for m in Model.catalog()
+                     if m.intelligence_score is not None}
+    scored = sorted(
+        reachable.values(),
+        key=lambda m: (-(m.intelligence_score or 0.0), len(m.id), m.id),
+    )
+    # One entry per distinct model: same score AND same bare name (id minus provider prefixes,
+    # regions, date suffixes) is the same model resold under another name.
+    distinct: dict[tuple[float, str], dict] = {}
+    for m in scored:
+        key = (m.intelligence_score or 0.0, _bare_model_name(m.id))
+        entry = distinct.get(key)
+        if entry is None:
+            distinct[key] = {"id": m.id, "score": m.intelligence_score, "aliases": 0, "covers": []}
+        else:
+            entry["aliases"] += 1
+            # Every absorbed id named: a SECOND list (browse catalogue) can drop what's already
+            # ranked above it, instead of offering `openai/gpt-5.5` as "not scored" right under
+            # `gpt-5.5` at "60.2 · 1st" — the picker contradicting itself.
+            entry["covers"].append(m.id)
+    rows = list(distinct.values())
+    # Rank over the BOARD, never what this machine happens to reach. Denominator used to be
+    # "models you can route to", so one model once read 10th from one directory, 13th from
+    # another with different credentials in scope — a local-availability measure wearing an
+    # intelligence label. Which models are LISTED still depends on what you can reach; the PLACE
+    # doesn't. Within that, rank by COMPETITION: equal scores share one rank, say "joint" —
+    # enumerating would manufacture the difference the measure denies.
+    population = sorted(live.values(), reverse=True) or [r["score"] for r in rows]
+    for row in rows:
+        ahead = sum(1 for value in population if value > row["score"])
+        tied = sum(1 for value in population if value == row["score"])
+        joint = "joint " if tied > 1 else ""
+        row["competence"] = (
+            f"aa.intelligence {row['score']:.1f} · {joint}{_ordinal(ahead + 1)} of {len(population)}"
+        )
+    ranked_total = len(rows)  # before any --limit: the population the RANK is over
+    listed = rows[:limit] if limit else rows
+    # Rows a picker puts NEAREST THE TOP are aliases, not ids: Claude Code's `sonnet`/`opus` tiers,
+    # whatever the agent runs on today. Unscored, they made the one comparison anyone makes — keep
+    # the incumbent, or switch — impossible, so each resolves to the best-scored model it stands
+    # for, carrying THAT model's score. An alias nothing scores stays absent.
+    resolved = []
+    for alias in names or []:
+        want = _bare_model_name(alias)
+        # EXACT first. A containment match is how a family word (`sonnet`, `opus`) finds the model
+        # wearing it, but once let `claude-fable-5` take `claude-fable-5.1`'s number — a different
+        # model four places higher — with nothing marking the swap, purely because one name
+        # prefixes the other.
+        hit = next((r for r in rows if _bare_model_name(r["id"]) == want), None)
+        if hit is not None:
+            resolved.append({**hit, "asked": alias})
+            continue
+        hit = next((r for r in rows if want in _bare_model_name(r["id"])), None)
+        if hit is not None:
+            # A bare family word asks for no particular version, so nothing was substituted. A
+            # name carrying its OWN version did — an approximation that must say so.
+            versioned = any(ch.isdigit() for ch in want)
+            resolved.append({**hit, "asked": alias, **({"approximate": True} if versioned else {})})
+            continue
+        # Registry is OLDER than the fleet: an agent runs `claude-sonnet-5` while ranking still
+        # knows `claude-sonnet-4-6`, so an exact match scores nothing and the one comparison
+        # anyone makes has no left-hand side. Fall back to the closest ranked RELATIVE — row
+        # sharing the most leading name-parts — flagged approximate so no surface passes it off as
+        # the model itself. Sharing fewer than two parts is not a relative.
+        parts = want.split("-")
+        best, best_shared = None, 1
+        for row in rows:  # rows are ranked, so the first of a tie is the best-scored
+            other = _bare_model_name(row["id"]).split("-")
+            shared = 0
+            for mine, theirs in zip(parts, other):
+                if mine != theirs:
+                    break
+                shared += 1
+            if shared > best_shared:
+                best, best_shared = row, shared
+        if best is not None:
+            resolved.append({**best, "asked": alias, "approximate": True})
+    rows = listed + resolved
+    if json_out:
+        print(json.dumps(rows))
+        return
+    # Naming the SCOPE: the panel's Benchmarks tab shows the whole board, and one tab once called
+    # a model first while another had it lower behind a different leader, with nothing saying this
+    # one ranks only what this machine can route to. Header names BOTH populations — the
+    # difference is the point: board ranks everyone, this list shows what you can actually run.
+    print(
+        f"aa.intelligence is one measure, not a verdict — {ranked_total} of the "
+        f"{len(population)} models on the Artificial Analysis board are routable from here, and "
+        "the place each holds is its place on that whole board.\n"
+    )
+    for row in rows:
+        also = f"  (+{row['aliases']} provider aliases)" if row["aliases"] else ""
+        stands_for = f"  [{row['asked']}]" if row.get("asked") else ""
+        print(f"{row['score']:5.1f}  {row['id']}{also}{stands_for}")
+
+
 @agents_app.command(name="policy")
-def agents_policy() -> None:
-    """What ~/.interact/agents.json says: profiles, who wears them, toolsets, providers.
+def agents_policy(json_out: bool = False) -> None:
+    """What ~/.interact/agents.json says: profiles, who wears them, toolsets, paradigms, providers.
 
     Each agent row shows the rule as WRITTEN and what it currently RESOLVES to, so a criterion
-    that quietly matches nothing is visible here rather than at the spawn that fails.
+    quietly matching nothing is visible here rather than at the spawn that fails.
+
+    `--json-out` hands the panel the same answer — otherwise it can only print the rule, leaving a
+    reader unable to tell a RESOLUTION from a model somebody typed, the distinction the mechanism
+    exists for.
     """
-
-
     policy = Policy.load()
+    if json_out:
+        # One shape test, one resolver, both sides: panel must not re-derive "is this a criterion"
+        # in TypeScript, where it'd drift from the spawn's own answer.
+        agents = []
+        for agent in policy.agents:
+            rule = policy.criterion_for(agent) or ""
+            resolves: str | None = rule
+            why = None
+            if is_criterion(rule):
+                try:
+                    resolves = resolve_model(rule, dict(os.environ))[1]
+                except ModelUnavailable as err:
+                    resolves, why = None, str(err).splitlines()[0]
+            agents.append({
+                "name": agent, "rule": policy.agents[agent], "criterion": is_criterion(rule),
+                "resolves": resolves, "why": why,
+                "providers": _per_vendor(rule) if is_criterion(rule) else {},
+            })
+        print(json.dumps({
+            "policy": str(policy_path()), "profiles": dict(policy.profiles), "agents": agents,
+            "paradigms": {
+                agent: [{"paradigm": a.paradigm, "as": a.projection} for a in assignments]
+                for agent, assignments in policy.paradigms.items()
+            },
+        }))
+        return
     print(f"policy: {policy_path()}")
     if policy.profiles:
         print("\nprofiles")
@@ -778,8 +1048,8 @@ def agents_policy() -> None:
             shown = rule if rule == resolved else f"{rule}  →  {resolved}"
             note = ""
             if is_criterion(resolved):
-                # What each switched-on vendor CLI would ACTUALLY run — resolved by the code the
-                # spawn uses, per CLI, because the pool is what that binary can be pointed at; a
+                # What each switched-on vendor CLI would ACTUALLY run — resolved by the spawn's
+                # own code, per CLI, since the pool is what that binary can be pointed at; a
                 # catalog-wide answer here once named a model the claude spawn could never run.
                 answers = []
                 for pname in PROVIDERS:
@@ -800,9 +1070,35 @@ def agents_policy() -> None:
         print("\nagent tools")
         for agent in policy.agent_tools:
             print(f"  {agent:<16} {', '.join(policy.tools_for(agent))}")
+    if policy.paradigms:
+        print("\nparadigms")
+        for agent, assignments in policy.paradigms.items():
+            worn = ", ".join(f"{a.paradigm} (as {a.projection})" for a in assignments)
+            print(f"  {agent:<16} {worn}")
     print("\nproviders")
     for name in PROVIDERS:
         print(f"  {name:<8} {'on' if policy.provider_active(name) else 'off'}")
+
+
+@agents_app.command(name="paradigm-assign")
+def agents_paradigm_assign(agent: str, paradigm: str, projection: str) -> None:
+    """Give AGENT a PARADIGM, projected as "skill" (loaded on demand) or "system_prompt" (always
+    present). Writes ~/.interact/agents.json — the one file the spawn reads.
+
+    "a user doesn't edit a 'system prompt' or a 'skill', but a paradigm, and choses to add it to
+    an agent as 'skill' or as 'system prompt'." Same paradigm can be a skill for one agent, baked
+    into another's system prompt — choice is per agent, never global to the paradigm.
+    """
+    if projection not in ("skill", "system_prompt"):
+        print(f"projection must be 'skill' or 'system_prompt', not {projection!r}", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        policy = Policy.load()
+        policy.assign_paradigm(agent, paradigm, cast(ParadigmProjection, projection))
+    except PolicyError as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        raise SystemExit(2) from err
+    print(f"{agent} now carries {paradigm!r} as {projection}.")
 
 
 @agents_app.command(name="clear")
@@ -821,14 +1117,16 @@ def agents_clear(run_id: str | None = None) -> None:
 
 
 @agents_app.command(name="providers")
-def agents_providers(name: str | None = None, state: str | None = None) -> None:
+def agents_providers(
+    name: str | None = None, state: str | None = None, *, json_out: bool = False,
+) -> None:
     """Which agent CLIs drive agents here — list them, or switch one on/off.
 
     ``interact agents providers`` lists each provider as ``<name> <on|off> <availability>``, then
     the named agents and permission modes it can resolve. ``interact agents providers codex off``
-    switches one off at the one place every spawn passes through (``~/.interact/agents.json``),
-    so the panel's toggle and this command read and write the same fact. Unmentioned providers
-    are ON: a CLI you installed is one you meant to use.
+    switches one off at the one place every spawn passes through (``~/.interact/agents.json``), so
+    the panel's toggle and this command read/write the same fact. Unmentioned providers are ON: a
+    CLI you installed is one you meant to use.
 
     Parameters
     ----------
@@ -836,11 +1134,16 @@ def agents_providers(name: str | None = None, state: str | None = None) -> None:
         A provider (claude, codex, ...). Omit to list.
     state
         ``on`` or ``off``.
+    json_out
+        Print provider availability and policy switches as JSON for installed clients.
     """
 
 
     policy = Policy.load()
     if name is not None:
+        if json_out:
+            print("JSON output is for listing providers; omit name and state", file=sys.stderr)
+            raise SystemExit(2)
         if state not in ("on", "off"):
             print(f"say 'on' or 'off' for {name!r} — not {state!r}", file=sys.stderr)
             raise SystemExit(2)
@@ -851,12 +1154,20 @@ def agents_providers(name: str | None = None, state: str | None = None) -> None:
         policy.set_provider_active(name, state == "on")
         print(f"{name} {state}")
         return
+    if json_out:
+        print(json.dumps({"providers": [
+            {"id": p.name, "label": p.name, "active": policy.provider_active(p.name),
+             "available": p.available()}
+            for p in PROVIDERS.values()
+        ]}))
+        return
     for p in PROVIDERS.values():
         switch = "on" if policy.provider_active(p.name) else "off"
         avail = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
         note = f" — {p.caveat}" if not p.verified else ""
         # `<name> <on|off>` first: the panel's toggle parses exactly those two tokens.
         print(f"{p.name:8} {switch:3} {avail}{note}")
+        print(f"           image attachments: {'supported' if p.image_attachment_support() else 'unsupported'}")
         if definitions := p.agent_definitions():
             print(f"           agents: {', '.join(definitions)}")
         if modes := p.permission_modes():
@@ -879,9 +1190,9 @@ def _agent_runner():
 def agents_definitions(provider: str = "claude") -> None:
     """Print the agent definitions this CLI can resolve, one per line.
 
-    Machine-readable on purpose: the panel's picker was scraping the human `agents providers`
-    output, so a wording change would have silently emptied it. Nothing is printed when there are
-    none — prose here would be parsed as an agent called "no agents found".
+    Machine-readable on purpose: the panel's picker used to scrape the human `agents providers`
+    output, so a wording change would silently empty it. Nothing printed when there are none —
+    prose here would parse as an agent called "no agents found".
     """
 
     for name in provider_for(provider).agent_definitions():
@@ -892,14 +1203,14 @@ def agents_definitions(provider: str = "claude") -> None:
 def agents_discovered() -> None:
     """Print the agent sessions interact did NOT start, one JSON object per line.
 
-    Your own editor windows. They have no record on disk — they are found by asking each provider
-    at list time — so a front end that reads the registry directory (the VS Code panel does)
-    cannot see them at all, however many icons it has for them.
+    Your own editor windows. No record on disk — found by asking each provider at list time — so
+    a front end reading the registry directory (the VS Code panel does) can't see them at all,
+    however many icons it has for them.
 
-    One object per line rather than one array: a front end can parse incrementally, and a
-    truncated write costs one session rather than the whole list. Nothing is printed when there
-    are none, and a provider that cannot look is skipped rather than taking the caller down with
-    it — a failed discovery must never blank a panel that was otherwise fine.
+    One object per line, not one array: a front end can parse incrementally, and a truncated
+    write costs one session, not the whole list. Nothing printed when there are none; a provider
+    that can't look is skipped, not taking the caller down with it — a failed discovery must never
+    blank an otherwise-fine panel.
     """
 
 
@@ -907,15 +1218,15 @@ def agents_discovered() -> None:
         found = reg._discover_foreign()
     except (OSError, ValueError) as e:
         # Loud, on stderr, non-zero — never a silent empty answer. Each provider already swallows
-        # its own failure, so reaching here means a real bug, and printing nothing would make that
-        # indistinguishable from "you have no other sessions": the panel would cache the empty
-        # answer and re-cache it every refresh with no line anywhere saying why.
+        # its own failure, so reaching here means a real bug; printing nothing would be
+        # indistinguishable from "you have no other sessions" — the panel would cache the empty
+        # answer and re-cache it every refresh with no line saying why.
         print(f"ERROR: could not ask the providers what is running — {e}", file=sys.stderr)
         raise SystemExit(1) from None
     for raw in found:
-        # The RECORD builds itself. This used to re-declare the same nine fields, and a field
-        # added to AgentRun would have reached the listing and not this JSON — which the VS Code
-        # panel parses, so the panel would silently lack it with nothing to notice.
+        # The RECORD builds itself. Used to re-declare the same nine fields, so a field added to
+        # AgentRun would reach the listing but not this JSON — which the VS Code panel parses, so
+        # the panel would silently lack it with nothing to notice.
         run = reg.AgentRun.from_foreign(raw)
         if run is not None:
             print(run.model_dump_json())
@@ -925,13 +1236,13 @@ def agents_discovered() -> None:
 def agents_modes(provider: str = "claude") -> None:
     """Print the permission modes this CLI accepts, one tab-separated row per mode.
 
-    ``id<TAB>label<TAB>what it lets the agent do<TAB>yes|no`` — the last column being whether the
-    mode acts without asking, so a front end can mark it without inferring danger from wording.
+    ``id<TAB>label<TAB>what it lets the agent do<TAB>yes|no`` — last column is whether the mode
+    acts without asking, so a front end can mark it without inferring danger from wording.
     Machine-readable for the same reason `agents definitions` is: the panel used to scrape the
     human table, and a rewording emptied it silently.
 
-    Nothing is printed for a provider whose flags we have not verified against a real binary —
-    prose here would be parsed as a mode called "no modes found".
+    Nothing printed for a provider whose flags aren't verified against a real binary — prose here
+    would parse as a mode called "no modes found".
     """
 
     for mode in provider_for(provider).permission_modes():
@@ -941,12 +1252,13 @@ def agents_modes(provider: str = "claude") -> None:
 @agents_app.command(name="spawn")
 def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
                  name: str | None = None, model: str | None = None,
-                 cwd: str | None = None, permission_mode: str | None = None) -> None:
+                 cwd: str | None = None, permission_mode: str | None = None,
+                 image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None) -> None:
     """Start an agent and return its id immediately, without waiting for it to finish.
 
-    `agents run` streams until the agent is done, which is right at a terminal and useless to a
-    UI — the panel needs the id NOW so it can show the agent working. Nothing is lost by letting
-    go: the child leads its own session and writes its own stream, so it outlives this process.
+    `agents run` streams until the agent is done — right at a terminal, useless to a UI — the
+    panel needs the id NOW to show the agent working. Nothing is lost by letting go: the child
+    leads its own session and writes its own stream, so it outlives this process.
     """
 
 
@@ -955,6 +1267,7 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
             provider_for(provider), task, name=name or agent or provider,
             cwd=cwd or os.getcwd(), agent=agent, model=model,
             permission_mode=permission_mode,
+            image_paths=tuple(image_paths or ()),
         )
         # Give the child a moment to be alive before this process exits out from under it.
         await asyncio.sleep(0.2)
@@ -963,10 +1276,10 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
     try:
         print(asyncio.run(_go()))
     except (ValueError, RuntimeError) as e:
-        # The argv builder validates the permission mode, four frames down; a criterion nothing
-        # clears, a profile that does not exist and a provider switched off refuse the same way.
-        # Without this the CLI printed its traceback where every other interact failure prints
-        # one actionable line.
+        # argv builder validates permission mode, four frames down; a criterion nothing clears, a
+        # nonexistent profile, and a provider switched off all refuse the same way. Without this
+        # the CLI printed a traceback where every other interact failure prints one actionable
+        # line.
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(2) from None
 
@@ -974,7 +1287,8 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
 @agents_app.command(name="run")
 def agents_run(task: str, provider: str = "claude", agent: str | None = None,
                name: str | None = None, model: str | None = None, cwd: str | None = None,
-               permission_mode: str | None = None) -> None:
+               permission_mode: str | None = None,
+               image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None) -> None:
     """Spawn an agent and stream its events until it finishes.
 
     ``--agent`` names a definition the CLI resolves itself (Claude Code reads
@@ -986,7 +1300,8 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
         prov = provider_for(provider)
         handle = await run_agent(prov, task, name=name or agent or prov.name,
                                  cwd=cwd or os.getcwd(), agent=agent, model=model,
-                                 permission_mode=permission_mode)
+                                 permission_mode=permission_mode,
+                                 image_paths=tuple(image_paths or ()))
         print(f"run_id {handle.run_id}")
         seen = 0
         while True:
@@ -1002,7 +1317,7 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
     try:
         raise SystemExit(asyncio.run(_go()))
     except (ValueError, RuntimeError) as e:
-        # The argv builder validates the mode; without this the CLI printed its traceback while
-        # every other interact failure prints one line an agent (or a person) can act on.
+        # argv builder validates the mode; without this the CLI printed a traceback while every
+        # other interact failure prints one actionable line.
         print(f"ERROR: {e}", file=sys.stderr)
         raise SystemExit(2) from None

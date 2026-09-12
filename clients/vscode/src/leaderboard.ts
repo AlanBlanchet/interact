@@ -1,17 +1,17 @@
 /** The live Artificial Analysis leaderboard, as the panel sees it.
  *
- *  The bundled `benchmarks.json` says WHICH benchmarks matter; it cannot carry SCORES, because
+ *  The bundled benchmarks.json says WHICH benchmarks matter; it cannot carry SCORES, because
  *  AA's free tier is "internal use only, no redistribution" — so scores are fetched at runtime
- *  with the user's own key and cached under their home dir by `interact.benchmark_source`.
+ *  with the user's own key and cached under their home dir by interact.benchmark_source.
  *
- *  Same invariant as the model catalog: the board carries its SOURCE and AGE, and `isLive` goes
+ *  Same invariant as the model catalog: the board carries its SOURCE and AGE, and isLive goes
  *  false once stale. Serving old numbers offline is fine; serving them as today's truth is not.
  */
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-/** Matches Python's `TTL_SECONDS` — both read the same cache, so they must agree on staleness. */
+/** Matches Python's TTL_SECONDS — both read the same cache, so they must agree on staleness. */
 const TTL_SECONDS = 12 * 60 * 60;
 
 export interface Score {

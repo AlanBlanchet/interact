@@ -13,7 +13,7 @@ from interact.agents.providers import ClaudeCodeProvider, CodexProvider
 from interact.server import tools_desktop, vlm
 from interact.server.core import mcp
 from interact.vision.types import MediaAnalysis, RecordingCapture, RecordingResult, VLMResult
-from interact.vision.usage import UsageEntry
+from interact.vision.usage_records import UsageEntry
 
 
 @pytest.mark.asyncio

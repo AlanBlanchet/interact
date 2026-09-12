@@ -10,10 +10,10 @@ export interface ChatFile {
 /** The files behind a run: what it IS, and everything it wrote.
  *
  *  The system prompt's location belongs to the PROVIDER — Claude Code keeps definitions in
- *  `~/.claude/agents/<name>.md`, another CLI will not — so Python resolves it through the provider
+ *  ~/.claude/agents/<name>.md, another CLI will not — so Python resolves it through the provider
  *  and records it on the run, and records written before that field existed are repaired on read.
  *  Rebuilding the path here would hard-code one vendor's layout into a panel meant to show runs
- *  from several, so a non-Claude agent would get a link to a file that does not exist, and
+ *  from several, so a non-Claude agent would get a link to a file that doesn't exist, and
  *  therefore no link at all.
  *
  *  Only files that exist are offered: a button that opens nothing is worse than no button.

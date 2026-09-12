@@ -13,7 +13,8 @@ import pytest
 
 import interact.vision.core as vision
 from interact.config import Config
-from interact.vision import MediaItem, VLMResult, _build_media_content
+from interact.vision import MediaItem, VLMResult
+from interact.vision.core import _build_media_content
 
 _RAW = b"\x00\x00\x00\x18ftypmp42"
 

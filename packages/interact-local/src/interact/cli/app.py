@@ -88,7 +88,9 @@ def main() -> None:
 
 
 _DEFERRED_EXPORTS = frozenset({
+    "_bare_model_name",
     "_mask",
+    "_per_vendor",
     "_print_media_transport",
     "_print_ollama",
     "_print_resolved_models",
@@ -97,10 +99,12 @@ _DEFERRED_EXPORTS = frozenset({
     "_run_agent_for_cli",
     "agents_clear",
     "agents_console",
+    "agents_criterion",
     "agents_definitions",
     "agents_discovered",
     "agents_events",
     "agents_list",
+    "agents_models",
     "agents_modes",
     "agents_policy",
     "agents_providers",

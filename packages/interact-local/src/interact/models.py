@@ -21,10 +21,10 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 def _litellm():
-    """Import litellm lazily — it costs ~2.5s to import, and only the litellm-fallback
-    registry path and validate_environment need it; the common models.json path does not.
-    Importing it at module top made every `import interact.models` (status, doctor,
-    providers, the TUI worker) pay that cost up front."""
+    """Import litellm lazily — costs ~2.5s, and only the litellm-fallback registry path and
+    validate_environment need it; the common models.json path doesn't. Importing at module top
+    made every `import interact.models` (status, doctor, providers, TUI worker) pay that cost
+    up front."""
     import importlib
 
     try:
@@ -39,12 +39,12 @@ class ModelSpec(BaseModel):
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
     supports_response_schema: bool = False
-    #: How strong the model is, on the catalog's own scale. Present in models.json all along and
-    #: dropped on load, which is why nothing at runtime could order a chain by quality.
+    #: How strong the model is, on the catalog's own scale. Present in models.json all along,
+    #: dropped on load — why nothing at runtime could order a chain by quality.
     intelligence_score: float | None = None
-    # Capability tags carried from the upstream catalog (litellm) into models.json, so a
-    # model's behaviour (e.g. its grounding default) is DERIVED from a live source, not a
-    # hardcoded list. See generate-models.py for how these are sourced.
+    # Capability tags carried from upstream catalog (litellm) into models.json, so a model's
+    # behaviour (e.g. grounding default) is DERIVED from a live source, not a hardcoded list.
+    # See generate-models.py for how these are sourced.
     capabilities: list[str] = Field(default_factory=list)
 
 
@@ -77,17 +77,16 @@ class ModelCapability(StrEnum):
     AUDIO = "audio"  # audio understanding / transcription — see is_audio_model
 
 
-# Native video INPUT and audio understanding are per-FAMILY facts that litellm's
-# `supports_video_input` / `supports_audio_input` flags do NOT reliably populate (they
-# currently return nothing for every current model), so — exactly like CoordFormat's grounding
-# table — they are curated substring tables grounded in each provider's own docs (web-verified
-# 2026-06-24):
-#   • Native video input: Gemini (all 2.x/3.x, incl. YouTube URLs), Qwen-VL / Qwen3-VL,
-#     InternVL, LLaVA-Video, Amazon Nova Lite/Pro/Premier. OpenAI + Anthropic are FRAMES-ONLY
-#     (no native video media type) — interact still drives them by ffmpeg-sampling a recording
-#     to images, but they are not "video models".
-#   • Audio understanding / transcription: Gemini, GPT-4o-audio / -transcribe, Whisper,
-#     Qwen-Omni. (Anthropic has no audio input.)
+# Native video INPUT and audio understanding are per-FAMILY facts litellm's
+# `supports_video_input`/`supports_audio_input` flags do NOT reliably populate (return nothing
+# for every current model), so — like CoordFormat's grounding table — these are curated
+# substring tables grounded in each provider's own docs (web-verified 2026-06-24):
+#   • Native video input: Gemini (all 2.x/3.x, incl. YouTube URLs), Qwen-VL/Qwen3-VL, InternVL,
+#     LLaVA-Video, Amazon Nova Lite/Pro/Premier. OpenAI + Anthropic are FRAMES-ONLY (no native
+#     video media type) — interact still drives them by ffmpeg-sampling a recording to images,
+#     but they aren't "video models".
+#   • Audio understanding/transcription: Gemini, GPT-4o-audio/-transcribe, Whisper, Qwen-Omni.
+#     (Anthropic has no audio input.)
 # Substring match against the litellm id (provider prefix included), case-insensitive.
 _VIDEO_FAMILIES: tuple[str, ...] = (
     "gemini",
@@ -103,9 +102,9 @@ _AUDIO_FAMILIES: tuple[str, ...] = (
     "qwen-omni", "qwen2.5-omni", "qwen3-omni", "qwen2-audio",
 )
 
-# Generation / TTS / embedding variants of a family (e.g. gemini-*-image-preview, *-tts,
-# imagen, veo) OUTPUT media or vectors — they don't UNDERSTAND a video/audio input, so they're
-# excluded from the video/audio capability even though their name carries the family substring.
+# Generation/TTS/embedding variants of a family (e.g. gemini-*-image-preview, *-tts, imagen,
+# veo) OUTPUT media or vectors — they don't UNDERSTAND video/audio input, so excluded from that
+# capability even though the name carries the family substring.
 _NOT_UNDERSTANDING: tuple[str, ...] = (
     "-image", "image-preview", "image-generation", "-tts", "-embedding",
     "embedding", "imagen", "veo",
@@ -130,10 +129,10 @@ def is_audio_model(model_id: str) -> bool:
 
 
 # Families litellm sends NATIVE inline video to (a Gemini `inline_data` part) — matched as a
-# substring so a bare `gemini-2.5-pro`, a `gemini/…` and a `vertex_ai/gemini-…` all qualify. Other
-# providers have no inline-video transform in litellm and SILENTLY DROP a video content part (HTTP
-# 200 + a hallucinated answer, never an error) — so this MUST be a positive allowlist, not exception
-# catching. Qwen/DashScope is URL-only through litellm and stays on frame sampling (#48).
+# substring so a bare `gemini-2.5-pro`, `gemini/…` and `vertex_ai/gemini-…` all qualify. Other
+# providers have no inline-video transform in litellm and SILENTLY DROP a video content part
+# (HTTP 200 + a hallucinated answer, never an error) — so this MUST be a positive allowlist, not
+# exception catching. Qwen/DashScope is URL-only through litellm, stays on frame sampling (#48).
 _NATIVE_VIDEO_INLINE_FAMILIES: tuple[str, ...] = ("gemini", "vertex_ai")
 
 
@@ -144,9 +143,9 @@ def supports_native_video_inline(model_id: str) -> bool:
     return is_native_video_model(lid) and any(fam in lid for fam in _NATIVE_VIDEO_INLINE_FAMILIES)
 
 
-# Pure speech-to-text models — they transcribe but can't take audio in a chat completion. The
-# transcribe tool answers a `query` about one of these over its TRANSCRIPT (via the image model)
-# rather than routing the audio into an acoustic chat call it can't serve.
+# Pure speech-to-text models — transcribe but can't take audio in a chat completion. The
+# transcribe tool answers a `query` about one of these over its TRANSCRIPT (via the image
+# model), not by routing audio into an acoustic chat call it can't serve.
 _TRANSCRIBE_ONLY: tuple[str, ...] = ("whisper", "-transcribe")
 
 
@@ -185,6 +184,13 @@ class RegistryMixin:
         cls._registry.clear()
 
 
+def _ordinal(n: int) -> str:
+    """1 → "1st". A rank reads as a rank, not as a second score."""
+    if 11 <= n % 100 <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }".replace(" ", "")
+
+
 class Model(RegistryMixin, BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
@@ -203,13 +209,13 @@ class Model(RegistryMixin, BaseModel):
     _provider_keys: ClassVar[dict[str, list[str]]] = {}
     # ordered component (UI-grounding) model recommendations, from the loaded config
     _component_recommendations: ClassVar[list[str]] = []
-    #: provider -> the model ids it was PROVEN to serve, by asking it directly at load time
-    #: (currently: a running Ollama daemon answered ``/api/tags``). A declared env key is a PROXY
-    #: for "this will run"; an answer from the thing itself is the fact the proxy stands in for,
-    #: so it outranks the key — which is what makes a local Ollama, needing no key at all, usable
-    #: rather than invisible. It also makes availability SHARPER, not just broader: the bundled
-    #: catalog lists ~70 Ollama models, and a key alone made every one of them look available even
-    #: though the user pulled three. Once the daemon has told us what it has, that answer governs.
+    #: provider -> model ids it was PROVEN to serve, by asking it directly at load time
+    #: (currently: a running Ollama daemon answered ``/api/tags``). A declared env key is a
+    #: PROXY for "this will run"; an answer from the thing itself outranks the key — what makes
+    #: a local Ollama, needing no key at all, usable rather than invisible. Also makes
+    #: availability SHARPER not just broader: the bundled catalog lists ~70 Ollama models, and a
+    #: key alone made every one look available though the user pulled three. Once the daemon
+    #: says what it has, that answer governs.
     _served: ClassVar[dict[str, set[str]]] = {}
     #: coordFormats from the loaded catalog, kept so a model discovered AFTER the JSON pass can be
     #: matched against the same grounding table rather than a second copy of it.
@@ -220,17 +226,17 @@ class Model(RegistryMixin, BaseModel):
 
     def grounding_strategy(self) -> str:
         """How this model should be driven to act on a target — DERIVED from its capabilities,
-        not a hardcoded per-model list (the default sits at the bottom of the provider→model
+        not a hardcoded per-model list (default sits at the bottom of the provider→model
         override hierarchy):
 
-        - ``"coords"``  — the model emits click coordinates itself (native computer-use, or a
-          known GUI-grounding box convention). Fewest round-trips.
-        - ``"ref_list"`` — give it the DOM/accessibility ref list and let it pick (the safe
-          default; works for every model including non-grounding ones, no VLM cost).
+        - ``"coords"``  — model emits click coordinates itself (native computer-use, or a known
+          GUI-grounding box convention). Fewest round-trips.
+        - ``"ref_list"`` — give it the DOM/accessibility ref list, let it pick (safe default;
+          works for every model including non-grounding ones, no VLM cost).
 
-        Computer-use is the strongest signal (the model literally returns click points), then a
-        registered grounding box-format; otherwise refs. An explicit per-call / per-config
-        override layers on top of this default."""
+        Computer-use is the strongest signal (model literally returns click points), then a
+        registered grounding box-format, otherwise refs. An explicit per-call/per-config
+        override layers on top."""
         if self.can(ModelCapability.COMPUTER_USE):
             return "coords"
         if self.can(ModelCapability.GUI_GROUNDING):
@@ -241,18 +247,18 @@ class Model(RegistryMixin, BaseModel):
         return self.id
 
     def key_missing(self) -> bool:
-        """True only when we can PROVE this model cannot run: its provider is one we know, that
-        provider declares API keys, and they are absent.
+        """True only when we can PROVE this model cannot run: its provider is known, declares
+        API keys, and they're absent.
 
-        Distinct from ``not is_available()``, which is also true for a provider we have never
-        heard of — a self-hosted endpoint, a local runner, any id outside the catalog. Treating
-        that as "cannot run" would let auto-selection quietly override somebody's pinned local
-        model, which is the opposite of respecting a choice they made.
+        Distinct from ``not is_available()``, also true for a provider we've never heard of — a
+        self-hosted endpoint, a local runner, any id outside the catalog. Treating that as
+        "cannot run" would let auto-selection quietly override somebody's pinned local model —
+        the opposite of respecting a choice they made.
         """
         if self.provider in Model._served:
-            # It answered us, so there is no key to be missing. Deliberately NOT "and it serves
-            # this id": key_missing gates whether auto-selection may WALK PAST AN EXPLICIT PIN,
-            # and a model the daemon does not list today may be one the user is about to pull.
+            # It answered us, so no key to be missing. Deliberately NOT "and it serves this
+            # id": key_missing gates whether auto-selection may WALK PAST AN EXPLICIT PIN, and a
+            # model the daemon doesn't list today may be one the user is about to pull.
             # Respecting the pin stays the rule; is_available below is where precision belongs.
             return False
         keys = Model._provider_keys.get(self.provider)
@@ -260,44 +266,105 @@ class Model(RegistryMixin, BaseModel):
             return False  # unknown provider, or one that needs no key: not our call to overrule
         return not all(os.environ.get(k) for k in keys)
 
+    def competence(self) -> str:
+        """This model's capability score, spelled out: the namespaced variable, the number, and
+        WHERE it sits among models carrying the same measure.
+
+        "Models should also spell out their intelligence score, such that we can compare the most
+        competents and trust one agent more than another in some situations (isn't absolute)" —
+        so a bare number is never enough: names its source (two leaderboards rarely agree),
+        gives the rank that makes it comparable; a model nobody measured says so, not a zero.
+        """
+        # WHO measured it comes from the variable registry, which already owns that fact — a
+        # literal here would keep announcing this board's name if a second one supplied the same
+        # field. Imported inside the method because `interact.criteria` imports this module at
+        # import time: a genuine cycle, not a lazy-loading habit.
+        from interact.criteria import Variables
+
+        variable = Variables.by_name("aa.intelligence")
+        source = (variable.source if variable else "") or "an unnamed source"
+        if self.intelligence_score is None:
+            return "aa.intelligence — not scored"
+        # ONE MODEL, ONE RIVAL, the SAME population every selection path uses.
+        #
+        # Two bugs met here: retired models were counted, ranking this one against models the
+        # product refuses to choose from; and every SPELLING of a model counted separately, so a
+        # model was "joint 1st" with itself, saying "17th of 697" while the ranked list one
+        # command away said "2nd of 433" — two numbers for one fact, the exact disagreement
+        # live-board rescoring was written to end.
+        from interact.model_catalog import bare_model_name, live_scores
+
+        # Rank over the BOARD, never over what this machine happens to reach — same population
+        # `agents models` ranks over: a denominator of "models you can route to" is a local-
+        # availability measure wearing an intelligence label — one model read 10th from one
+        # directory, 13th from another with different credentials in scope.
+        population = list(live_scores().values())
+        if not population:
+            # No board on this machine: fall back to what's known, one row per MODEL. Every
+            # spelling counted separately made a model "joint 1st" with itself.
+            best: dict[str, float] = {}
+            for other in self.catalog():
+                if other.intelligence_score is None or getattr(other, "retired", False):
+                    continue
+                key = bare_model_name(other.id)
+                best[key] = max(best.get(key, float("-inf")), other.intelligence_score)
+            population = list(best.values())
+        scored = population
+        rank = sum(1 for value in scored if value > self.intelligence_score) + 1
+        # Equal scores share ONE place and say so. The panel's twin has said this since written;
+        # here two models at one score printed 1st and 2nd, manufacturing exactly the difference
+        # the measure denies.
+        joint = "joint " if sum(1 for v in scored if v == self.intelligence_score) > 1 else ""
+        return (f"aa.intelligence {self.intelligence_score:.1f} — "
+                f"{joint}{_ordinal(rank)} of {len(scored)} scored ({source})")
+
     def is_available(self) -> bool:
         """Whether this model's API key is present in the environment.
 
         A **pure env-var check** against the provider's declared ``envKeys`` — never a
-        ``litellm.validate_environment`` call, which can BLOCK on an interactive provider
-        auth flow / network (it hung CI here). A provider absent from the catalog (no
-        declared keys) can't be confirmed without that call, so it's treated unavailable.
+        ``litellm.validate_environment`` call, which can BLOCK on an interactive provider auth
+        flow/network (hung CI here). A provider absent from the catalog (no declared keys)
+        can't be confirmed without that call, treated unavailable.
 
-        The one thing that outranks the key check is a provider we ALREADY confirmed by asking
-        it — see ``_served``. That is still a pure local check here: the daemon was asked once,
-        at registry load, with a short timeout; this method only reads the answer. And the answer
-        is per-MODEL, so a catalog row for something the user never pulled is correctly NOT
-        available even though its provider is running.
+        The one thing outranking the key check is a provider we ALREADY confirmed by asking it
+        — see ``_served``. Still a pure local check: the daemon was asked once, at registry
+        load, short timeout; this method only reads the answer. Answer is per-MODEL, so a
+        catalog row for something the user never pulled is correctly NOT available even though
+        its provider is running.
         """
         if self.provider in Model._served:
             return self.is_served()
         keys = Model._provider_keys.get(self.provider)
         if not keys:
-            # None (unknown provider) OR [] (no declared API key). Empty means we can't
-            # confirm a non-interactive credential — e.g. the `chatgpt` provider has no
-            # key env var and litellm would trigger an interactive device-code OAuth poll
-            # that BLOCKS FOREVER. Never auto-select such a provider (this hung CI and would
-            # hang a real server's fallback chain). Explicitly-configured models still run —
-            # is_available only filters automatic fallback candidates.
+            # None (unknown provider) OR [] (no declared API key). Empty means we can't confirm
+            # a non-interactive credential — e.g. `chatgpt` has no key env var and litellm
+            # would trigger an interactive device-code OAuth poll that BLOCKS FOREVER. Never
+            # auto-select such a provider (hung CI, would hang a real server's fallback chain).
+            # Explicitly-configured models still run — is_available only filters automatic
+            # fallback candidates.
             return False
         return all(os.environ.get(k) for k in keys)
 
     def is_served(self) -> bool:
         """False only when a LIVE provider itself told us it does not have this model.
 
-        Split out of :meth:`is_available` because the two questions compose differently: this one
-        is purely "has the provider ruled it out?", so a caller that already checked the provider
-        key (``available_by_capability``) can add it without re-asking the key question. Keeping
-        them as one method is what let the two disagree — ``is_available`` counting 4 models while
-        ``available_by_capability`` still offered 21 from the same provider.
+        Split out of :meth:`is_available` because the two questions compose differently: this
+        one is purely "has the provider ruled it out?", so a caller that already checked the
+        provider key (``available_by_capability``) can add it without re-asking the key
+        question. Keeping them as one method let the two disagree — ``is_available`` counting 4
+        models while ``available_by_capability`` still offered 21 from the same provider.
         """
         served = Model._served.get(self.provider)
-        return served is None or self.id in served
+        if served is None:
+            return True
+        # Joined on the NORMALIZED name, like every cross-source comparison here. Ollama spells
+        # one model two ways — `kimi-k3` from its cloud endpoint, `kimi-k3:cloud` from the local
+        # daemon — whichever answered discovery decided which spelling the set holds, and a pin
+        # written in the other read as "not served".
+        from interact.model_catalog import bare_model_name
+
+        mine = bare_model_name(self.id)
+        return any(bare_model_name(name) == mine for name in served)
 
     @property
     def cost_score(self) -> float:
@@ -307,6 +374,34 @@ class Model(RegistryMixin, BaseModel):
     def cost_of(input_cost: float | None, output_cost: float | None) -> float:
         """Sum of input/output cost-per-million; missing values count as 0."""
         return (input_cost or 0.0) + (output_cost or 0.0)
+
+    @property
+    def serves_itself(self) -> bool:
+        """Whether a LIVE local daemon is serving this model — the one honest zero.
+
+        Distinct from :meth:`is_served`, which answers "has the provider ruled it out?" — True
+        for everything a daemon never mentioned. This one is positive: this provider is running
+        AND holds this model, so a token costs nothing — nobody is billing for it.
+        """
+        return self.id in (Model._served.get(self.provider) or ())
+
+    @property
+    def thrift(self) -> tuple[int, float, float]:
+        """How to order models when the criterion is satisfied and only price is left to decide.
+
+        Three facts, in order. FIRST whether price is known at all: `cost_of` counts a missing
+        price as 0, so the 50 scored models with no price — `chatgpt/gpt-5.4-pro` among them —
+        sorted ahead of everything genuinely cheap and won every criterion. Free and unmeasured
+        are different facts, only one an argument for choosing a model — unpriced goes LAST
+        unless a local daemon serves it, the real zero.
+
+        THEN price. THEN the measure, descending: at one price, take the better model. Sorting
+        on price alone left ties in registry order — an arbitrary pick wearing the words
+        "cheapest that clears".
+        """
+        priced = self.serves_itself or self.input_cost_per_million is not None \
+            or self.output_cost_per_million is not None
+        return (0 if priced else 1, self.cost_score, -(self.intelligence_score or 0.0))
 
     @staticmethod
     def quality_per_dollar(score: float, cost: float | None) -> float | None:
@@ -332,7 +427,7 @@ class Model(RegistryMixin, BaseModel):
         results = [m for m in cls._registry if m.can(cap)]
         if available_only:
             results = [m for m in results if m.is_available()]
-        results.sort(key=lambda m: m.cost_score)
+        results.sort(key=lambda m: m.thrift)
         return results  # type: ignore[return-value]
 
     @classmethod
@@ -381,6 +476,10 @@ class Model(RegistryMixin, BaseModel):
                 id=model_id, provider="unknown", capabilities={ModelCapability.VLM}
             )  # type: ignore[return-value]
         cost_entry = lm.model_cost.get(model_id, {})
+        # "unknown" is a SENTINEL here, not a shrug: `vision/session` branches on it meaning
+        # "litellm doesn't know this id, parse the prefix yourself". Inferring the provider from
+        # the prefix here looked like an improvement, silently disabled those branches, sending
+        # `anthropic/example-model` to the Claude CLI unstripped.
         provider = cost_entry.get("litellm_provider", "unknown")
         model = cls._from_litellm_cost(model_id, provider, cost_entry)
         cls._register(model)
@@ -411,9 +510,9 @@ class Model(RegistryMixin, BaseModel):
                 fmt = cls._match_coord_format(model_id, models_config.coord_formats)
                 if fmt is not None or model_id in component_recs:
                     caps.add(ModelCapability.GUI_GROUNDING)
-                # Capability tags carried from the upstream catalog (litellm) — e.g.
-                # computer_use / video — so behaviour derives from a live source, not a
-                # second hardcoded list. Unknown tags are ignored.
+                # Capability tags carried from upstream catalog (litellm) — e.g. computer_use /
+                # video — so behaviour derives from a live source, not a second hardcoded list.
+                # Unknown tags are ignored.
                 for tag in model_spec.capabilities:
                     try:
                         caps.add(ModelCapability(tag))
@@ -492,9 +591,9 @@ class Model(RegistryMixin, BaseModel):
     def available_providers(cls) -> list[str]:
         """Catalog providers whose declared API key(s) are all set in the environment.
 
-        Providers that declare no key are omitted — there is nothing to configure,
-        so their presence is not evidence the user has set anything up. A provider that
-        ANSWERED us is included whether or not it declares a key: it is running.
+        Providers declaring no key are omitted — nothing to configure, so presence isn't
+        evidence the user set anything up. A provider that ANSWERED us is included whether or
+        not it declares a key: it is running.
         """
         return sorted(
             {
@@ -514,18 +613,18 @@ class Model(RegistryMixin, BaseModel):
             for m in cls._registry
             if m.can(cap) and m.provider in available and m.is_served()
         ]
-        models.sort(key=lambda m: m.cost_score)
+        models.sort(key=lambda m: m.thrift)
         return models  # type: ignore[return-value]
 
     @classmethod
     def recommended_grounding(cls) -> list[Self]:
         """Configured grounding models in preference order.
 
-        Cheapest-first surfaces free general/image-gen VLMs that mislocate boxes,
-        so rank: curated ``recommendations.component`` (models tuned for UI
-        grounding) → ScreenSpot-scored → remaining grounding models by cost. Only
-        providers whose key is set are included. Used by ``interact detect`` and
-        the dashboard so "best grounding model" is defined in one place.
+        Cheapest-first surfaces free general/image-gen VLMs that mislocate boxes, so rank:
+        curated ``recommendations.component`` (models tuned for UI grounding) → ScreenSpot-
+        scored → remaining grounding models by cost. Only providers with a set key included.
+        Used by ``interact detect`` and the dashboard so "best grounding model" is defined in
+        one place.
         """
         seen: set[str] = set()
         ranked: list[Self] = []
@@ -561,15 +660,15 @@ class Model(RegistryMixin, BaseModel):
     def merge_ollama(cls, discovered: "list[OllamaModel]") -> None:
         """Fold the models a running Ollama daemon actually has into the registry.
 
-        The baked catalog is a SNAPSHOT — it cannot contain a model somebody pulled after it was
-        generated, which is exactly the model they are most likely to want. What the daemon
-        reports is the truth, so it wins where the two disagree and ADDS where the catalog is
-        silent; a baked row's scores and grounding format survive, because the daemon does not
-        know those and overwriting them with nothing would be a downgrade.
+        The baked catalog is a SNAPSHOT — can't contain a model somebody pulled after it was
+        generated, exactly the model they're most likely to want. What the daemon reports is
+        the truth, wins where the two disagree, ADDS where the catalog is silent; a baked row's
+        scores and grounding format survive since the daemon doesn't know those and overwriting
+        with nothing would be a downgrade.
 
-        Takes the CHAT-capable models only (:func:`interact.ollama.serving`): an embedding model
-        returns vectors, not answers, so letting it into a pool of prompt-answering candidates
-        would only produce a confusing failure later.
+        Takes CHAT-capable models only (:func:`interact.ollama.serving`): an embedding model
+        returns vectors not answers, letting it into a pool of prompt-answering candidates would
+        only produce a confusing failure later.
         """
         if not discovered:
             return
@@ -605,10 +704,10 @@ class Model(RegistryMixin, BaseModel):
             )
             served.add(model_id)
         if served:
-            # Deliberately not `{... : served}` unconditionally. A daemon that is up but serves
-            # nothing we can prompt with (an embeddings-only box — a normal RAG setup) would
+            # Deliberately not `{... : served}` unconditionally. A daemon up but serving
+            # nothing we can prompt with (embeddings-only box — a normal RAG setup) would
             # otherwise revoke every baked row's key-based availability while still advertising
-            # the provider. Knowing nothing usable is not the same as knowing there is nothing.
+            # the provider. Knowing nothing usable isn't the same as knowing there's nothing.
             cls._served = {**cls._served, "ollama": served}
 
     #: Set once anything has taken charge of the registry — a load, or a test's own _register() —
@@ -617,11 +716,11 @@ class Model(RegistryMixin, BaseModel):
 
     @classmethod
     def catalog(cls) -> list["Model"]:
-        """The registry, loaded from the bundled data the FIRST time anything asks it a question.
+        """The registry, loaded from bundled data the FIRST time anything asks it a question.
 
         Only `interact.runtime` used to load it, so a process that never imported that module —
-        the CLI's `agents spawn` — answered every criterion from an EMPTY list, read as "no model
-        is configured at all", while the tests passed because conftest imports runtime for them.
+        the CLI's `agents spawn` — answered every criterion from an EMPTY list, read as "no
+        model configured at all", while tests passed because conftest imports runtime for them.
         A registry somebody already filled (`load_registry`, or a test's `_register`) is left alone.
         """
         if not cls._registry and not cls._catalog_loaded:
@@ -629,16 +728,81 @@ class Model(RegistryMixin, BaseModel):
         return cls._registry
 
     @classmethod
+    def rescored(cls, models: list["Model"]) -> list["Model"]:
+        """The same models, carrying what the LIVE board measures wherever it measures them.
+
+        Scores in `models.json` are a snapshot that ages the day it ships, and the panel already
+        fetches the real Artificial Analysis board onto the same disk. Ranking on the snapshot
+        while calling the number `aa.intelligence` put two tabs of one window in open
+        disagreement — one calling a model first at 60.2, the other 38.6 behind a different
+        leader. The live board wins where it speaks; the snapshot answers where it doesn't, so a
+        model the board never listed keeps whatever was known about it.
+        """
+        from interact.model_catalog import bare_model_name, live_scores
+
+        live = live_scores()
+        if not live:
+            return models  # no board on disk: whatever was baked is all anyone has
+        for model in models:
+            measured = live.get(bare_model_name(model.id))
+            if measured is not None:
+                model.intelligence_score = measured
+        return models
+
+    @classmethod
+    def merge_ranked(cls, scores: dict[str, float], priced: dict[str, dict]) -> int:
+        """Register the models the live BOARD ranks that the bundled snapshot never heard of.
+
+        A criterion can only pick something the catalog knows exists. The snapshot covered 86 of
+        the 450 models the board ranks, so the entire top of the leaderboard the panel DISPLAYS
+        was invisible to the thing that CHOOSES — evaluated against a fifth of the field,
+        answering confidently with last year's best.
+
+        Same live-merge shape as the Ollama pass, same reason: a bundled catalog structurally
+        cannot know. litellm already ships the prices, nothing here is invented — a ranked
+        model it cannot price stays OUT rather than entering a cheapest-first ordering as
+        though free.
+
+        `scores` is keyed by :func:`bare_model_name`, collapsing every regional spelling of one
+        model onto one key; the id registered is the least-qualified one (`claude-opus-5`,
+        never `au.anthropic.claude-opus-5`) — also the vendor's own base price.
+
+        Returns how many were added — worth watching, since a snapshot caught up makes this
+        pass do nothing.
+        """
+        from interact.model_catalog import bare_model_name
+
+        have = {bare_model_name(m.id) for m in cls._registry}
+        best: dict[str, tuple[str, dict]] = {}
+        for model_id, row in priced.items():
+            if not row.get("input_cost_per_token"):
+                continue
+            key = bare_model_name(model_id)
+            if key not in scores or key in have:
+                continue
+            # Fewest qualifiers wins: the canonical spelling is the one nobody had to prefix.
+            rank = (model_id.count("/") + model_id.count("."), len(model_id))
+            if key not in best or rank < (best[key][0].count("/") + best[key][0].count("."),
+                                          len(best[key][0])):
+                best[key] = (model_id, row)
+        for key, (model_id, row) in best.items():
+            model = cls._from_litellm_cost(
+                model_id, row.get("litellm_provider") or model_id.split("/")[0].split(".")[0], row)
+            model.intelligence_score = scores[key]
+            cls._register(model)
+        return len(best)
+
+    @classmethod
     def load_registry(cls, models_json: str | None = None) -> None:
         """Populate the registry from models.json, falling back to litellm.
 
-        Source order: the ``models_json`` argument → ``INTERACT_MODELS_JSON`` →
-        the catalog bundled in :mod:`interact.data` → ``litellm.model_cost``.
-        Measured grounding scores are hydrated from :meth:`PackageData.grounding_raw`.
+        Source order: ``models_json`` argument → ``INTERACT_MODELS_JSON`` → catalog bundled in
+        :mod:`interact.data` → ``litellm.model_cost``. Measured grounding scores hydrated from
+        :meth:`PackageData.grounding_raw`.
 
-        Then the LIVE pass: a running Ollama daemon is asked what it actually has, because a
-        bundled catalog structurally cannot know. That read is cached, short-timeout and silent —
-        no daemon means no models, no error and no delay (see :mod:`interact.ollama`).
+        Then the LIVE pass: a running Ollama daemon is asked what it actually has, since a
+        bundled catalog structurally cannot know. Cached, short-timeout, silent — no daemon
+        means no models, no error, no delay (see :mod:`interact.ollama`).
         """
         cls._reset()
         cls._provider_keys = {}
@@ -655,15 +819,27 @@ class Model(RegistryMixin, BaseModel):
         if grounding_raw:
             cls.hydrate_measured(grounding_raw)
         try:
-            # Imported HERE, not at module scope: `interact.ollama` pulls in httpx (~167 ms cold)
-            # and `interact.models` is on the import path of every CLI command — the same reason
-            # `_litellm()` above is lazy. Module attribute lookup, so a caller can substitute the
-            # daemon by swapping `ollama.discover_cached`.
+            # Imported HERE, not at module scope: `interact.ollama` pulls in httpx (~167ms
+            # cold), and `interact.models` is on the import path of every CLI command — same
+            # reason `_litellm()` above is lazy. Module attribute lookup, so a caller can
+            # substitute the daemon by swapping `ollama.discover_cached`.
             from interact import ollama
 
             cls.merge_ollama(ollama.serving())
         except Exception:  # a live source must never be able to break the catalog
             _log.debug("ollama discovery failed; using the bundled catalog", exc_info=True)
+        try:
+            # The second live pass, same reason as the first: the board on disk ranks models the
+            # bundled snapshot never heard of, and a criterion can't choose what the catalog
+            # doesn't know exists. Cached, so no command pays litellm's import to find that out.
+            from interact.model_catalog import live_scores, ranked_extras
+
+            cls.merge_ranked(live_scores(), ranked_extras())
+        except Exception:
+            _log.debug("board pricing unavailable; using the bundled catalog", exc_info=True)
+        # Applied at LOAD, never on every read: a test that registers its own models is stating
+        # what they score, and rescoring those against this machine's board would erase it.
+        cls.rescored(cls._registry)
 
 
 __all__ = [
@@ -704,9 +880,9 @@ def _namespace_of(source: str) -> str:
 class Benchmark(RegistryMixin, BaseModel):
     """A benchmark for evaluating VLM capability.
 
-    Scores come from published online leaderboards (:attr:`published`). Optional
-    measured scores — injected via ``INTERACT_GROUNDING_JSON`` (e.g. fetched from an
-    online source), never from our own paid eval — live in :attr:`_measured`.
+    Scores come from published online leaderboards (:attr:`published`). Optional measured
+    scores — injected via ``INTERACT_GROUNDING_JSON`` (e.g. fetched from an online source),
+    never our own paid eval — live in :attr:`_measured`.
     """
 
     id: str
@@ -720,10 +896,10 @@ class Benchmark(RegistryMixin, BaseModel):
     source_auth: str = ""
     requires_auth: bool = False
     #: The variable namespace this benchmark's score is addressed by — "aa" for Artificial
-    #: Analysis, "gui" for the grounding leaderboard, and so on. A NAMESPACE IS THE SOURCE: a
-    #: bare `screenspot` hides who measured it, and two leaderboards rarely agree. Derived from
-    #: the source's initials when the data does not say, so a benchmark added tomorrow is
-    #: addressable the same day with nothing to edit here.
+    #: Analysis, "gui" for the grounding leaderboard, etc. A NAMESPACE IS THE SOURCE: a bare
+    #: `screenspot` hides who measured it, and leaderboards rarely agree. Derived from the
+    #: source's initials when data doesn't say, so a benchmark added tomorrow is addressable the
+    #: same day with nothing to edit here.
     namespace: str = ""
     metric: str = "accuracy"
     url: str = ""
@@ -909,24 +1085,24 @@ class ModelChain(BaseModel):
         """The models to try for this role, strongest first.
 
         The recommendation list is the candidate SET, not the order. It arrives ranked by a
-        cost-weighted score computed offline, which is how the default for image work came to be a
-        `flash` model even for someone paying for something far stronger. Reordering it by
-        capability — and leaving the membership alone — gives "best first" without letting a model
-        that cannot do the job (no video, no audio) into a chain it was excluded from: modality is
-        what the curated list encodes, and that still decides who is eligible.
+        cost-weighted score computed offline, how the default for image work came to be a
+        `flash` model even for someone paying for something far stronger. Reordering by
+        capability — leaving membership alone — gives "best first" without letting a model that
+        can't do the job (no video, no audio) into a chain it was excluded from: modality is
+        what the curated list encodes, and still decides eligibility.
 
-        A person's own pin always leads, whatever it scores. Ranking exists to choose when nobody
-        chose; overriding a stated choice with a "better" model is the same defect facing the
-        other way.
+        A person's own pin always leads, whatever it scores. Ranking exists to choose when
+        nobody chose; overriding a stated choice with a "better" model is the same defect facing
+        the other way.
         """
         seen: set[str] = set()
         preferences: list[Model] = []
 
         ranked = sorted(
             (m for m in (Model.from_litellm_id(i) for i in recommendations if i) if m),
-            # Strongest first; cheapest breaks a tie. An unscored model sorts LAST rather than
-            # first — a missing number is not evidence of quality, and sorting None high would
-            # hand the top of every chain to whatever the catalog knows least about.
+            # Strongest first; cheapest breaks a tie. An unscored model sorts LAST not first —
+            # a missing number isn't evidence of quality, sorting None high would hand the top
+            # of every chain to whatever the catalog knows least about.
             key=lambda m: (-(m.intelligence_score or -1.0), m.cost_score),
         )
 

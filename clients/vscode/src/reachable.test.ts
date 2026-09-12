@@ -81,3 +81,24 @@ test("the build refuses an import nothing uses", () => {
   assert.match(tsconfig, /"noUnusedLocals"\s*:\s*true/,
     "noUnusedLocals is what catches a feature imported into a view and never wired up");
 });
+
+/** A command drawn with an icon was meant to be a BUTTON. Declared with an icon yet placed in no
+ *  menu, slash command or rail action, it can be reached only by typing its name into the palette
+ *  — the unwired fingerprint this file exists for. The providers switch shipped in 0.39.0 exactly
+ *  so: `$(plug)`, nowhere to click. */
+test("every command drawn with an icon is placed where a person can click it", () => {
+  const menus: Record<string, { command: string }[]> = manifest.contributes.menus ?? {};
+  const placed = new Set(
+    Object.entries(menus).filter(([where]) => where !== "commandPalette").flatMap(([, v]) => v.map((m) => m.command)),
+  );
+  // The chat's slash menu and the rail's action row are the two other places a command is wired
+  // to something a person clicks or types.
+  for (const file of ["chatCommands.ts", "rail.ts"]) {
+    const src = readFileSync(join(here, file), "utf8");
+    for (const m of src.matchAll(/command:\s*"([^"]+)"/g)) placed.add(m[1]);
+  }
+  const unplaced = (manifest.contributes.commands as { command: string; icon?: string }[])
+    .filter((c) => c.icon && !placed.has(c.command))
+    .map((c) => c.command);
+  assert.deepEqual(unplaced, [], "drawn with an icon, reachable only by typing its name");
+});

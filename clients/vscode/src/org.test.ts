@@ -15,7 +15,10 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readOrg, orgTree, spawnChoices, modelFor, spawnArgs, definitionFile, type Org } from "./org.ts";
+import {
+  parseAgentProviders, readOrg, orgTree, spawnChoices, modelFor, spawnArgs, definitionFile,
+  type Org,
+} from "./org.ts";
 
 const ORG: Org = {
   coordinator: { id: "main", title: "Main thread — session coordinator" },
@@ -137,6 +140,32 @@ test("with no company at all it is still just a list of definitions", () => {
   assert.deepEqual(labels, ["claude", "a", "b"]);
 });
 
+test("provider discovery accepts only the machine-readable active and available facts", () => {
+  const providers = parseAgentProviders(JSON.stringify({ providers: [
+    { name: "claude", label: "Claude Code", active: true, available: true },
+    { id: "codex", label: "Codex", active: false, available: true },
+    { name: "missing", active: true, available: "yes" },
+  ] }));
+  assert.deepEqual(providers, [
+    { id: "claude", label: "Claude Code", active: true, available: true },
+    { id: "codex", label: "Codex", active: false, available: true },
+  ]);
+  assert.deepEqual(parseAgentProviders(JSON.stringify({ providers: {
+    codex: { label: "Codex", active: true, available: true },
+  } })), [{ id: "codex", label: "Codex", active: true, available: true }]);
+  assert.deepEqual(parseAgentProviders("claude on available"), []);
+});
+
+test("Start an Agent can omit the generic plain route while generic sessions omit a role", () => {
+  assert.deepEqual(spawnChoices(["tester"], ORG, { includePlain: false }).map((c) => c.label), ["tester"]);
+  assert.deepEqual(spawnArgs({ task: "start", provider: "codex", agent: "tester", org: ORG }), [
+    "agents", "spawn", "start", "--provider", "codex", "--agent", "tester",
+  ]);
+  assert.deepEqual(spawnArgs({ task: "chat", provider: "codex", agent: null, org: ORG }), [
+    "agents", "spawn", "chat", "--provider", "codex",
+  ]);
+});
+
 // --- what model an agent should run on ---
 
 test("an agent's declared model is offered as its default", () => {
@@ -158,29 +187,29 @@ test("an agent the company does not know has no declared model", () => {
   assert.equal(modelFor("tester", null), null);
 });
 
-test("the spawn argv carries the agent, its declared model, and the folder", () => {
+test("the spawn argv carries the provider, named role, and folder without pinning model", () => {
   const org: Org = { ...ORG, agents: ORG.agents.map((a) =>
     a.name === "tester" ? { ...a, model: "claude-sonnet-5" } : a) };
 
-  assert.deepEqual(spawnArgs({ task: "check it", agent: "tester", cwd: "/w", org }),
-    ["agents", "spawn", "check it", "--agent", "tester", "--model", "claude-sonnet-5", "--cwd", "/w"]);
+  assert.deepEqual(spawnArgs({ task: "check it", provider: "claude", agent: "tester", cwd: "/w", org }),
+    ["agents", "spawn", "check it", "--provider", "claude", "--agent", "tester", "--cwd", "/w"]);
 });
 
-test("a plain agent passes no --agent, and inherit passes no --model", () => {
+test("a named role is explicit, and inherit passes no --model", () => {
   const inheriting: Org = { ...ORG, agents: ORG.agents.map((a) =>
     a.name === "tester" ? { ...a, model: "inherit" } : a) };
 
-  assert.deepEqual(spawnArgs({ task: "t", agent: "claude", cwd: null, org: ORG }),
-    ["agents", "spawn", "t"]);
-  assert.deepEqual(spawnArgs({ task: "t", agent: "tester", cwd: null, org: inheriting }),
-    ["agents", "spawn", "t", "--agent", "tester"]);
+  assert.deepEqual(spawnArgs({ task: "t", provider: "claude", agent: "claude", cwd: null, org: ORG }),
+    ["agents", "spawn", "t", "--provider", "claude", "--agent", "claude"]);
+  assert.deepEqual(spawnArgs({ task: "t", provider: "claude", agent: "tester", cwd: null, org: inheriting }),
+    ["agents", "spawn", "t", "--provider", "claude", "--agent", "tester"]);
 });
 
 test("the permission flag is spelled exactly as the CLI parses it", () => {
   // The other half of the seam: the CLI side is pinned by a Python test. Rename either and the
   // panel silently spawns with the CLI's own default while reporting that it chose "plan" — for a
   // safety control, doing something other than what the UI said is the worst available failure.
-  const args = spawnArgs({ task: "t", agent: "claude", cwd: null, org: ORG, permissionMode: "plan" });
+  const args = spawnArgs({ task: "t", provider: "claude", agent: "claude", cwd: null, org: ORG, permissionMode: "plan" });
   assert.ok(args.includes("--permission-mode"), "the literal flag the CLI declares");
   assert.equal(args[args.indexOf("--permission-mode") + 1], "plan");
 });
@@ -196,7 +225,7 @@ test("a model you chose in the editor beats the company file", () => {
 });
 
 test("the chosen model reaches the spawn arguments", () => {
-  const args = spawnArgs({ task: "t", agent: "researcher", org: ORG, model: "ollama/deepseek-v4-pro:cloud" });
+  const args = spawnArgs({ task: "t", provider: "claude", agent: "researcher", org: ORG, model: "ollama/deepseek-v4-pro:cloud" });
   const i = args.indexOf("--model");
   assert.ok(i >= 0 && args[i + 1] === "ollama/deepseek-v4-pro:cloud", args.join(" "));
 });

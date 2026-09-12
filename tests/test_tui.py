@@ -45,7 +45,7 @@ async def test_tui_saves_config(temp_config):
     data = UserConfig.read()
     assert data["INTERACT_IMAGE_MODEL"] == _PICK
     assert data["INTERACT_DESKTOP_TARGET"] == "nested"
-    assert data["INTERACT_NESTED_HEADLESS"] == "true"
+    assert "INTERACT_NESTED_HEADLESS" not in data, "the declarative default is not a persisted override"
     assert data["INTERACT_DEBUG_DIR"] == "/tmp/x/out"
 
 

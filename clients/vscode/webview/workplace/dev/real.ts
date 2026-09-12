@@ -2,18 +2,18 @@
  *
  *  Every prior "verified" round on this view ran on a fixture, and four times on this project a
  *  fixture picked a convenient shape and certified a bug (see artist memory). This harness is the
- *  counter-instrument: it mirrors `WorkplacePanel.state()` line for line — the same readers, the
+ *  counter-instrument: it mirrors WorkplacePanel.state() line for line — the same readers, the
  *  same scope filter, the same discovered-session merge, the same identify/department/faculties
- *  callbacks — and hands the result to the SAME `renderWorkplace` the webview bundle exports. What
- *  it writes is what the user's panel draws, for whatever `$HOME` points at.
+ *  callbacks — and hands the result to the SAME renderWorkplace the webview bundle exports. What
+ *  it writes is what the user's panel draws, for whatever $HOME points at.
  *
  *      npx esbuild webview/workplace/dev/real.ts --bundle --outfile=/tmp/real.js \
  *        --format=cjs --platform=node --target=es2022
  *      HOME=/isolated/home node /tmp/real.js <outdir> [--project interact] [--discovered dump.json]
  *
- *  `--project` reproduces the panel's default scope (kind:"current" for the folder the user has
- *  open); omit it for "all workspaces". `--discovered` is a saved `interact agents discovered`
- *  stdout, merged exactly as `ScopeStore.runs()` merges it.
+ *  --project reproduces the panel's default scope (kind:"current" for the folder the user has
+ *  open); omit it for "all workspaces". --discovered is a saved interact agents discovered
+ *  stdout, merged exactly as ScopeStore.runs() merges it.
  */
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -73,10 +73,10 @@ const scoped = scopeRuns(all, project ? { kind: "project", name: project } : { k
 
 const org = readOrg();
 
-/** The whole declared company, exactly as `WorkplacePanel.withDeclared()` builds it: a synthetic
+/** The whole declared company, exactly as WorkplacePanel.withDeclared() builds it: a synthetic
  *  READY run for every org agent with no real errand, so the world seats the roster the user
- *  actually declared — the panel renders ~40 bodies on an 18-run registry, and a harness that
- *  showed only the run-backed ten would certify a different picture than the one he sees. */
+ *  actually declared — the panel renders ~40 bodies on an 18-run registry, and a harness showing
+ *  only the run-backed ten would certify a different picture than the one he sees. */
 function withDeclared(runs: readonly ReturnType<typeof readAgentRuns>[number][]): typeof runs {
   if (!org) return [...runs];
   const company = companyOf(org) ?? undefined;
@@ -119,7 +119,7 @@ const state = buildTeam(
 );
 
 writeFileSync(join(outDir, "state.json"), JSON.stringify(state, null, 2));
-/* The ROSTER beside the room, exactly as `WorkplacePanel.roster()` builds it — the toolbar the
+/* The ROSTER beside the room, exactly as WorkplacePanel.roster() builds it — the toolbar the
    sweep reported unresponsive lives here, so the harness must carry it too. */
 const now = Date.now() / 1000;
 const rail = buildRail(

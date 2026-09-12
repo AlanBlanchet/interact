@@ -77,6 +77,17 @@ class TestElement extends TestNode {
 
   addEventListener(): void {}
 
+  querySelector(selector: string): TestElement | null {
+    return selector.startsWith("#") ? this.findId(selector.slice(1)) ?? null : null;
+  }
+
+  querySelectorAll(): TestElement[] { return []; }
+
+  contains(candidate: TestNode): boolean {
+    return this === candidate || this.children.some((child) =>
+      child === candidate || child instanceof TestElement && child.contains(candidate));
+  }
+
   findClass(name: string): TestElement | undefined {
     if (this.className.split(/\s+/).includes(name)) return this;
     for (const child of this.children) {
@@ -114,6 +125,7 @@ function installDom(): {
   const listeners = new Map<string, ((event: { data: unknown }) => void)[]>();
   const document = {
     body,
+    activeElement: null,
     createDocumentFragment: () => new TestNode(),
     createElement: (tag: string) => new TestHtmlElement(tag),
     createElementNS: (_namespace: string, tag: string) => new TestSvgElement(tag),

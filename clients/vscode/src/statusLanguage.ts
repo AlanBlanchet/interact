@@ -1,7 +1,7 @@
 /** How a worker's status is SPOKEN — one vocabulary, every surface.
  *
  *  visual-critic, twice: the rail and the workplace carry the same taxonomy in two unrelated
- *  visual languages — the rail says a green `✓` and lowercase "finished" in a flat list row, the
+ *  visual languages — the rail says a green ✓ and lowercase "finished" in a flat list row, the
  *  world stamps a tilted uppercase "DONE" on paper. Same five states, two products. Its verdict
  *  was that this split "undercuts the 'one game' read the moment a user sees both panels
  *  together," and that it is very likely part of what Alan called "the environment is weird."
@@ -10,7 +10,7 @@
  *  stamps the WORD on paper, the rail prints the same word beside the same MARK in the same
  *  ACCENT. Idiom may differ; the words, marks and colours may not.
  *
- *  `mark` carries the meaning by SHAPE before colour — colour alone is unreadable to a good share
+ *  mark carries the meaning by SHAPE before colour — colour alone is unreadable to a good share
  *  of people and invisible in a screenshot glanced at across a desk.
  */
 
@@ -48,15 +48,15 @@ export const STATUS: Record<Attention, StatusVoice> = {
   finished: { mark: "✓", word: "DONE", phrase: "finished", accent: "--vscode-charts-green", tinted: true, quiet: true },
   working: { mark: "●", word: "WORKING", phrase: "working", accent: "--vscode-charts-blue", tinted: true, quiet: true },
   "not-ours": { mark: "○", word: "NOT OURS", phrase: "another project", accent: "--vscode-charts-purple", tinted: false },
-  /** Declared in the company file, never yet asked for anything. Present, named, quiet — "some
-   *  other agents exist but aren't used" was the whole roster rendering as absence. */
   /** Somebody KILLED this run. Not an alarm, but never success: folding it into "finished" hid
    *  exactly the runs a person stopped for a reason. Neutral ink, says its word. */
   stopped: { mark: "■", word: "STOPPED", phrase: "stopped", accent: "--vscode-descriptionForeground", tinted: false },
+  /** Declared in the company file, never yet asked for anything. Present, named, quiet — "some
+   *  other agents exist but aren't used" was the whole roster rendering as absence. */
   ready: { mark: "·", word: "READY", phrase: "ready", accent: "--vscode-descriptionForeground", tinted: false, quiet: true },
 };
 
-/** The voice for a state, falling back to `working` rather than rendering a blank cell — an
+/** The voice for a state, falling back to working rather than rendering a blank cell — an
  *  unknown state should look like a person at a desk, never like a hole in the roster. */
 export function voiceOf(attention: string): StatusVoice {
   return STATUS[attention as Attention] ?? STATUS.working;
@@ -64,8 +64,8 @@ export function voiceOf(attention: string): StatusVoice {
 
 /** How long a worker may sit idle before it counts as HELD rather than working.
  *
- *  The same 120 lived in `rail.ts` as `HELD_SECONDS` and in the workplace as `STALL_SECONDS` —
- *  one rule, declared twice, so the roster and the world could disagree about whether the same
+ *  The same 120 lived in rail.ts as HELD_SECONDS and in the workplace as STALL_SECONDS — one
+ *  rule, declared twice, so the roster and the world could disagree about whether the same
  *  person is stuck. The vocabulary owns the words and the colours; it owns the threshold that
  *  decides WHEN a state applies for exactly the same reason.
  */

@@ -1,8 +1,8 @@
-/** The Agents panel's pure decisions — no `vscode` import, so they are unit-testable.
+/** The Agents panel's pure decisions — no vscode import, so they're unit-testable.
  *
- *  Same discipline as `paths.ts`: anything that can be decided without the extension host lives
- *  here and is pinned by `agentsFormat.test.ts`, because the panel's whole job is to tell the
- *  truth at a glance and those are exactly the judgements that go quietly wrong.
+ *  Same discipline as paths.ts: anything decidable without the extension host lives here, pinned
+ *  by agentsFormat.test.ts — the panel's whole job is to tell the truth at a glance, and those
+ *  are exactly the judgements that go quietly wrong.
  */
 import * as path from "path";
 
@@ -17,12 +17,12 @@ export interface StatusIcon {
 
 /** Icon + theme colour per status.
  *
- *  `running` spins, so a live agent is obvious from the corner of the eye — the entire reason to
+ *  running spins, so a live agent is obvious from the corner of the eye — the entire reason to
  *  have a sidebar rather than a tab. Nothing else spins: a spinner on a finished run claims work
- *  is happening when it is not.
+ *  is happening when it isn't.
  *
- *  `foreign` has its OWN colour rather than sharing `stopped`'s. The two differed by glyph alone,
- *  so one of your own live sessions read at a glance as the same tier as a dead run. Foreign is
+ *  foreign has its OWN colour rather than sharing stopped's. The two differed by glyph alone, so
+ *  one of your own live sessions read at a glance as the same tier as a dead run. Foreign is
  *  about OWNERSHIP — not ours to drive — never about being finished.
  */
 const STATUS_ICON: Record<string, StatusIcon> = {
@@ -42,7 +42,7 @@ export function statusIcon(status: string): StatusIcon {
 
 
 
-/** API-equivalent usage value. `null` is unknown and renders an em dash; it never implies a
+/** API-equivalent usage value. null is unknown and renders an em dash; it never implies a
  *  provider charge, account coverage, or zero account impact. */
 export function formatCost(cost: number | null | undefined): string {
   return cost == null ? "—" : `~$${cost.toFixed(4)}`;
@@ -60,8 +60,8 @@ export function formatElapsed(run: AgentRun): string {
 }
 
 export function groupKeyFor(run: AgentRun, by: GroupBy): string {
-  // Prefer the project Python derived (the repo root). Falling back to the directory name keeps
-  // records written before that field existed grouping sensibly rather than vanishing.
+  // Prefer the project Python derived (repo root). Falling back to directory name keeps records
+  // written before that field existed grouping sensibly, not vanishing.
   if (by === "project") {
     return run.project || (run.cwd ? path.basename(run.cwd) : "(no project)");
   }
@@ -80,22 +80,22 @@ export function orderGroups(groups: [string, AgentRun[]][]): [string, AgentRun[]
 
 /** Max characters a row's description may occupy.
  *
- *  The side bar is narrow, so anything past roughly this is clipped by VS Code with no say in
- *  WHERE — which is how every row ended up reading "→ 2b7642ee: Reply wit…". Clipping here
- *  instead means the cut lands on a word boundary and the ellipsis is ours.
+ *  Side bar is narrow, so anything past roughly this is clipped by VS Code with no say in WHERE
+ *  — how every row ended up reading "→ 2b7642ee: Reply wit…". Clipping here instead lands the
+ *  cut on a word boundary, ellipsis ours.
  */
 const ROW_WIDTH = 72;
 
-/** What a DISCOVERED session reports in `last` — how it is being driven, not what it is doing.
- *  Rendered as-is it put a transport label in the column where every other row carries an activity
- *  ("delegating the workplace view…"), so a foreign row read "interactive" and the eye parsed it
- *  as work that never happened. */
+/** What a DISCOVERED session reports in last — how it's being driven, not what it's doing.
+ *  Rendered as-is, it put a transport label in the column where every other row carries an
+ *  activity ("delegating the workplace view…"), so a foreign row read "interactive" and the eye
+ *  parsed it as work that never happened. */
 const TRANSPORT_LABELS = new Set(["interactive", "background"]);
 
 /** What a run's row says beside its name.
  *
- *  The last thing that happened gets the whole width when there IS one: elapsed time and cost are
- *  already on the hover and on the dashboard, and competing with them for a narrow row meant the
+ *  The last thing that happened gets the whole width when there IS one: elapsed time and cost
+ *  are already on hover and the dashboard, so competing with them for a narrow row meant the
  *  interesting half — what the agent actually did — was the half that got cut.
  */
 export function rowDescription(run: {
@@ -106,8 +106,8 @@ export function rowDescription(run: {
 }): string {
   const said = (run.last ?? "").trim();
   if (run.foreign && (!said || TRANSPORT_LABELS.has(said.toLowerCase()))) {
-    // Says whose it is instead. That IS the useful fact about a session interact did not start:
-    // you cannot drive it, and it is not part of the team's work or its cost.
+    // Says whose it is instead. That IS the useful fact about a session interact didn't start:
+    // you can't drive it, and it's not part of the team's work or its cost.
     return "your own session";
   }
   if (!said) return `${run.status} · ${formatCost(run.cost_usd)}`;

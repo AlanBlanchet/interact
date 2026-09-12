@@ -15,9 +15,37 @@ import os
 import re
 from pathlib import Path
 
+from interact.config.schema import by_key
+
 # An already-environment-shaped name: all-caps, digits/underscores, no dots or dashes. A friendly
 # setting key is always dotted (group.field), so this only matches real env vars.
 _ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+
+# Shell metacharacters that make a raw `KEY=value` line break (or execute) when the file is
+# SOURCED — `KEY=cap.vlm and aa.intelligence >= 40` once ran `and` as a command on every source.
+# Quoting at write time keeps the value intact for both readers: pydantic/python-dotenv strip the
+# quotes, bash keeps the value whole instead of executing it.
+_NEEDS_QUOTE_RE = re.compile(r"[^\w@%+=:,./-]")
+
+
+def _quote_if_needed(value: str) -> str:
+    """Single-quote a value containing characters bash would act on."""
+    if _NEEDS_QUOTE_RE.search(value):
+        return "'" + value.replace("'", "'\\''") + "'"
+    return value
+
+
+def _unquote(value: str) -> str:
+    """Strip ONE level of single quotes the writer may have added.
+
+    The file is one store with two readers — python-dotenv/pydantic (which
+    strip quotes themselves) and `source` (which needs them). Reading through
+    this class must return the value as SET, never the quoted form, or a
+    criterion written with spaces parses as `'cap.vlm…` and fails.
+    """
+    if len(value) >= 2 and value.startswith("'") and value.endswith("'"):
+        return value[1:-1].replace("'\\'", "'")
+    return value
 
 
 class UserConfig:
@@ -44,13 +72,16 @@ class UserConfig:
         ``image.model`` / ``image-model`` → ``INTERACT_IMAGE_MODEL``; a key already in env form —
         ``OPENAI_API_KEY``, ``AWS_ACCESS_KEY_ID``, ``AZURE_API_BASE``, any ``INTERACT_*`` — is kept
         verbatim. The env-shape guard runs on the RAW key: after ``.replace(".", "_")`` a friendly
-        key like ``image.model`` becomes ``IMAGE_MODEL`` and would be indistinguishable from a real
-        env var, so a provider cred whose name doesn't end in ``_API_KEY`` (AWS / Azure / Vertex)
-        must be recognised BEFORE that rewrite — else it is stored under a dead ``INTERACT_*`` alias
-        that no SDK reads and the provider silently never authenticates.
+        key like ``image.model`` becomes ``IMAGE_MODEL``, indistinguishable from a real env var,
+        so a provider cred whose name doesn't end in ``_API_KEY`` (AWS/Azure/Vertex) must be
+        recognised BEFORE that rewrite — else it's stored under a dead ``INTERACT_*`` alias no SDK
+        reads, and the provider silently never authenticates.
         """
         if _ENV_NAME_RE.fullmatch(key):
             return key
+        setting = by_key(key)
+        if setting is not None:
+            return setting.env
         env = key.replace(".", "_").replace("-", "_").upper()
         if env.startswith("INTERACT_") or env.endswith("_API_KEY"):
             return env
@@ -66,7 +97,7 @@ class UserConfig:
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
             name, _, value = stripped.partition("=")
-            out[name.strip()] = value.strip()
+            out[name.strip()] = _unquote(value.strip())
         return out
 
     @classmethod
@@ -100,6 +131,8 @@ class UserConfig:
     @classmethod
     def _write(cls, data: dict[str, str]) -> None:
         cls.PATH.parent.mkdir(parents=True, exist_ok=True)
-        body = "".join(f"{name}={value}\n" for name, value in sorted(data.items()))
+        body = "".join(
+            f"{name}={_quote_if_needed(value)}\n" for name, value in sorted(data.items())
+        )
         cls.PATH.write_text(body)
         cls.PATH.chmod(0o600)

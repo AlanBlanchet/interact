@@ -509,3 +509,28 @@ class TestRecommendBoth:
         with patch.object(Model, "is_available", return_value=True):
             measured_recs = bench.recommend(prefer="measured")
         assert all(r.source == "measured" for r in measured_recs)
+
+
+def test_the_served_check_joins_two_spellings_of_one_model():
+    """The local daemon calls it `ollama/kimi-k3:cloud`; the Ollama cloud endpoint calls the same
+    model `ollama/kimi-k3`. Whichever answered discovery in THIS process is the spelling the
+    served set holds, so a pin written in the other one read as "not served" — and `interact
+    providers` printed "key missing" beside a model that answers a live call.
+
+    Every other cross-source join in this codebase goes through `bare_model_name`; this one
+    compared raw strings.
+    """
+    from interact.models import Model
+
+    saved = dict(Model._served)
+    try:
+        Model._served = {"ollama": {"ollama/kimi-k3"}}
+        assert Model(provider="ollama", id="ollama/kimi-k3", capabilities=set()).is_served()
+        assert Model(provider="ollama", id="ollama/kimi-k3:cloud", capabilities=set()).is_served(), (
+            "the local daemon's spelling of the very model the cloud endpoint named"
+        )
+        assert not Model(provider="ollama", id="ollama/never-pulled", capabilities=set()).is_served(), (
+            "a model the daemon really does not have is still absent"
+        )
+    finally:
+        Model._served = saved

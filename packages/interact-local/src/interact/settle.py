@@ -22,19 +22,19 @@ _ANIMATION_TIMEOUT_MS = 1000
 # A page whose rAF never fires would otherwise wait forever on a frame counter.
 _WALL_CLOCK_CAP = 2.0
 
-# One round trip, one rAF loop, both conditions. Splitting this into a scroll wait and an
-# animation wait cost two evaluates and ~45ms on a page where nothing was moving at all.
+# One round trip, one rAF loop, both conditions. Splitting into a scroll wait + an animation
+# wait cost two evaluates and ~45ms on a page where nothing moved at all.
 #
-# Scrolling is watched with a CAPTURE-PHASE listener on the document rather than by sampling
-# window.scrollX/Y. Sampling the window is blind by construction to a scroller that is not the
-# window — a panel, a modal, a virtualised list, anything reached by scrollIntoView — and there
-# the document never moves, so a position check passes instantly and the capture photographs the
-# pre-scroll frame. Scroll events do not bubble, but they do CAPTURE, so one listener on the
+# Scrolling is watched with a CAPTURE-PHASE listener on the document rather than sampling
+# window.scrollX/Y. Sampling the window is blind by construction to a scroller that isn't the
+# window — a panel, a modal, a virtualised list, anything reached by scrollIntoView — there the
+# document never moves, so a position check passes instantly and the capture photographs the
+# pre-scroll frame. Scroll events don't bubble, but they do CAPTURE, so one listener on the
 # document sees every element's.
 #
-# Settling needs three frames with no scroll event rather than one: a smooth scroll is started by
-# the compositor on a frame of its own choosing, and under CPU load it can still be at its origin
-# two frames after the call that requested it — measured, by watching this check pass an annotated
+# Settling needs three frames with no scroll event, not one: a smooth scroll is started by the
+# compositor on a frame of its own choosing, and under CPU load can still be at its origin two
+# frames after the call that requested it — measured by watching this check pass an annotated
 # capture of the pre-scroll screen on a loaded machine.
 _SETTLE_JS = """
 () => new Promise((resolve) => {
@@ -83,9 +83,9 @@ async def settle_page(page: Page) -> None:
     """Wait (bounded) for the page to stop moving — scroll AND finite animations — before a
     capture opens the shutter (#109, #49)."""
     try:
-        # Bounded in TIME as well as in frames. The frame cap assumes rAF keeps firing, and it
-        # does not in an occluded or backgrounded window — which would hang the whole tool call
-        # on a wait whose entire purpose is to be cheap insurance.
+        # Bounded in TIME as well as frames. The frame cap assumes rAF keeps firing, which it
+        # doesn't in an occluded or backgrounded window — hanging the whole tool call on a wait
+        # whose entire purpose is cheap insurance.
         await asyncio.wait_for(page.evaluate(_SETTLE_JS), _WALL_CLOCK_CAP)
     except Exception:
         pass  # navigated mid-wait, a frozen rAF, or a context that cannot run it — never block

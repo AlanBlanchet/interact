@@ -9,6 +9,7 @@
       "ES2022"
     ],
     "sourceMap": true,
+    "rewriteRelativeImportExtensions": true,
     "strict": true,
     // The defect this catches, verbatim: `teamSpend` shipped a whole commit imported into
     // chatView.ts and never called, so the feature was dark in the panel while its unit tests and

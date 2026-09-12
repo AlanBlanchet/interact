@@ -54,13 +54,11 @@ const OUT = 7;
 const CHAMBER_W = 9;
 /** The lobby inside the front gate. */
 const LOBBY_W = 8;
-/** Grounds around the building. The world has to be bigger than the level in BOTH axes or the
- *  camera runs out of somewhere to go: a tall narrow side bar letterboxes the plan and puts the
- *  black bars back, which is the defect the camera exists to remove. */
-/* Grounds around the building, in tiles. The world has to be bigger than the level in BOTH axes
-   or the camera runs out of somewhere to go — and it has to be bigger by ENOUGH: at four columns
-   and no right margin at all there was nowhere to put a pond, a meadow or a tree line, so every
-   attempt at landscaping was silently clipped into the four-tile verge west of the building. */
+/** Grounds around the building, in tiles. The world has to be bigger than the level in BOTH axes
+ *  or the camera runs out of somewhere to go — a tall narrow side bar letterboxes the plan
+ *  otherwise — and bigger by ENOUGH: at four columns and no right margin there was nowhere to put
+ *  a pond, a meadow or a tree line, so landscaping was silently clipped into the four-tile verge
+ *  west of the building. */
 const MX = 9;
 const MY = 9;
 

@@ -65,12 +65,12 @@ async def _finalize_step(
         obs_result = await _run_observe(obs_bytes, action.observe, context)
         step_reports[-1] += f"\n  observation: {obs_result}"
 
-# Typing into a toolkit field after the focusing click: Flutter (GTK) under XTEST doesn't have its
-# text-input connection wired up the instant a field focuses, and keystrokes sent into that window
-# are silently dropped until it is — non-deterministically, worse under software GL / debug builds.
-# The field shows its focus ring (the click landed) yet stays empty (#59). So: settle after the
-# focusing click, then verify the keystrokes registered (a band-scoped pixel diff at the focus
-# point) and re-type if they didn't.
+# Typing into a toolkit field after the focusing click: Flutter (GTK) under XTEST doesn't have
+# its text-input connection wired up the instant a field focuses, so keystrokes sent into that
+# window are silently dropped until it is — non-deterministically, worse under software GL/debug
+# builds. Field shows its focus ring (click landed) yet stays empty (#59). So: settle after the
+# focusing click, verify the keystrokes registered (a band-scoped pixel diff at the focus point),
+# re-type if they didn't.
 _TYPE_FOCUS_SETTLE = 0.5   # seconds to let the toolkit wire up text input before the first keys
 _TYPE_RENDER = 0.6         # seconds to let the field repaint before judging whether text appeared
 _TYPE_RETRIES = 2          # extra type attempts when the keystrokes didn't register
@@ -80,9 +80,9 @@ _TYPE_CHANGE_FRAC = 0.012  # min changed fraction of that band that counts as "t
 
 def _field_changed(before: bytes, after: bytes, cx: int, cy: int) -> bool:
     """Did the field band around the focus point (cx, cy) gain glyphs between two window captures?
-    Scoping the diff to the field makes even short typed text a large fraction of the band while a
-    caret blink stays tiny — so this reliably tells "text landed" from "nothing happened" without
-    ever mistaking a caret for input (which would double-type). Any error → True (assume it
+    Scoping the diff to the field makes even short typed text a large fraction of the band while
+    a caret blink stays tiny — reliably tells "text landed" from "nothing happened" without ever
+    mistaking a caret for input (which would double-type). Any error → True (assume it
     registered, so the retry loop can't spin forever)."""
     try:
         import io  # noqa: PLC0415
@@ -469,9 +469,9 @@ class _StepReport:
 @asynccontextmanager
 async def _mutating_step(win: DesktopWindow, i: int, action, step_reports: list[str]):
     """The shape EVERY mutating desktop branch repeats: snapshot the window, act, then append the
-    step's report annotated with what changed. Each branch had its own hand-written copy of the
-    four lines, so a change to how a desktop mutation reports had to be made six times and drifted
-    (#71). The branch now contributes only its own action and verb:
+    step's report annotated with what changed. Each branch had its own hand-written copy of these
+    four lines, so a change to how a desktop mutation reports had to be made six times and
+    drifted (#71). The branch now contributes only its own action and verb:
 
         async with _mutating_step(win, i, action, step_reports) as step:
             await win.press_key(action.key)

@@ -757,6 +757,7 @@ test("the installed compiled ChatView cold-starts a root conversation without ch
       workspace: {
         workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }],
         getConfiguration: () => ({ get: () => "" }),
+        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
       },
       window: {
         showInformationMessage: () => undefined,
@@ -878,6 +879,7 @@ test("a compatible local bridge that exits before initialize survives a fresh ex
     workspace: {
       workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }],
       getConfiguration: () => ({ get: () => "" }),
+      onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
     },
     window: { showInformationMessage: () => undefined, showErrorMessage: () => undefined,
       showTextDocument: async () => undefined },
@@ -953,6 +955,8 @@ test("a compatible local bridge that exits before initialize survives a fresh ex
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       assert.ok(fs.existsSync(ready), "the real bridge must reach catalog before release");
+      assert.equal(provider.conversationCatalog()?.routes[0]?.label, "Local session",
+        "the dashboard must read the live catalog owned by this ChatView instance");
       const activeDocument = html;
       fs.writeFileSync(release, "release");
       const failureDeadline = Date.now() + 1_000;
@@ -961,6 +965,8 @@ test("a compatible local bridge that exits before initialize survives a fresh ex
       const failure = posted.find((message) => message.type === "console-state" && message.error === true);
       assert.match(String(failure?.message), /exit 1; 140 stderr bytes/);
       assert.doesNotMatch(String(failure?.message), /private active diagnostic|!{3}/);
+      assert.equal(provider.conversationCatalog(), undefined,
+        "a failed bridge must not leave a stale catalog available to the dashboard");
       visibilityChanged?.();
       assert.equal(html, activeDocument,
         "post-failure visibility must not replace the already-live cold composer document");
@@ -1033,6 +1039,7 @@ test("stored conversation continuation is gated only by its typed resume capabil
     workspace: {
       workspaceFolders: [{ uri: { scheme: "file", fsPath: workspaceRoot } }],
       getConfiguration: () => ({ get: () => "" }),
+      onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
     },
     window: {
       showInformationMessage: () => undefined,
@@ -1340,20 +1347,31 @@ const hostErrorRetainsDecision = retryInteractions.length === 1 &&
   retryInteractions[0].submission.values.decision === "A";
 // Same-run delivery is transcript then activity. Updating the transcript must not delete the
 // stable activity target before the first-and-only approval patch arrives.
+document.getElementById("transcript-content").insertAdjacentHTML("beforeend",
+  '<details class="turn turn-tool" data-tool-id="stable-tool"><summary>tool</summary><p>input</p></details>');
+const expandedTool = document.querySelector("details.turn-tool");
+if (expandedTool) expandedTool.open = true;
+const expandedMarkup = expandedTool?.outerHTML ?? "";
 window.dispatchEvent(new MessageEvent("message", { data: {
-  type: "transcript", html: '<p id="streamed-answer">answer</p>'
+  type: "transcript", html: expandedMarkup + '<p id="streamed-answer">answer</p>'
 } }));
 window.dispatchEvent(new MessageEvent("message", { data: {
   type: "activity", html: '<article id="approval-after-transcript">approval choices</article>'
 } }));
 const stablePatches = Boolean(document.getElementById("streamed-answer")) &&
-  Boolean(document.getElementById("approval-after-transcript"));
+  Boolean(document.getElementById("approval-after-transcript")) &&
+  Boolean(document.querySelector("details.turn-tool[open]"));
+window.dispatchEvent(new MessageEvent("message", { data: {
+  type: "transcript", html: '<p id="replacement-answer">replacement</p>'
+} }));
+const absentToolsAreRemoved = !document.querySelector("details.turn-tool") &&
+  Boolean(document.getElementById("replacement-answer"));
 // A first-and-only provider event can race the fresh document. The loaded document must announce
 // that its listeners exist so the extension can replay the current approval/activity snapshot.
 const listenerReady = vscode.messages.some((message) => message?.type === "ready");
 document.body.dataset.harness = selectionOnly && selected && pending && tracked && ready && approvalFits &&
   incompleteRejected && atomicSubmission && hostErrorRetainsDecision &&
-  stablePatches && listenerReady && activeFailurePreservesDocument
+  stablePatches && absentToolsAreRemoved && listenerReady && activeFailurePreservesDocument
   ? "ok" : "failed";
 </script>`);
   const childHtml = chatDocument({

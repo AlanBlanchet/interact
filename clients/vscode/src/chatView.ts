@@ -17,6 +17,7 @@ import { chatFiles } from "./chatFiles";
 import { CHAT_COMMANDS } from "./chatCommands";
 import { agentLabel, conversationTitle, roleOf } from "./roster";
 import { agentDocument, agentView } from "./agentPanel";
+import { CompetenceStore } from "./competenceStore";
 import { DIM_FOREGROUND } from "./themeTokens";
 import { modelChosenFor } from "./agentModels";
 import { companyOf, definitionFile, readOrg } from "./org";
@@ -73,6 +74,12 @@ function conversationRun(run: AgentRun | StoredAgentRun): ConversationRun | unde
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
+  private catalogSnapshot: import("./generated/types").ConversationCatalog | undefined;
+  private readonly workspaceSubscription: vscode.Disposable;
+
+  public conversationCatalog(): import("./generated/types").ConversationCatalog | undefined {
+    return this.catalogSnapshot;
+  }
   public static readonly viewId = "interactAgents.chat";
 
   /** Set while a conversation is open. The roster views' `when` clauses watch it, so the column
@@ -84,14 +91,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand(ChatViewProvider.IN_CONVERSATION_CLEAR);
   }
 
-  /** Leave whatever depth you are at and return to the team.
-   *
-   *  The command used to only flip a context key and re-reveal the Team tab. That worked when the
-   *  key HID the roster view — but the roster moved to the big panel and the key now gates
-   *  nothing, so "back" became a button that did nothing at every depth, with no way out of a
-   *  conversation except clicking a different agent. State has to be cleared and the panel
-   *  repainted; a context key is not navigation.
-   */
   /** Repaint the agent depth if it is what you are looking at.
    *
    *  Choosing a model wrote the file and toasted, but the open panel kept showing the old one until
@@ -101,6 +100,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.agentId === agent) this.render();
   }
 
+  /** Leave whatever depth you are at and return to the team.
+   *
+   *  The command used to only flip a context key and re-reveal the Team tab. That worked when the
+   *  key HID the roster view — but the roster moved to the big panel and the key now gates
+   *  nothing, so "back" became a button that did nothing at every depth, with no way out of a
+   *  conversation except clicking a different agent. State has to be cleared and the panel
+   *  repainted; a context key is not navigation.
+   */
   public backToTeam(): void {
     this.agentId = null;
     this.runId = undefined;
@@ -108,9 +115,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  /** Open the existing conversation composer, whose route catalog owns model and provider choice. */
+  public async newConversation(): Promise<void> {
+    this.backToTeam();
+    await vscode.commands.executeCommand("setContext", ChatViewProvider.IN_CONVERSATION, true);
+    if (this.view) void this.view.show?.(true);
+    await vscode.commands.executeCommand("interactAgents.chat.focus");
+    this.render();
+  }
+
   private static readonly IN_CONVERSATION_CLEAR = "interact.agents.backToTeam";
 
   private view: vscode.WebviewView | undefined;
+  /** What each model is measured at — the one store every surface shares. */
+  private readonly measured = new CompetenceStore();
   private runId: string | undefined;
   private watcher: fs.FSWatcher | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -125,13 +143,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   constructor(private readonly log: vscode.OutputChannel) {
     process.once("exit", this.disposeOnProcessExit);
+    this.workspaceSubscription = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      this.catalogSnapshot = undefined;
+      this.conversationGeneration += 1;
+      this.conversationClient?.dispose();
+      this.conversationClient = undefined;
+    });
   }
 
   /** The host belongs to the extension window, not to the visibility lifetime of one webview. */
   public dispose(): void {
     process.off("exit", this.disposeOnProcessExit);
     this.stopWatching();
+    this.workspaceSubscription.dispose();
     this.conversationGeneration += 1;
+    this.catalogSnapshot = undefined;
     this.conversationClient?.dispose();
     this.conversationClient = undefined;
   }
@@ -345,7 +371,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         command: backend.command,
         args: backend.args,
         cwd: workspaceRoot,
+        origin: backend.origin,
       }, {
+        // The bridge's stderr tail. It never reaches the UI (untrusted child output), but it must
+        // reach SOMETHING — computed, bounded and then dropped is not a diagnostic, and this text
+        // is what identified a real version skew.
+        onDiagnostic: (line) => this.log.appendLine(`[bridge] ${line}`),
         onEvent: (run, event) => {
           if (this.conversationGeneration === generation && this.conversationClient === client) {
             this.onConversationEvent(run, event);
@@ -365,6 +396,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.conversationClient = client;
       const catalog = await client.catalog();
       if (this.conversationGeneration !== generation || this.conversationClient !== client) return;
+      this.catalogSnapshot = catalog;
       this.consoleState = {
         phase: catalog.routes.some((route) => route.availability === "available") ? "ready" : "empty",
         catalog,
@@ -388,6 +420,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private conversationBridgeFailed(message: string): void {
     const visible = message || "The local conversation bridge stopped unexpectedly.";
     const repaintColdDocument = !this.consoleState.catalog;
+    this.catalogSnapshot = undefined;
     this.consoleState = {
       ...this.consoleState,
       phase: "error",
@@ -575,6 +608,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    *  ("acceptEdits") into the words somebody chose it by ("May edit files"). */
   private modes: PermissionMode[] = [];
 
+  /** Asked once for every surface that shows a number; the board on disk fills what the CLI
+   *  could not. */
+  private ensureCompetence(models: readonly string[]): void {
+    void this.measured.ensure(models).then((known: boolean) => { if (known) this.render(); });
+  }
+
   /** The agent depth. Identity from the company file, tasks from the registry. */
   private renderAgent(agent: string): void {
     if (!this.view) return;
@@ -586,6 +625,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // failing in the room. That was precisely the case this whole change was written for.
     const company = companyOf(readOrg()) ?? undefined;
     const tasks = readAgentRuns().filter((r) => roleOf(r as never, company).id === agent);
+    // Asked BY NAME: a run names a model the ranking may not carry verbatim, and only a named ask
+    // resolves it. Never awaited by a paint — the panel draws at once and repaints when it lands.
+    this.ensureCompetence(tasks.map((r) => r.model).filter((m): m is string => !!m));
+    const ranModel = [...tasks]
+      .sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))
+      .find((t) => t.model)?.model ?? null;
     const body = agentView(
       {
         id: agent,
@@ -593,12 +638,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         department: declared?.department ?? null,
         model: modelChosenFor(agent),
         declaredModel: declared?.model ?? null,
+        // Most agents declare `inherit`, so the declaration alone says nothing about them. What
+        // they LAST ran on does, and it has a measure.
+        ranModel,
+        competence: (() => {
+          const m = modelChosenFor(agent) ?? (declared?.model && declared.model !== "inherit"
+            ? declared.model : ranModel);
+          return this.measured.competence(m ?? undefined) ?? null;
+        })(),
         // Resolved, not the raw relative string the company file records — an unresolved path
         // opens nothing and the chip would look live while doing nothing.
         definitionPath: definitionFile(agent, org)
           ?? tasks.find((t) => t.definition_path)?.definition_path ?? null,
       },
-      tasks as never[],
+      // Each errand carries its OWN model and measure: the panel used to assert one score for
+      // every run an agent had made, contradicting the row that was clicked whenever they differed.
+      tasks.map((t) => ({
+        ...t,
+        model: t.model ?? null,
+        competence: this.measured.competence(t.model ?? undefined) ?? null,
+      })) as never[],
       "N",
     );
     const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);

@@ -133,10 +133,10 @@ function main(): void {
   }
 
   /* ── AND THE PLACES A REAL CAST IS ACTUALLY GIVEN ─────────────────────────────────────────
-     Everything above checks what the BUILDING declares. What a body stands on is what `seating`
+     Everything above checks what the BUILDING declares. What a body stands on is what seating
      HANDS it, and those were two different sets: the hand-out used to wrap an exhausted pool by
      stepping one tile off a real place, inventing a coordinate the building never agreed to and
-     that no invariant over `room.seats` could ever see. Three finished agents in a two-couch room
+     that no invariant over room.seats could ever see. Three finished agents in a two-couch room
      put the third one a single tile from the first — sprites overlapping, nameplates illegible —
      while every check here reported the room correct. So the hand-out is checked too. */
   const given = [...seating(world, cast, brainOf(cast)).entries()];

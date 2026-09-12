@@ -1,10 +1,10 @@
 /** Writes the board out as plain pages so it can be opened in a browser and looked at.
  *
- *  A webview IS a browser, so the only thing missing outside VS Code is the theme: the `--vscode-*`
- *  variables the editor injects on the document element, and the class it puts on the body. Both
- *  are supplied here from the real Dark+ and Light+ values, injected exactly the way VS Code does
- *  it — so what renders in this harness is what renders in the panel. Same document, same CSP,
- *  same nonce, nothing stubbed.
+ *  A webview IS a browser, so the only thing missing outside VS Code is the theme: the
+ *  --vscode-* variables the editor injects on the document element, and the class it puts on
+ *  the body. Both are supplied here from the real Dark+ and Light+ values, injected exactly
+ *  the way VS Code does it — so what renders in this harness is what renders in the panel.
+ *  Same document, same CSP, same nonce, nothing stubbed.
  *
  *      node out/build.js <outdir>
  */
@@ -52,10 +52,11 @@ ${body}
 </html>`;
 }
 
-/** The comparison sheet: every width and both themes on one page, so the direction can be judged
- *  in a single open without resizing anything. The theme is scoped to each column rather than to
- *  the body — the stylesheet asks for an ANCESTOR carrying the class, which the real editor's
- *  `<body>` satisfies just as well as a column here, so no rule is bent to make this work. */
+/** The comparison sheet: every width and both themes on one page, so the direction can be
+ *  judged in a single open without resizing anything. Theme is scoped to each column rather
+ *  than to the body — the stylesheet asks for an ANCESTOR carrying the class, which the real
+ *  editor's <body> satisfies just as well as a column here, so no rule is bent to make this
+ *  work. */
 function sheet(widths: number[]): string {
   const cols = ([["vscode-dark", DARK], ["vscode-light", LIGHT]] as const)
     .flatMap(([klass, vars]) =>
@@ -86,9 +87,9 @@ function sheet(widths: number[]): string {
   .col > div:last-child { border:1px solid #555; }
   .col .sp { min-height:0; }
   /* container-type:inline-size gives the panel size containment on the inline axis, so it
-     contributes NO intrinsic width and a shrink-to-fit column folds it to nothing. The width has
-     to arrive from OUTSIDE: a fixed, non-shrinking column, with the panel filling it. Costs the
-     real panel nothing — there it is a block in normal flow and already has a definite width. */
+     contributes NO intrinsic width and a shrink-to-fit column folds it to nothing. Width must
+     arrive from OUTSIDE: a fixed, non-shrinking column, with the panel filling it. Costs the
+     real panel nothing — there it's a block in normal flow with a definite width already. */
   .col { flex: 0 0 auto; }
   .col .sp-panel { width: 100%; }
 </style>

@@ -6,7 +6,7 @@
  *  so every message arriving from it is untrusted, and a command executed because a message named
  *  it would be a real hole.
  *
- *  Deliberately free of `vscode`, so it can be unit-tested without an extension host.
+ *  Deliberately free of vscode, so it can be unit-tested without an extension host.
  */
 
 export interface ChatCommandLike {

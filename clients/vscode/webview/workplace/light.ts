@@ -1,37 +1,31 @@
-/** LIGHT — the layer that turns a floor plan into a place somebody is standing in.
+/** LIGHT — turns a floor plan into a place somebody is standing in.
  *
- *  The version this replaces lit a room by filling its whole floor with ten percent of a hue. One
- *  flat wash, edge to edge, identical in every cell. That is not light: it is a tint, and a tint
- *  is exactly what a diagram uses to say "this region is category B". It is also why the LIGHT
- *  theme read as washed out while the dark one read as a room — dark got its depth for free from
- *  a near-black background the mixes fell toward, and light had nothing underneath to fall to, so
- *  every surface landed inside a twelve-point band and the walls came out BRIGHTER than the floor
- *  they are supposed to be occluding.
+ *  The version this replaces lit a room with a flat 10% hue wash, edge to edge — a tint, not
+ *  light (that's what a diagram uses to mean "this region is category B"). It's also why LIGHT
+ *  theme read as washed out while dark read as a room: dark got depth for free from a near-black
+ *  background the mixes fell toward; light had nothing to fall to, so every surface landed in a
+ *  12-point band and walls came out BRIGHTER than the floor they should occlude.
  *
- *  So the value range stops coming from the theme and starts coming from LIGHT AND SHADOW, which
- *  is where it comes from in every game that has ever looked like a place:
+ *  So value range comes from LIGHT AND SHADOW instead, the way every game that ever looked like a
+ *  place does it:
  *
- *   - a room is DARK by default and its lamps carve pools out of that dark. The pool is quantised
- *     to the TILE GRID and stepped in four levels — no smooth ramp anywhere, because a smooth
- *     radial gradient rasterises at screen resolution and is the one effect that instantly
- *     un-pixels a pixel scene. Banded light on the tile grid is the signature; it is also what
- *     an 8-bit renderer could actually do, which is why it reads as a game rather than as CSS.
- *   - every wall casts. One global light direction (from the north-west, the oldest convention in
- *     the medium) means every wall drops a hard band onto the floor south and east of it, and the
- *     room acquires a corner you can see.
- *   - every prop casts its own SILHOUETTE, not a blob: the same drawing re-rendered through an
- *     all-ink palette, offset. It costs one extra entry in the sheet per distinct prop and one
- *     `use` per placement.
+ *   - a room is DARK by default; lamps carve pools out of it. Pool quantised to the TILE GRID,
+ *     four levels, no smooth ramp — a radial gradient rasterises at screen res and instantly
+ *     un-pixels a pixel scene. Banded light on the grid is the signature, and what an 8-bit
+ *     renderer could actually do — why it reads as a game, not CSS.
+ *   - every wall casts. ONE global light direction (north-west, the oldest convention) so every
+ *     wall drops a hard band south/east of it, and the room gets a visible corner.
+ *   - every prop casts its own SILHOUETTE, not a blob: same drawing re-rendered through an
+ *     all-ink palette, offset. One extra sheet entry per distinct prop, one use per placement.
  *
- *  And the pool is TINTED by what the room is doing. The rail says a run's state in a word and a
- *  colour from `statusLanguage`; the world says the same state by the colour of the light in the
- *  room, which is legible from across the map before a single label resolves. Same taxonomy, two
- *  idioms — which is the whole point of having a taxonomy.
+ *  Pool is TINTED by what the room is doing: rail says a run's state in word + colour from
+ *  statusLanguage; world says the same state by the light's colour, legible across the map before
+ *  any label resolves. Same taxonomy, two idioms.
  */
 import type { Rect, Room, World } from "./world";
 
-/** Cells per tile. The map's user units are cells; a tile is sixteen of them now that the
- *  substrate is 16x16 Kenney art. */
+/** Cells per tile. Map's user units are cells; a tile is sixteen of them now the substrate is
+ *  16x16 Kenney art. */
 const C = 16;
 
 /** Where light comes from in a room. Radius is in TILES. */
@@ -43,20 +37,20 @@ export interface Lamp {
   kind: "fixture" | "spot";
 }
 
-/** How many steps the pool is quantised into. Four is enough to read as falloff and few enough
- *  that each band is a big visible shape rather than a gradient in disguise. */
+/** Steps the pool quantises into. Four reads as falloff, few enough each band is a big visible
+ *  shape, not a gradient in disguise. */
 export const LEVELS = 4;
 
-/** The band edges, as a fraction of the lamp's radius. Deliberately uneven: an even split makes
- *  the middle band dominate and the pool reads as a disc with a rim. */
+/** Band edges, fraction of lamp radius. Deliberately uneven — an even split makes the middle
+ *  band dominate, and the pool reads as a disc with a rim. */
 const EDGE = [0.3, 0.55, 0.78, 1];
 
 /** The light in a room, as tile runs per level.
  *
- *  Index 0 is the brightest band; the LAST entry is everything no lamp reaches. The unlit set is
- *  returned rather than left implicit because the shade has to be painted only where the light is
- *  NOT: a dark wash under the pools would have to be lightened back by them, and two translucent
- *  fills stacked is a gradient, which is the one thing this layer exists not to be.
+ *  Index 0 is the brightest band; the LAST entry is everything no lamp reaches. Unlit set is
+ *  returned, not left implicit: shade must paint only where light is NOT — a dark wash under the
+ *  pools would need lightening back by them, and two stacked translucent fills is a gradient,
+ *  the one thing this layer exists not to be.
  */
 export function poolRuns(room: Room, lamps: readonly Lamp[], stride: number): Rect[][] {
   const floor = new Set<number>();
@@ -69,8 +63,8 @@ export function poolRuns(room: Room, lamps: readonly Lamp[], stride: number): Re
     const y = (key - x) / stride;
     let best = LEVELS;
     for (const l of lamps) {
-      // Measured from the CENTRE of both tiles, so a lamp lights its own tile brightest rather
-      // than lighting the corner it happens to sit on.
+      // Measured from the CENTRE of both tiles, so a lamp lights its own tile brightest, not the
+      // corner it sits on.
       const d = Math.hypot(x - l.x, (y - l.y) * 1.15) / Math.max(0.5, l.r);
       let band = LEVELS;
       for (let i = 0; i < EDGE.length; i++) {
@@ -79,8 +73,8 @@ export function poolRuns(room: Room, lamps: readonly Lamp[], stride: number): Re
           break;
         }
       }
-      // A spot is a hot centre: it never contributes the outermost, flattest band, so a desk lamp
-      // reads as a small bright thing rather than as a second wash over the whole room.
+      // A spot is a hot centre: never contributes the outermost, flattest band, so a desk lamp
+      // reads as small and bright, not a second wash over the room.
       if (l.kind === "spot" && band >= LEVELS - 1) band = LEVELS;
       if (band < best) best = band;
     }
@@ -98,17 +92,16 @@ export function poolRuns(room: Room, lamps: readonly Lamp[], stride: number): Re
 
 /** Where a room's light actually hangs.
  *
- *  A fixture per rectangle of the footprint — so an L gets two, and the alcove is not a black
- *  hole behind a lit room — plus a hot spot on every prop that emits: a screen, a desk lamp, a
- *  kettle's ring. Nothing is placed by hand; a room furnished differently lights differently,
- *  which is the same rule the furniture already follows.
+ *  A fixture per rectangle of the footprint (an L gets two, so the alcove isn't a black hole),
+ *  plus a hot spot on every emitting prop: screen, desk lamp, kettle's ring. Nothing placed by
+ *  hand — a room furnished differently lights differently, same rule the furniture follows.
  */
 export function lampsFor(room: Room): Lamp[] {
   const out: Lamp[] = [];
   for (const r of room.rects) {
-    // A ROW of fixtures on a regular pitch, which is what a ceiling actually has — and the reason
-    // it matters is that ONE lamp per room produces a single vignette that reads as a tint again.
-    // Several overlapping pools scallop, and the scallop is the thing the eye reads as light.
+    // A ROW of fixtures on a regular pitch, what a ceiling actually has. ONE lamp per room
+    // produces a single vignette that reads as a tint again; several overlapping pools scallop,
+    // and the scallop is what the eye reads as light.
     const pitch = 5;
     const nx = Math.max(1, Math.round(r.w / pitch));
     const ny = Math.max(1, Math.round(r.h / pitch));
@@ -131,8 +124,8 @@ export function lampsFor(room: Room): Lamp[] {
   return out;
 }
 
-/** Horizontal runs of a cell set inside a room's bounding box. Same merge the map already does
- *  for tiles: one rectangle per run, so a lit room costs tens of nodes rather than hundreds. */
+/** Horizontal runs of a cell set inside a room's bounding box. Same merge the map does for
+ *  tiles: one rectangle per run, so a lit room costs tens of nodes, not hundreds. */
 function runsOf(cells: Set<number>, box: Rect, stride: number): Rect[] {
   const out: Rect[] = [];
   for (let y = box.y; y < box.y + box.h; y++) {
@@ -156,19 +149,19 @@ export function runPath(runs: readonly Rect[]): string {
   return runs.map((r) => `M${r.x * C} ${r.y * C}h${r.w * C}v${r.h * C}h-${r.w * C}z`).join("");
 }
 
-/** How deep a wall's shadow falls onto the floor beside it, in CELLS out of sixteen. Five is
- *  the same visible band the 8-cell tile had, at the new pitch. */
+/** How deep a wall's shadow falls onto the floor beside it, CELLS out of sixteen. Five is the
+ *  same visible band the 8-cell tile had, at the new pitch. */
 const DROP = 5;
 
 /** Every wall in the building, casting.
  *
- *  ONE direction for the whole world — light from the north-west — so the shadows agree with each
- *  other and with the offset every prop and every person is drawn with. A per-room light
- *  direction would be more correct and would read as noise.
+ *  ONE direction for the whole world — light from the north-west — so shadows agree with each
+ *  other and with the offset every prop and person is drawn with. A per-room direction would be
+ *  more correct and would read as noise.
  *
- *  Built from `world.solid`, which already knows every cell a body may not walk into, so this
- *  picks up the building's structural mass and the party walls between two rooms for free rather
- *  than needing a second description of the same geometry.
+ *  Built from world.solid, which already knows every cell a body may not walk into — picks up
+ *  structural mass and party walls between rooms for free, no second description of the same
+ *  geometry.
  */
 export function wallShadow(world: World): string {
   const solid = world.solid;
@@ -183,8 +176,8 @@ export function wallShadow(world: World): string {
       const nw = at(x - 1, y - 1);
       const X = x * C;
       const Y = y * C;
-      // The band under a wall runs the full tile; the band beside one runs the full tile; where
-      // both meet, the corner is already covered by the two overlapping bands.
+      // Band under a wall runs the full tile; band beside one runs the full tile; where both
+      // meet, the corner is already covered by the overlap.
       if (north) d += `M${X} ${Y}h${C}v${DROP}h-${C}z`;
       if (west) d += `M${X} ${Y + (north ? DROP : 0)}v${C - (north ? DROP : 0)}h${DROP}v-${C - (north ? DROP : 0)}z`;
       // An inside corner with nothing orthogonally solid still catches the diagonal.
@@ -196,12 +189,11 @@ export function wallShadow(world: World): string {
 
 /* The per-prop shadow PROJECTION system ends here, deliberately.
  *
- *  It existed because the hand-drawn tiles carried no grounding of their own — six rounds of
- *  "floating trees" were fought with projected silhouettes, dapple rules and contact invariants.
- *  The Kenney art bakes its grounding INTO the sprite (a tree's bottom tile is trunk, skirt and
- *  its own contact shading; furniture carries feet and base shadows), and the reference register
- *  this view is now held to — the packs' own sample scenes — draws NO thrown prop shadows at all.
- *  Re-projecting silhouettes over art that already sits down would double-ground everything and
- *  read as collage. The wall band above stays: it is architecture, not a prop effect, and it is
- *  what keeps the party walls legible as raised masonry.
+ *  It existed because hand-drawn tiles carried no grounding of their own — six rounds of
+ *  "floating trees" fought with projected silhouettes, dapple rules, contact invariants. Kenney
+ *  art bakes grounding INTO the sprite (tree's bottom tile is trunk + skirt + contact shading;
+ *  furniture carries feet and base shadows), and the reference register this view is held to —
+ *  the packs' own sample scenes — draws NO thrown prop shadows at all. Re-projecting over art
+ *  that already sits down would double-ground everything and read as collage. Wall band above
+ *  stays: architecture, not a prop effect — keeps party walls legible as raised masonry.
  */

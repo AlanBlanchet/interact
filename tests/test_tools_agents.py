@@ -202,6 +202,8 @@ async def test_an_explicit_name_still_wins_over_the_definition(monkeypatch):
 async def test_a_tool_caller_cannot_spawn_an_unrestricted_agent(monkeypatch):
     from interact.server import tools_agents
 
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+
     spawned = []
 
     async def _never(*a, **k):
@@ -221,6 +223,8 @@ async def test_a_restricted_mode_still_goes_through(monkeypatch):
     """The control is not disabled for models — only its unrestricted end is. Handing an agent
     'plan' is exactly the safe delegation this feature exists for."""
     from interact.server import tools_agents
+
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
 
     got = {}
 

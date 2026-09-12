@@ -53,11 +53,13 @@ if (mode === "exit_before_initialize") {
 }
 
 /** @param {object} value */
+// @ts-expect-error TS7006: the fixture stays JS syntax because tests copy it to an extensionless executable.
 function write(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 /** @param {object} value @param {string} character */
+// @ts-expect-error TS7006: the fixture stays JS syntax because tests copy it to an extensionless executable.
 function writeAcrossUtf8Boundary(value, character) {
   const line = Buffer.from(`${JSON.stringify(value)}\n`);
   const marker = Buffer.from(character);

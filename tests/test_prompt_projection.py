@@ -82,7 +82,8 @@ def _fixture_repository(tmp_path: Path, generator: str = "") -> Path:
     _git(repository, "init", "--initial-branch=main")
     (repository / "generate.py").write_text(generator or (
         "from pathlib import Path\n"
-        "for name in ('agents/a.md','skills/s/SKILL.md','rules/r.md'):\n"
+        "for name in ('agents/a.md','skills/s/SKILL.md','rules/r.md',"
+        "'scopes/w/agents/pm.md','scopes/w/skills/w/SKILL.md'):\n"
         " p=Path(name); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(name+'\\n')\n"
         "Path('AGENTS.md').write_text('agents\\n')\n"
         "Path('instructions.md').write_text('instructions\\n')\n"
@@ -222,7 +223,12 @@ def test_installer_switches_only_declared_consumers_and_rejects_unmanaged_collis
     install_prompt_projection(projection, home, vscode, state)
 
     assert (home / "AGENTS.md").read_text() == "agents\n"
-    assert (home / "CLAUDE.md").read_text() == "instructions\n"
+    assert (home / ".codex" / "AGENTS.md").read_text() == "agents\n"
+    assert not (home / "CLAUDE.md").exists()
+    assert (home / ".claude" / "CLAUDE.md").read_text() == "instructions\n"
+    assert (home / ".claude" / "scopes" / "w" / "agents" / "pm.md").is_file()
+    assert (home / ".claude" / "scopes" / "w" / "skills" / "w" / "SKILL.md").is_file()
+    assert not (home / ".claude" / "agents" / "pm.md").exists()
     assert (vscode / "alan.instructions.md").read_text() == "instructions\n"
     assert (vscode / "a.agent.md").is_file()
     assert (vscode / "s.skill.instructions.md").is_file()

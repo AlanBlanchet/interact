@@ -58,6 +58,47 @@ test("the default scope is the folder you have open", () => {
   assert.deepEqual(seen, ["a", "b"]);
 });
 
+test("a parent workspace includes runs from repositories below its folders", () => {
+  const root = mkdtempSync(join(tmpdir(), "ws-"));
+  const parent = join(root, "interact-all");
+  mkdirSync(join(parent, "interact"), { recursive: true });
+  mkdirSync(join(parent, "interact-server"), { recursive: true });
+  mkdirSync(join(root, "sheets"), { recursive: true });
+  const runs = [
+    run({ run_id: "public", project: "interact", cwd: join(parent, "interact") }),
+    run({ run_id: "private", project: "interact-server", cwd: join(parent, "interact-server") }),
+    run({ run_id: "outside", project: "sheets", cwd: join(root, "sheets") }),
+  ];
+
+  assert.deepEqual(
+    scopeRuns(runs, { kind: "current" }, "interact-all", [parent]).map((r) => r.run_id),
+    ["public", "private"],
+  );
+  assert.deepEqual(
+    scopeRuns(runs, { kind: "project", name: "interact" }, "interact-all", [parent])
+      .map((r) => r.run_id),
+    ["public"],
+  );
+  assert.equal(scopeRuns(runs, { kind: "all" }, "interact-all", [parent]).length, 3);
+});
+
+test("current scope accepts runs below any multi-root workspace folder", () => {
+  const root = mkdtempSync(join(tmpdir(), "ws-"));
+  const first = join(root, "first");
+  const second = join(root, "second");
+  mkdirSync(join(first, "repo"), { recursive: true });
+  mkdirSync(join(second, "repo"), { recursive: true });
+  const runs = [
+    run({ run_id: "first", project: "one", cwd: join(first, "repo") }),
+    run({ run_id: "second", project: "two", cwd: join(second, "repo") }),
+  ];
+
+  assert.deepEqual(
+    scopeRuns(runs, { kind: "current" }, "one", [first, second]).map((r) => r.run_id),
+    ["first", "second"],
+  );
+});
+
 test("and you can look at every workspace at once", () => {
   assert.equal(scopeRuns(RUNS, { kind: "all" }, "interact").length, 4);
 });

@@ -21,11 +21,11 @@ export class ScopeStore {
   constructor(
     private readonly memento: vscode.Memento,
     /** Where a discovery failure gets said out loud. Optional so a test can build a store
-     *  without one; the panel always passes its channel, reachable from the chat as `/logs`. */
+     *  without one; the panel always passes its channel, reachable from the chat as /logs. */
     private readonly log?: vscode.OutputChannel,
   ) {}
 
-  /** The last answer from `interact agents discovered`, and when it arrived. */
+  /** The last answer from interact agents discovered, and when it arrived. */
   private discovered: Discovery | null = null;
   private discovering = false;
 
@@ -39,17 +39,21 @@ export class ScopeStore {
     return folder ? projectFor(folder.uri.fsPath) : "";
   }
 
-  /** Every run the panel should be showing — including the sessions interact did not start.
+  get workspaceFolders(): string[] {
+    return (vscode.workspace.workspaceFolders ?? []).map(({ uri }) => uri.fsPath);
+  }
+
+  /** Every run the panel should be showing — including the sessions interact didn't start.
    *
-   *  Those have no record on disk, so a directory read alone never saw them: the panel could not
-   *  show the user's own editor windows, nor offer the folders they are working in. Kept SYNC by
-   *  serving the last discovery and refreshing behind it — a subprocess on every repaint to track
-   *  something that changes when a person opens a window would be the wrong trade.
+   *  Those have no record on disk, so a directory read alone never saw them: the panel couldn't
+   *  show the user's own editor windows, nor offer the folders they're working in. Kept SYNC by
+   *  serving the last discovery and refreshing behind it — a subprocess on every repaint to
+   *  track something that changes when a person opens a window would be the wrong trade.
    */
   runs(): AgentRun[] {
     this.refreshDiscovery();
     const all = mergeDiscovered(readAgentRuns(), this.discovered?.runs ?? []);
-    return scopeRuns(all, this.scope, this.currentProject);
+    return scopeRuns(all, this.scope, this.currentProject, this.workspaceFolders);
   }
 
   /** Re-ask for foreign sessions when the last answer has aged out. Fire-and-forget: the current
@@ -68,10 +72,10 @@ export class ScopeStore {
         if (error) this.log?.appendLine(`interact agents discovered: ${error}`);
         else this.changed.fire();
       })
-      // The flag is cleared in `finally`, never only on the happy path: leaving it set disables
+      // The flag is cleared in finally, never only on the happy path: leaving it set disables
       // discovery for the life of the window, and the panel then serves one stale answer forever
-      // with nothing on screen to say so. Assigned BEFORE `changed.fire()` above for the same
-      // reason — the fire re-enters `runs()`, which calls this.
+      // with nothing on screen to say so. Assigned BEFORE changed.fire() above for the same
+      // reason — the fire re-enters runs(), which calls this.
       .finally(() => { this.discovering = false; });
   }
 

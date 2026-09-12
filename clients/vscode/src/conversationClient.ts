@@ -37,11 +37,14 @@ export interface ConversationProcessSpec {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  origin?: "project_checkout" | "local_path";
 }
 
 export interface ConversationClientHandlers {
   onEvent?: (run: AgentRun, event: AgentEvent) => void;
   onError?: (message: string) => void;
+  /** Untrusted child stderr, for the extension's LOG — never the UI. See `reportDiagnostic`. */
+  onDiagnostic?: (line: string) => void;
   onState?: (state: ConversationClientState) => void;
 }
 
@@ -232,6 +235,20 @@ export function createConversationClient(
     }
   };
 
+  /** A bounded quote of the child's stderr — enough to name a cause, never a log dump. */
+  const STDERR_TAIL_MAX = 600;
+  let stderrTail = "";
+  /** The tail, for the LOG only. A count alone is useless — "exit 1; 638 stderr bytes" proves an
+   *  explanation existed and withholds it, and that text is what identified a real version skew.
+   *  But a child's stderr is untrusted and may carry paths or secrets, so it never reaches the UI:
+   *  `onDiagnostic` goes to the extension's output channel, `onError` to the user. */
+  const reportDiagnostic = (ending: string): void => {
+    const text = stderrTail.replace(/\s+/g, " ").trim();
+    handlers.onDiagnostic?.(text
+      ? `conversation bridge ${ending}; stderr tail: ${text}`
+      : `conversation bridge ${ending}; nothing on stderr`);
+  };
+
   const launch = (): ChildProcessWithoutNullStreams => {
     shutdownStarted = false;
     const process = spawn(spec.command, [...spec.args], {
@@ -241,17 +258,29 @@ export function createConversationClient(
       stdio: ["pipe", "pipe", "pipe"],
     });
     process.stdout.on("data", accept);
-    process.stderr.on("data", (chunk: Buffer | string) => { stderrBytes += Buffer.byteLength(chunk); });
+    // Bounded: stderr is untrusted text from a child process, and a crash loop can run long. See
+    // reportDiagnostic above for why the tail is kept at all.
+    process.stderr.on("data", (chunk: Buffer | string) => {
+      stderrBytes += Buffer.byteLength(chunk);
+      if (stderrTail.length < STDERR_TAIL_MAX) {
+        stderrTail = (stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX);
+      }
+    });
     process.on("error", (error) => fail((error as NodeJS.ErrnoException).code === "ENOENT"
-      ? "Interact is not installed. Install the matching version, then reload the window."
+      // NAME the program that is missing. A project-checkout spawn runs `uv run --directory …`,
+      // so a missing `uv` reported "Interact is not installed" — confident, wrong advice beside a
+      // RELOAD BRIDGE button, sending the reader to reinstall something that was already there.
+      ? `${spec.command} was not found. Install it, then reload the window.`
       : "The conversation bridge could not start. Reload the window to try again."));
     process.on("exit", (code, signal) => {
       if (currentState === "closed") return;
       const ending = code === null ? `signal ${boundedProtocolDetail(signal) || "unknown"}` : `exit ${code}`;
       const beforeInitialization = currentState === "connecting";
+      reportDiagnostic(ending);
+      const origin = spec.origin === "project_checkout" ? "project checkout" : "verified local executable";
       fail(beforeInitialization
-        ? `The conversation bridge exited before initialization (${ending}; ${stderrBytes} stderr bytes). Reload the window to try again.`
-        : `The conversation bridge stopped unexpectedly (${ending}; ${stderrBytes} stderr bytes). Reload the window to try again.`);
+        ? `The conversation bridge exited before initialization (${ending}; ${stderrBytes} stderr bytes) via the ${origin}. Reload the window to try again.`
+        : `The conversation bridge stopped unexpectedly (${ending}; ${stderrBytes} stderr bytes) via the ${origin}. Reload the window to try again.`);
     });
     return process;
   };

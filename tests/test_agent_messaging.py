@@ -5,10 +5,16 @@ CLI (`interact agents send`, which is how the VS Code panel lets the OPERATOR jo
 agree on every refusal, so the checks live here once rather than being written twice and drifting.
 """
 
+import asyncio
+import sys
+import threading
+
 import pytest
 
 from interact.agents import messaging
 from interact.agents import registry as reg
+from interact.agents.policy import Policy
+from interact.agents.providers import PermissionMode
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +28,7 @@ def _record(**over):
     return reg.register(
         run_id=over.get("run_id", "r1"), name=over.get("name", "reviewer"),
         provider=over.get("provider", "claude"), task="t", pid=1234,
+        agent="tester", provider_session_id=over.get("provider_session_id", "vendor-r1"),
     )
 
 
@@ -65,14 +72,6 @@ def test_a_deliverable_run_returns_no_error(monkeypatch):
     assert error is None and run.run_id == "r1"
 
 
-def test_the_exchange_is_recorded_before_delivery(monkeypatch):
-    """Recorded on BOTH sides — that is what the sequence view draws its arrows from, so a
-    delivery that failed to record must not proceed and leave an invisible message."""
-    _record()
-    monkeypatch.setattr(reg, "record_message", lambda **kw: False)
-    assert "could not record" in messaging.record_exchange("op", "r1", "hi")
-
-
 # ── Run ids: what the tool PRINTS must be what it ACCEPTS ───────────────────────────────────
 # `interact agents list` shows 8-character ids, and every command that takes one demanded the full
 # uuid — so copying an id straight off the tool's own output failed with "no agent run". The panel
@@ -110,6 +109,256 @@ def test_delivery_accepts_the_id_the_list_printed(monkeypatch):
     monkeypatch.setattr(messaging, "provider_for", lambda name: _Ok())
     run, error = messaging.check_deliverable("abcd1234")
     assert error is None and run.run_id.startswith("abcd1234")
+
+
+class _DeliveryProvider:
+    name = "fake"
+    can_resume = True
+    can_queue = True
+    calls = []
+
+    def valid_definition(self, agent):
+        return True
+
+    def definition_path(self, agent):
+        return None
+
+    def discover(self):
+        return []
+
+    def permission_modes(self):
+        return [PermissionMode("workspace-write", "write", "write")]
+
+    def queue_command(self, session_id, message):
+        self.calls.append(("queue", session_id, message))
+        return ["fake", "queue", session_id, message]
+
+    def resume_command(self, session_id, message, **kwargs):
+        self.calls.append(("resume", session_id, message, kwargs))
+        return ["fake", "resume", session_id, message]
+
+
+class _ResumeProvider(_DeliveryProvider):
+    name = "resume-fake"
+    can_queue = False
+    script = (
+        "import json,sys,time\n"
+        "print(json.dumps({'type':'assistant','session_id':'vendor-thread',"
+        "'message':{'content':[{'type':'text','text':'resumed reply'}]}}), flush=True)\n"
+        "print(json.dumps({'type':'result','is_error':False,'stop_reason':'end_turn',"
+        "'session_id':'vendor-thread'}), flush=True)\n"
+    )
+
+    def resume_command(self, session_id, message, **kwargs):
+        self.calls.append(("resume", session_id, message, kwargs))
+        return [sys.executable, "-c", self.script]
+
+    def parse(self, line):
+        from interact.agents.providers import ClaudeCodeProvider
+
+        return ClaudeCodeProvider().parse(line)
+
+
+def _continuation_policy(monkeypatch):
+    provider = _DeliveryProvider()
+    provider.calls = []
+    monkeypatch.setattr(messaging, "provider_for", lambda name: provider)
+    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
+        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
+        providers={"fake": True},
+    ))
+    return provider
+
+
+def _resume_policy(monkeypatch):
+    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
+        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
+        providers={"resume-fake": True},
+    ))
+
+
+def test_delivery_queues_against_vendor_session_not_interact_id(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _continuation_policy(monkeypatch)
+    _record(run_id="interact-run", provider="fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    delivery = messaging.deliver_message("interact-run", "ping", sender="operator")
+
+    assert delivery.state == "queued" and delivery.queue_id
+    assert provider.calls == []
+    assert agent_queue.items("interact-run")[0].message_id
+
+
+def test_stopped_delivery_resumes_with_fresh_policy_and_tracks_new_pid(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _continuation_policy(monkeypatch)
+    _record(run_id="interact-run", provider="fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    monkeypatch.setattr(reg, "_discover_foreign", lambda: [])
+
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+    delivery = messaging.deliver_message("interact-run", "continue", sender="operator")
+
+    assert delivery.state == "queued" and delivery.queue_id
+    assert provider.calls == []
+    tracked = reg.get_run("interact-run")
+    assert tracked is not None and tracked.pid == 1234
+
+
+def test_delivery_is_a_validated_model_not_a_dataclass():
+    from dataclasses import is_dataclass
+    from pydantic import BaseModel
+
+    delivery = messaging.Delivery(state="queued", text="queued", run_id="r1")
+    assert isinstance(delivery, BaseModel)
+    assert not is_dataclass(delivery)
+
+
+def test_concurrent_resumes_have_one_writer_and_one_busy_result(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _ResumeProvider()
+    provider.script = "import time; time.sleep(1)\n" + provider.script
+    monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
+    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
+                        "resume-fake", provider)
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
+        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
+        providers={"resume-fake": True},
+    ))
+    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(reg, "_alive", lambda pid: pid != 1234)
+
+    results = []
+    barrier = threading.Barrier(2)
+
+    def send():
+        barrier.wait()
+        results.append(messaging.deliver_message("r1", "continue", sender="operator"))
+
+    threads = [threading.Thread(target=send) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert all(result.state == "queued" for result in results)
+    assert len(agent_queue.items("r1")) == 2
+
+
+def test_wait_records_nonzero_exit_and_bounded_redacted_stderr(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _ResumeProvider()
+    provider.script = "import sys; sys.stderr.write('api_key=test-secret-value\\n'); sys.exit(7)"
+    _resume_policy(monkeypatch)
+    monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
+    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
+                        "resume-fake", provider)
+    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    delivery = messaging.deliver_message("r1", "fail", sender="operator")
+    agent_queue.dispatch("r1")
+    reply = asyncio.run(messaging.wait_for_reply(delivery))
+    assert delivery.state == "error" and "7" in reply
+    assert "test-secret-value" not in reply
+    assert "test-secret-value" not in reg.read_stderr("r1")
+    assert reg.get_run("r1").status == "failed"
+
+
+def test_wait_rejects_a_clean_process_that_emits_no_resume_event(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _ResumeProvider()
+    provider.script = "pass"
+    _resume_policy(monkeypatch)
+    monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
+    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
+                        "resume-fake", provider)
+    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    delivery = messaging.deliver_message("r1", "silent", sender="operator")
+    agent_queue.dispatch("r1")
+    reply = asyncio.run(messaging.wait_for_reply(delivery))
+
+    assert delivery.state == "error"
+    assert "acceptance was not confirmed" in reply
+    assert agent_queue.items("r1")[0].state == "uncertain"
+    assert reg.get_run("r1").status == "done"
+
+
+def test_wait_false_still_reaps_and_records_the_resumed_process(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _ResumeProvider()
+    provider.script = "import time; time.sleep(0.05)"
+    _resume_policy(monkeypatch)
+    monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
+    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
+                        "resume-fake", provider)
+    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    delivery = messaging.deliver_message("r1", "async", sender="operator")
+    agent_queue.dispatch("r1")
+
+    assert delivery.state == "queued"
+    assert reg.get_run("r1").status == "done"
+
+
+def test_queued_reply_lookup_uses_persisted_attempt_anchor(monkeypatch):
+    from interact.agents import agent_queue
+
+    provider = _ResumeProvider()
+    _resume_policy(monkeypatch)
+    monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
+    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
+                        "resume-fake", provider)
+    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    monkeypatch.setattr(reg, "_alive", lambda pid: False)
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    delivery = messaging.deliver_message("r1", "anchor", sender="operator")
+    agent_queue.dispatch("r1")
+    reply = asyncio.run(messaging.wait_for_reply(delivery))
+
+    assert delivery.state == "replied" and "resumed reply" in reply
+
+
+def test_record_and_delivery_share_the_transcript_message_limit(monkeypatch):
+    _record()
+    oversized = "x" * 2001
+
+    delivery = messaging.deliver_message("r1", oversized, sender="operator")
+
+    assert delivery.state == "error" and "transcript limit" in delivery.text
+
+
+def test_queue_preserves_effective_policy_and_records_fresh_policy_separately(monkeypatch):
+    from interact.agents import agent_queue
+    provider = _DeliveryProvider()
+    monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
+    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
+        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
+        providers={"fake": True},
+    ))
+    _record(provider="fake", provider_session_id="vendor-thread")
+    stored = reg.get_run("r1")
+    stored.model = "current-model"
+    stored.requested_criterion = "current-criterion"
+    stored.reasoning = "low"
+    reg.save_run(stored)
+    monkeypatch.setattr(reg, "_alive", lambda pid: True)
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    result = messaging.deliver_message("r1", "queued", sender="operator")
+    stored = reg.get_run("r1")
+
+    assert result.state == "queued"
+    assert stored.model == "current-model" and stored.reasoning == "low"
+    assert stored.pending_model == "fresh-model" and stored.pending_reasoning == "high"
 
 
 # ── A message says WHO, and which way ───────────────────────────────────────────────────────

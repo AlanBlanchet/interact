@@ -2,13 +2,13 @@
 
     ~/.interact/agents.json:  {"agents": {"visual-critic": "cap.vlm and gui.screenspot > 0.85"}}
 
-A pinned model id is a claim frozen at the moment somebody typed it. It cannot notice a better
-model shipping, a price cut, or — the case that cost this project weeks — that the tier was never
-good enough for the job it was pinned to. A CRITERION is that claim written down instead:
-"whatever currently clears this bar, cheapest first", re-resolved every time it is asked.
+A pinned model id is a claim frozen at typing time. Can't notice a better model shipping, a price
+cut, or — the case that cost this project weeks — that the tier was never good enough for its job.
+A CRITERION is that claim written down instead: "whatever currently clears this bar, cheapest
+first", re-resolved every time it's asked.
 
-Every variable is NAMESPACED BY ITS SOURCE, because a bare ``intelligence`` hides who measured it
-and two leaderboards rarely agree:
+Every variable is NAMESPACED BY ITS SOURCE — a bare ``intelligence`` hides who measured it, and
+two leaderboards rarely agree:
 
     aa.intelligence        Artificial Analysis' capability score
     aa.mmmu_pro            Artificial Analysis' MMMU Pro visual metric
@@ -18,8 +18,13 @@ and two leaderboards rarely agree:
     price.in / price.out   $ per million tokens, from the provider catalog
     cap.vlm                a capability, demanded by name
 
+A bar may be written as a POSITION in the field rather than a raw number — `aa.intelligence > 90%`
+is "better than 90% of everything that source measured". A typed number freezes on its day (`> 40`
+meant "the very top" in 2025, "the middle" now); a percentile says what was meant and re-reads the
+board every time, so the criterion ages the way the field does.
+
 The set is DERIVED, never a hardcoded list: a benchmark added to the registry tomorrow is usable
-in a criterion the same day, and a model that ships tomorrow and clears the bar is simply used.
+in a criterion the same day, a model shipping tomorrow that clears the bar is simply used.
 """
 
 from __future__ import annotations
@@ -29,8 +34,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable
 
-from interact import benchmark_tables
-from interact.models import Benchmark, Model, ModelCapability
+from interact import benchmark_tables, model_catalog
+from interact.models import Benchmark, Model, ModelCapability, PublishedEntry
 
 
 class CriteriaError(ValueError):
@@ -44,30 +49,53 @@ class Variable:
     name: str
     describe: str
     read: Callable[[Model], float | None]
+    #: WHO measured it — data, never a literal beside the sentence, else a second board supplying
+    #: the same field would still be announced as the first one's. Empty for a fact nobody
+    #: publishes (a capability flag).
+    source: str = ""
     #: True for a yes/no (a capability), which takes no operator.
     flag: bool = False
+    #: Distribution a PERCENTILE bar reads against — the source's OWN published population, when
+    #: it has one. Namespace IS source, so source owns this: reading `90%` off the local catalog
+    #: instead answers "the 90th percentile of what I happen to hold" — mixes live numbers with a
+    #: shipped snapshot's, stricter or looser than it reads.
+    population: Callable[[], list[float]] | None = None
+    #: Whether this source measured a given model. A percentile is a claim ABOUT a population, so
+    #: a model the source never measured has no place in it — carrying a snapshot score into a
+    #: board percentile once put fifteen models ABOVE the board's own maximum.
+    measured: Callable[[Model], bool] | None = None
 
 
 class Variables:
     """Every comparison interact can make, derived from what is registered right now."""
 
-    #: Scalars off the model record. Namespaced by SOURCE: the capability score is Artificial
-    #: Analysis', the prices are the provider catalog's, and saying so is the whole point.
-    _SCALARS: dict[str, tuple[str, str]] = {
-        "aa.intelligence": ("intelligence_score", "Artificial Analysis capability score"),
-        "price.in": ("input_cost_per_million", "input cost, $ per million tokens"),
-        "price.out": ("output_cost_per_million", "output cost, $ per million tokens"),
+    #: Scalars off the model record. Namespaced by SOURCE: capability score is Artificial
+    #: Analysis', prices are the provider catalog's — saying so is the whole point.
+    _SCALARS: dict[str, tuple[str, str, Callable[[], list[float]] | None, str]] = {
+        # Artificial Analysis publishes its board to disk — that board, not the local catalog, is
+        # what "the 90th percentile" means for this number.
+        "aa.intelligence": ("intelligence_score", "Artificial Analysis capability score",
+                            lambda: _board_scores(), "Artificial Analysis"),
+        # A price has no published leaderboard: its population is what interact can reach — also
+        # the honest answer to "cheaper than most of what I could actually run".
+        "price.in": ("input_cost_per_million", "input cost, $ per million tokens", None,
+                     "the provider catalog"),
+        "price.out": ("output_cost_per_million", "output cost, $ per million tokens", None,
+                      "the provider catalog"),
     }
 
     @classmethod
     def all(cls) -> list[Variable]:
         out: list[Variable] = []
-        for name, (attr, describe) in cls._SCALARS.items():
-            out.append(Variable(name, describe, _reader(attr)))
+        for name, (attr, describe, population, source) in cls._SCALARS.items():
+            out.append(Variable(name, describe, _reader(attr), source=source, population=population,
+                                measured=_board_measured if population is not None else None))
         for bench in Benchmark.registry():
             out.append(Variable(
                 bench.variable, f"{bench.name} — {bench.source or 'published'}",
-                _bench_reader(bench),
+                _bench_reader(bench), source=bench.source or "published",
+                population=_bench_population(bench),
+                measured=_bench_measured(bench),
             ))
         for cap in ModelCapability:
             out.append(Variable(
@@ -89,31 +117,74 @@ def _reader(attr: str) -> Callable[[Model], float | None]:
     return lambda model: getattr(model, attr, None)
 
 
+def _bench_entries(bench: Benchmark) -> list[PublishedEntry]:
+    """Rows this benchmark's board publishes and still stands behind: the live table when at
+    least as recent as the bundled snapshot, else the snapshot.
+
+    ONE resolution of "which board, and which of its rows". A model's score and the population
+    its percentile reads against must come off the SAME table, or `90%` is the 90th percentile of
+    a board nobody on screen was ever scored on.
+    """
+    live = benchmark_tables.load_tables().get(bench.id)
+    published = (
+        live
+        if live is not None
+        and (bench.published is None or live.retrieved >= bench.published.retrieved)
+        else bench.published
+    )
+    if published is None:
+        return []
+    return [entry for entry in published.entries if entry.qualifies(published.freshness)]
+
+
 def _bench_reader(bench: Benchmark) -> Callable[[Model], float | None]:
     def read(model: Model) -> float | None:
-        live = benchmark_tables.load_tables().get(bench.id)
-        published = (
-            live
-            if live is not None
-            and (bench.published is None or live.retrieved >= bench.published.retrieved)
-            else bench.published
-        )
-        if published is None:
-            return None
-        if published.freshness != "current":
-            return None
-        for entry in published.entries:
+        for entry in _bench_entries(bench):
             scored = Model.by_id(entry.model_id) if entry.model_id else None
-            value = entry.normalized_score
-            if entry.status != "eligible" or value is None:
-                continue
-            if scored is None:
-                continue
-            if scored.id == model.id:
-                return value
+            if scored is not None and scored.id == model.id:
+                return entry.normalized_score
         return None
 
     return read
+
+
+def _board_scores() -> list[float]:
+    """What Artificial Analysis currently publishes, as numbers."""
+    return list(model_catalog.live_scores().values())
+
+
+def _board_measured(model: Model) -> bool:
+    """Whether Artificial Analysis has a row for this model — not merely whether interact holds a
+    number for it, which may be the shipped snapshot's."""
+    from interact.model_catalog import bare_model_name, live_scores
+
+    return bare_model_name(model.id) in live_scores()
+
+
+def _bench_measured(bench: Benchmark) -> Callable[[Model], bool] | None:
+    """Whether this benchmark's own published table lists the model."""
+    if bench.published is None or not bench.published.entries:
+        return None
+    from interact.model_catalog import bare_model_name
+
+    def listed(model: Model) -> bool:
+        key = bare_model_name(model.id)
+        return any(bare_model_name(entry.model_name) == key for entry in bench.published.entries)
+
+    return listed
+
+
+def _bench_population(bench: Benchmark) -> Callable[[], list[float]]:
+    """A benchmark's own published leaderboard — the population its percentiles mean.
+
+    Read LAZILY, never decided when the variable is built: the live table lands on disk after
+    import, so answering "this benchmark has no board" once would freeze that answer for the
+    process's life. An empty board is not an error here — `_population` falls back.
+    """
+    return lambda: [
+        entry.normalized_score for entry in _bench_entries(bench)
+        if entry.normalized_score is not None
+    ]
 
 
 def _cap_reader(cap: ModelCapability) -> Callable[[Model], float | None]:
@@ -129,19 +200,46 @@ _OPS = {
     "==": lambda a, b: a == b,
 }
 
-_TERM = re.compile(r"^\s*([\w.-]+)\s*(>=|<=|==|=|>|<)\s*(-?\d+(?:\.\d+)?)\s*$")
+_TERM = re.compile(
+    r"^\s*([\w.-]+)\s*(>=|<=|==|=|>|<)\s*(-?\d+(?:\.\d+)?%?)\s*$")
 _BARE = re.compile(r"^\s*([\w.-]+)\s*$")
 
 
 def _did_you_mean(name: str) -> str:
-    """The namespaced variables whose tail matches what they typed — so a bare `intelligence`
-    is answered with `aa.intelligence` rather than the whole catalogue."""
+    """Namespaced variables whose tail matches what they typed — so a bare `intelligence` is
+    answered with `aa.intelligence`, not the whole catalogue."""
     renamed = {"aa.mmmu": "aa.mmmu_pro", "aa.mmbench": "oc.mmbench"}
     if replacement := renamed.get(name.lower()):
         return f" This metric was corrected; use {replacement!r} and review its meaning."
     tail = name.rsplit(".", 1)[-1].lower()
     near = [n for n in Variables.names() if n.rsplit(".", 1)[-1].lower() == tail]
     return f" Did you mean: {', '.join(near)}?" if near else ""
+
+
+def _population(field: str) -> tuple[list[float], bool]:
+    """The distribution a percentile bar is read against: the variable's OWN source, ascending.
+
+    A NAMESPACE IS A SOURCE, so the source owns its own distribution: `aa.intelligence` is
+    Artificial Analysis' board, `gui.screenspot` is the grounding leaderboard, each on disk. The
+    local catalog is a MIXTURE — live numbers where a board speaks, the shipped snapshot's where
+    it doesn't — and percentiling over that mixture once moved the 75% bar from 22.3 to 31.5,
+    every percentile criterion quietly stricter than it read. Same "one number, two sources" bug
+    that once had two tabs of one window disagreeing which model leads.
+
+    A variable with no published population (a price) falls back to what interact can reach —
+    also the honest reading of "cheaper than most of what I could actually run", and so does a
+    board simply not on this machine.
+    """
+    var = Variables.by_name(field)
+    if var is None:
+        return [], False
+    if var.population is not None:
+        published = var.population()
+        if published:
+            return sorted(published), True
+    return sorted(
+        score for model in Model.catalog() if (score := var.read(model)) is not None
+    ), False
 
 
 @dataclass(frozen=True)
@@ -151,19 +249,58 @@ class Term:
     field: str
     op: str = ""
     value: float = 0.0
+    #: True when the bar was written as a POSITION in the field (`90%`), not a raw number. Then
+    #: `value` is the percentile, and the bar is whatever that position is worth today.
+    percentile: bool = False
+    #: What was asked for, carried through resolution so a message can say both — "90% of 450
+    #: scored" beside the number it came out as; the only way to read either.
+    asked: str = ""
+    #: Set on a RESOLVED percentile: a model this variable's source never measured is not in the
+    #: population the percentile describes, so it can't clear a bar drawn on it.
+    source_only: bool = False
 
     def __str__(self) -> str:
-        return self.field if not self.op else f"{self.field} {self.op} {self.value:g}"
+        if not self.op:
+            return self.field
+        if self.percentile:
+            return f"{self.field} {self.op} {self.value:g}%"
+        shown = f"{self.field} {self.op} {self.value:g}"
+        return f"{shown} ({self.asked})" if self.asked else shown
+
+    def resolved(self) -> "Term":
+        """This term with a board-relative bar turned into the number it's worth TODAY.
+
+        The population is everything the variable's OWN SOURCE measures — never the models a key
+        happens to reach ("the top tenth" must not mean "the best of my three"), never the local
+        mixture of live and snapshot numbers (see :func:`_population`). Nothing scored leaves the
+        term as-is; no model can then clear it, and `explain` says why.
+        """
+        if not self.percentile:
+            return self
+        scores, from_source = _population(self.field)
+        if not scores:
+            return self
+        # Nearest-rank: 90% of 10 scores is the 9th, so `>= 90%` keeps a tenth of the field.
+        rank = min(len(scores), max(1, math.ceil(self.value / 100 * len(scores))))
+        return Term(self.field, self.op, scores[rank - 1],
+                    asked=f"{self.value:g}% of {len(scores)} scored", source_only=from_source)
 
     def score_of(self, model: Model) -> float | None:
         """What this term measures on ``model``, or None when nothing measured it.
 
-        None is NOT zero and never qualifies: "unknown" is exactly what a criterion excludes.
+        None is NOT zero and never qualifies: "unknown" is what a criterion excludes.
         """
         var = Variables.by_name(self.field)
         return None if var is None else var.read(model)
 
     def holds(self, model: Model) -> bool:
+        if self.percentile:  # asked directly rather than through `Criteria`, which pre-resolves
+            bar = self.resolved()
+            return False if bar.percentile else bar.holds(model)
+        if self.source_only:
+            var = Variables.by_name(self.field)
+            if var is not None and var.measured is not None and not var.measured(model):
+                return False
         got = self.score_of(model)
         if got is None:
             return False
@@ -182,12 +319,16 @@ class Criteria:
     def __str__(self) -> str:
         return self.source or " and ".join(str(t) for t in self.terms)
 
+    @staticmethod
+    def comparison_operators():
+        return tuple(_OPS)
+
     @classmethod
     def parse(cls, text: str) -> "Criteria":
         """Read a criterion, refusing anything nobody can evaluate.
 
         Raises `CriteriaError` naming the clause THEY typed — an unknown or un-namespaced
-        variable fails here, at the moment it is written, never silently matching nothing later.
+        variable fails here, at write time, never silently matching nothing later.
         """
         if not text or not text.strip():
             raise CriteriaError("an empty criterion selects nothing — say what you want")
@@ -196,7 +337,7 @@ class Criteria:
             if not clause.strip():
                 continue
             if (m := _TERM.match(clause)) is not None:
-                name, op, value = m.group(1), m.group(2), float(m.group(3))
+                name, op, written = m.group(1), m.group(2), m.group(3)
                 var = Variables.by_name(name)
                 if var is None:
                     raise CriteriaError(
@@ -204,7 +345,19 @@ class Criteria:
                     )
                 if var.flag:
                     raise CriteriaError(f"{name!r} is a yes/no — write it on its own, not with {op}")
-                terms.append(Term(name, op, value))
+                if written.endswith("%"):
+                    # A POSITION in the field, not a score on the variable's own scale — a bare
+                    # number is the raw measure (`gui.screenspot > 0.85`), a percentage is a
+                    # place among everything that source measured; the two never collide.
+                    percentile = float(written[:-1])
+                    if not 0 < percentile <= 100:
+                        raise CriteriaError(
+                            f"{written!r} is a position in the field, so it must be between 0 and "
+                            "100 — '90%' is the top tenth"
+                        )
+                    terms.append(Term(name, op, percentile, percentile=True))
+                else:
+                    terms.append(Term(name, op, float(written)))
             elif (m := _BARE.match(clause)) is not None:
                 name = m.group(1)
                 var = Variables.by_name(name)
@@ -227,11 +380,20 @@ class Criteria:
     def _pool(available_only: bool, runnable: Callable[[Model], bool] | None) -> list[Model]:
         """Who is in the running. `runnable`, when given, IS the pool: the caller — a vendor CLI —
         knows what it can actually be pointed at, its own login included. Otherwise every model
-        whose key is here (or every model at all, for a dry look at the catalog)."""
+        whose key is here (or every model, for a dry look at the catalog)."""
         models = Model.catalog()
         if runnable is not None:
             return [m for m in models if runnable(m)]
         return [m for m in models if not available_only or m.is_available()]
+
+    def against_the_board(self) -> tuple[Term, ...]:
+        """Terms with every board-relative bar turned into today's number — read ONCE, so every
+        model is judged against the same bar and the board isn't walked per candidate."""
+        return tuple(t.resolved() for t in self.terms)
+
+    def clears(self, model: Model) -> bool:
+        """Whether ``model`` clears EVERY term."""
+        return all(t.holds(model) for t in self.against_the_board())
 
     def qualifying(
         self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
@@ -239,19 +401,22 @@ class Criteria:
         """Every model clearing EVERY term, cheapest first.
 
         Cheapest-first is the point: the criterion is a FLOOR on quality, and under that floor
-        thrift decides — the opposite of a pin, where the price is whatever the pin happened to
-        cost on the day it was typed.
+        thrift decides — the opposite of a pin, whose price is whatever it happened to cost the
+        day it was typed. "Cheapest" means :attr:`Model.thrift`: a known price beats an unknown
+        one, and at one price the better measure wins.
         """
-        fit = [m for m in self._pool(available_only, runnable) if all(t.holds(m) for t in self.terms)]
-        fit.sort(key=lambda m: m.cost_score)
+        bars = self.against_the_board()
+        fit = [m for m in self._pool(available_only, runnable)
+               if all(t.holds(m) for t in bars)]
+        fit.sort(key=lambda m: m.thrift)
         return fit
 
     def choose(
         self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None,
         weights: str = "",
     ) -> Model | None:
-        """The one to use, or None. NEVER a fallback: a criterion that quietly resolves to some
-        other model is worse than no criterion, because it looks like it worked."""
+        """The one to use, or None. NEVER a fallback: silently resolving to some other model is
+        worse than no criterion — it looks like it worked."""
         fit = self.qualifying(available_only, runnable)
         parsed = _parse_weights(weights)
         if parsed:
@@ -262,7 +427,7 @@ class Criteria:
                 numeric = [(score, weight) for score, weight in scores if score is not None]
                 if len(numeric) == len(scores) and all(0 <= score <= 1 for score, _ in numeric):
                     weighted.append((sum(score * weight for score, weight in numeric), model))
-            weighted.sort(key=lambda pair: (-pair[0], pair[1].cost_score, pair[1].id))
+            weighted.sort(key=lambda pair: (-pair[0], pair[1].thrift, pair[1].id))
             return weighted[0][1] if weighted else None
         return fit[0] if fit else None
 
@@ -282,10 +447,16 @@ class Criteria:
                     "models through its login; anything else needs a route and that provider's key")
         fit = self.qualifying(available_only, runnable)
         if fit:
-            return f"{len(fit)} model(s) clear {self}; cheapest is {fit[0].id}"
+            # The bar AS APPLIED, not as typed: `>= 50%` once picked a model ranked 81st while the
+            # line said only "50%" — the two numbers couldn't be reconciled and the right answer
+            # looked wrong. A percentile prints as the number it came out as.
+            applied = " and ".join(str(t) for t in self.against_the_board())
+            return f"{len(fit)} model(s) clear {applied}; cheapest is {fit[0].id}"
         lines = []
-        for term in self.terms:
-            about = f"{term} — " if len(self.terms) > 1 else ""
+        for term in self.against_the_board():
+            # A board-relative bar always names itself, even alone: "nobody clears 99" reads only
+            # once you see where the 90% bar landed on today's board.
+            about = f"{term} — " if len(self.terms) > 1 or term.asked else ""
             kept = [m for m in pool if term.holds(m)]
             if kept:
                 lines.append(f"  {about}{len(kept)} of {len(pool)} pass")

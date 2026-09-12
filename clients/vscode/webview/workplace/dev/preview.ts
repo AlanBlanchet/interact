@@ -1,9 +1,9 @@
 /** Writes the view out as plain pages so it can be opened in a browser and looked at.
  *
- *  A webview is a browser, so the only thing missing outside VS Code is the theme: the `--vscode-*`
- *  variables the editor injects. Those are supplied here from the real Dark+ and Light+ values, so
- *  what renders in this harness is what renders in the panel — the same document, same CSP, same
- *  nonce, nothing stubbed.
+ *  A webview is a browser, so the only thing missing outside VS Code is the theme: the
+ *  --vscode-* variables the editor injects. Those are supplied here from the real Dark+ and
+ *  Light+ values, so what renders in this harness is what renders in the panel — the same
+ *  document, same CSP, same nonce, nothing stubbed.
  *
  *      node out-preview.js <outdir>
  */
@@ -38,12 +38,12 @@ function themed(html: string, vars: string, klass: string): string {
 
 /** A page that DRIVES the engine, which is the only way motion can be looked at or measured.
  *
- *  A still says nothing about movement and a pair of stills says nothing either — which is exactly
- *  how a teleport passes review. So the harness ships the host's own protocol: the shell is
- *  rendered once, and a driver posts successive scenes into it the way the panel will, cycling
- *  between two snapshots of the same team so people are continually being sent somewhere.
+ *  A still says nothing about movement and a pair of stills says nothing either — exactly how a
+ *  teleport passes review. So the harness ships the host's own protocol: the shell is rendered
+ *  once, and a driver posts successive scenes into it the way the panel will, cycling between
+ *  two snapshots of the same team so people are continually being sent somewhere.
  *
- *  `window.__wpPhase(i)` jumps straight to a snapshot, so a probe can step the whole thing rather
+ *  window.__wpPhase(i) jumps straight to a snapshot, so a probe can step the whole thing rather
  *  than wait for it.
  */
 function live(base: string, vars: string, klass: string, every = 7000): string {
@@ -58,8 +58,8 @@ function live(base: string, vars: string, klass: string, every = 7000): string {
   return themed(base, vars, klass).replace("</body>", `${driver}</body>`);
 }
 
-/** The whole of one element, balanced. The map nests an `svg` per floor pattern and the sprite
- *  sheet nests one per tile, so the first `</svg>` after either opening tag is somebody else's. */
+/** The whole of one element, balanced. The map nests an svg per floor pattern and the sprite
+ *  sheet nests one per tile, so the first </svg> after either opening tag is somebody else's. */
 function element(doc: string, start: number, tag: string): string {
   const re = new RegExp(`<${tag}\\b|</${tag}>`, "g");
   re.lastIndex = start;
@@ -73,12 +73,12 @@ function element(doc: string, start: number, tag: string): string {
 
 /** The map and the sheet it draws from, on a page with no viewport, no camera and no motion.
  *
- *  The product's own pages cannot answer "is this thing's shade in the right place": the camera is
- *  over somewhere else, the zoom is a variable, and the ambient animation moves the canopies
- *  between two captures so a difference image comes back contaminated. Here the map is at its
- *  natural size at the origin, so tile (x, y) is at (24x, 24y) on every screenshot and two builds
- *  crop identically. Same document, same stylesheet, same theme variables — only the window is
- *  gone. */
+ *  The product's own pages can't answer "is this thing's shade in the right place": the camera
+ *  is over somewhere else, the zoom is a variable, and ambient animation moves the canopies
+ *  between two captures so a difference image comes back contaminated. Here the map sits at its
+ *  natural size at the origin, so tile (x, y) is at (24x, 24y) on every screenshot and two
+ *  builds crop identically. Same document, same stylesheet, same theme variables — only the
+ *  window is gone. */
 function flat(vars: string, klass: string): string {
   const doc = renderWorkplace(fixture(), "devnonce123");
   const style = doc.slice(doc.indexOf("<style"), doc.indexOf("</style>") + 8);
@@ -111,20 +111,20 @@ function main(): void {
     // The pages that MOVE. Everything about this turn is judged on these, never on the stills.
     ["live.html", live(renderWorkplace(fixture(), "devnonce123"), DARK, "vscode-dark")],
     // The same team with the snapshot stamped the way the DATA LAYER stamps it — epoch SECONDS,
-    // not milliseconds. Every other page here happens to use `Date.UTC`, which is milliseconds,
-    // so the harness showed a correct clock while the panel showed 1970. A fixture that only ever
-    // exercises the convenient unit is a fixture that certifies the bug.
+    // not milliseconds. Every other page here happens to use Date.UTC, which is milliseconds,
+    // so the harness showed a correct clock while the panel showed 1970. A fixture that only
+    // ever exercises the convenient unit is a fixture that certifies the bug.
     ["prod-units.html", themed(
       renderWorkplace(fixture(Date.UTC(2026, 7, 18, 14, 3, 22) / 1000), "devnonce123"),
       DARK, "vscode-dark",
     )],
     ["live-light.html", live(renderWorkplace(fixture(), "devnonce123"), LIGHT, "vscode-light")],
-    // THE WHOLE MAP AT 1:1, WITH NO CAMERA ON IT. Every other page here is the product, which
-    // means a viewport somewhere over a building that is deliberately bigger than it — fine for
-    // judging the product and useless for judging the GROUND, because the thing you want to look
-    // at is usually off screen and the two things you want to compare are never in frame at once.
-    // Shadows were checked three times against pages like that. This one is the map alone, so a
-    // crop is a fixed tile rectangle and a before/after is two files.
+    // THE WHOLE MAP AT 1:1, WITH NO CAMERA ON IT. Every other page here is the product — a
+    // viewport somewhere over a building deliberately bigger than it, fine for judging the
+    // product and useless for judging the GROUND, since what you want to look at is usually off
+    // screen and the two things you want to compare are never in frame at once. Shadows were
+    // checked three times against pages like that. This one is the map alone, so a crop is a
+    // fixed tile rectangle and a before/after is two files.
     ["flat-dark.html", flat(DARK, "vscode-dark")],
     ["flat-light.html", flat(LIGHT, "vscode-light")],
   ];

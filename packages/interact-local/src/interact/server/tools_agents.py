@@ -1,14 +1,15 @@
 """The agent-mesh MCP tools: spawn a teammate, see the team, read what one is doing, stop it.
 
 These are what make cross-provider teamwork ordinary. A spawned agent gets interact declared as
-one of its own MCP servers, so calling ``agent_spawn`` is available to a Claude agent and a Codex
-agent alike — they meet on MCP, which is vendor-neutral. An agent spawning an agent is therefore
-not a special case; it is one of these calls, and the parent id travels automatically so the team
-tree stays connected.
+one of its own MCP servers, so ``agent_spawn`` is available to a Claude agent and a Codex agent
+alike — they meet on MCP, vendor-neutral. An agent spawning an agent is therefore not a special
+case, just one of these calls — the parent id travels automatically, keeping the team tree
+connected.
 """
 
 import asyncio
 import os
+from pathlib import Path
 
 from interact.agents import messaging, registry as reg
 from interact.agents.providers import PROVIDERS, available_providers, provider_for
@@ -38,15 +39,16 @@ async def agent_spawn(
     cwd: str | None = None,
     permission_mode: str | None = None,
     profile: str | None = None,
+    image_paths: list[str] | None = None,
 ) -> str:
     """Start another agent to work alongside you, and return its run id immediately.
 
-    The agent runs as its own process on this machine, using the vendor CLI's own login — you
-    never handle a credential. It is given interact as an MCP server, so it can call these same
-    tools: it can spawn agents of its own, including from a DIFFERENT provider than yours.
+    Runs as its own process on this machine, using the vendor CLI's own login — you never handle
+    a credential. Given interact as an MCP server, so it can call these same tools: it can spawn
+    agents of its own, including from a DIFFERENT provider than yours.
 
     Returns as soon as the agent is alive, not when it finishes — use agent_list / agent_events
-    to watch it, and agent_stop to end it.
+    to watch it, agent_stop to end it.
 
     profile: one of the OPERATOR's own named profiles (INTERACT_PROFILE_* in ~/.interact/config.env)
         deciding what this agent runs on — e.g. a local Ollama model for a cheap critic while a
@@ -61,13 +63,17 @@ async def agent_spawn(
         The run is named after it, which is what makes a team readable at a glance.
     name: a short role label for the supervisor view. Defaults to the agent definition, then to
         the provider — so several runs are not all just called "claude".
-    model: provider-specific model name/alias; omit for that CLI's default.
+    model: does not override a configured role policy. Edit the rule in the agent UI instead.
+        A named agent and a satisfiable role criterion are required; no silent model fallback.
     cwd: directory to work in; defaults to interact's own working directory.
     permission_mode: how much the agent may do on its own. Provider-specific and validated —
         agent_providers lists what each CLI accepts. Claude Code: "plan" (works out an approach,
         touches nothing), "manual", "auto", "acceptEdits", "dontAsk". Omit to leave the CLI's own
         configured default alone. Modes that act WITHOUT ASKING cannot be set from here — a person
         chooses those for themselves, from the CLI or the panel.
+    image_paths: optional absolute paths to existing PNG, JPEG, or WebP files to attach to the
+        initial prompt. The provider must support native image attachments and the resolved model
+        must meet cap.vlm; paths are bounded and validated before spawn.
     """
     try:
         prov = provider_for(provider)
@@ -79,17 +85,17 @@ async def agent_spawn(
                 f"(installed providers: {installed}). interact drives the vendor's own binary, "
                 f"so it has to be present and signed in.")
     if agent is not None and not prov.valid_definition(agent):
-        # At the edge: this value becomes a filesystem path, is recorded on the run, and is
-        # offered by the panel as a clickable "system prompt" link.
+        # At the edge: this value becomes a filesystem path, recorded on the run, offered by the
+        # panel as a clickable "system prompt" link.
         known = ", ".join(prov.agent_definitions()) or "none"
         return (f"ERROR: {provider} has no agent definition {agent!r}. "
                 f"Available definitions: {known}.")
-    # A tool caller is a MODEL, and a model's context routinely holds text it did not write — a
-    # fetched page, a file, an issue body. So this parameter is reachable by indirect injection,
-    # and an unrestricted mode reached that way stands up an agent that acts without asking, with
-    # nobody watching and nothing on screen before it runs. Refused HERE rather than deeper down:
-    # the CLI and the panel's picker still offer the full set, because a person choosing it for
-    # themselves is the point of the control. Widening your own privileges is not.
+    # A tool caller is a MODEL, and a model's context routinely holds text it didn't write — a
+    # fetched page, a file, an issue body — so this parameter is reachable by indirect injection.
+    # An unrestricted mode reached that way stands up an agent that acts without asking, nobody
+    # watching, nothing on screen before it runs. Refused HERE, not deeper: CLI and panel picker
+    # still offer the full set, since a person choosing it for themselves is the point of the
+    # control — widening your own privileges is not.
     unrestricted = {m.id for m in prov.permission_modes() if m.unrestricted}
     if permission_mode in unrestricted:
         allowed = ", ".join(m.id for m in prov.permission_modes() if not m.unrestricted)
@@ -104,14 +110,19 @@ async def agent_spawn(
         handle = await run_agent(
             prov, task, name=name or agent or prov.name, cwd=cwd or os.getcwd(),
             agent=agent, model=model, permission_mode=permission_mode,
-        profile=profile,
+            profile=profile,
+            image_paths=tuple(Path(path) for path in (image_paths or ())),
         )
     except ValueError as e:  # an unknown permission mode, refused before it reaches a shell
         return f"ERROR: {e}"
     except (OSError, RuntimeError) as e:
         return f"ERROR: could not start the {provider} agent — {e}"
     caveat = f"\nNOTE: the {provider} adapter is {prov.caveat}" if not prov.verified else ""
-    return (f"Started {name or prov.name} ({provider}) — run_id={handle.run_id}\n"
+    return (f"Started [{name or agent or prov.name}] ({provider}) — run_id={handle.run_id}\n"
+            f"Task: {' '.join(task.split())[:180]}\n"
+            f"Launch policy: model={getattr(handle, 'model', None)}; "
+            f"reasoning={getattr(handle, 'reasoning', None)}; "
+            f"criterion={getattr(handle, 'criterion', None)}\n"
             f"Watch it with agent_list, or agent_events(run_id=\"{handle.run_id}\").{caveat}")
 
 
@@ -179,6 +190,9 @@ async def agent_providers() -> str:
         state = "available" if p.available() else f"not installed (no {p.binary!r} on PATH)"
         note = f" — {p.caveat}" if not p.verified else ""
         lines.append(f"  {p.name}: {state}{note}")
+        lines.append(
+            f"    image attachments: {'supported' if p.image_attachment_support() else 'unsupported'}"
+        )
         if definitions := p.agent_definitions():
             lines.append(f"    agents: {', '.join(definitions)}")
     return "Agent providers:\n" + "\n".join(lines)
@@ -190,40 +204,18 @@ async def agent_send(run_id: str, message: str, wait: bool = False) -> str:
     """Send a message to another agent — it answers with its full context intact.
 
     Delivery resumes the recipient's own session rather than handing it a cold summary, so it
-    remembers everything it has already done and its reply lands in the same transcript. That is
-    what makes the exchange readable afterwards, and what a sequence view draws its arrows from.
+    remembers everything it already did and its reply lands in the same transcript — what makes
+    the exchange readable afterwards, and what a sequence view draws its arrows from.
 
-    Use it to ask a teammate for something and to answer one. The exchange is recorded on BOTH
+    Use it to ask a teammate for something, or answer one. The exchange is recorded on BOTH
     sides, so either agent's history shows it.
 
     run_id: the agent to address (agent_list shows the ids).
     message: what to say — write it as a complete request; it cannot ask you a follow-up.
     wait: block until it has replied, instead of returning as soon as the message is delivered.
     """
-    # Shared with `interact agents send`, so the tool and the CLI refuse the same things.
-    run, error = messaging.check_deliverable(run_id)
-    if error:
-        return error
-    prov = provider_for(run.provider)
-    if error := messaging.record_exchange(messaging.sender_id(), run_id, message):
-        return error
-
-    # The reply continues the recipient's OWN transcript, so it is appended to that run's stream.
-    argv = prov.resume_command(run_id, message)
-    sink = reg.open_raw_events(run_id, append=True)
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *argv, cwd=run.cwd or os.getcwd(), stdout=sink,
-            stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
-        )
-    except OSError as e:
-        return f"ERROR: could not deliver to {run.name} — {e}"
-    finally:
-        sink.close()
-    if wait:
-        await process.wait()
-        replies = [e for e in reg.read_events(run_id) if e.kind == "text"]
-        answer = replies[-1].text if replies else "(no reply text)"
-        return f"{run.name} replied:\n{answer}"
-    return (f"Delivered to {run.name} ({run_id[:8]}). It is answering now — "
-            f"agent_events(run_id=\"{run_id}\") to read the reply.")
+    # Shared with `interact agents send`, so both surfaces use one routing and policy lifecycle.
+    delivery = messaging.deliver_message(run_id, message)
+    if delivery.state == "error" or not wait:
+        return delivery.text
+    return await messaging.wait_for_reply(delivery)

@@ -69,8 +69,8 @@ class UpstreamSource(RegistryMixin, BaseModel):
     name: str
     url: str
     benchmark_id: str
-    # Some upstreams (OpenCompass OpenXLB) serve a valid JSON body but with an EXPIRED TLS cert;
-    # the official HF leaderboard apps fetch them anyway. Scope the verify-skip to those sources.
+    # Some upstreams (OpenCompass OpenXLB) serve valid JSON but an EXPIRED TLS cert; official HF
+    # leaderboard apps fetch them anyway — scope the verify-skip to those sources.
     insecure: bool = False
 
     @classmethod
@@ -92,12 +92,12 @@ class UpstreamSource(RegistryMixin, BaseModel):
 
 
 def _leaderboard_date(data: dict) -> str:
-    """A leaderboard's own publication date as YYYY-MM-DD, or "" if it does not carry one.
+    """A leaderboard's own publication date as YYYY-MM-DD, or "" if it doesn't carry one.
 
-    The two OpenVLM boards stamp `time` differently — the image one 14 digits
-    (``YYYYMMDDHHMMSS``), the video one 12 (``YYMMDDHHMMSS``). Slicing eight characters off both
-    turned ``250625130006`` into "2506-25-13" and printed that at the user, so the result is
-    parsed as a real date and discarded when it is not one.
+    The two OpenVLM boards stamp `time` differently — image one 14 digits (``YYYYMMDDHHMMSS``),
+    video one 12 (``YYMMDDHHMMSS``). Slicing eight characters off both once turned
+    ``250625130006`` into "2506-25-13" and printed that at the user, so the result is parsed as a
+    real date and discarded when it isn't one.
     """
     raw = str(data.get("time") or "")
     if not raw.isdigit():
@@ -123,8 +123,8 @@ class GroundingLeaderboardJS(UpstreamSource):
     """
 
     #: Where the model map lives inside the payload. OpenVLM wraps it — `{"time", "results"}` —
-    #: and the parser used to iterate the top level, so it matched nothing and returned an EMPTY
-    #: table. Empty is a silent failure: the panel just keeps serving the packaged snapshot.
+    #: and the parser once iterated the top level, matching nothing and returning an EMPTY table.
+    #: Empty is a silent failure: the panel just keeps serving the packaged snapshot.
     root_path: tuple[str, ...] = ()
     score_path: tuple[str, ...] = ("results", "overall", "avg")
     # Multiply raw scores to normalise to [0,1]; OpenCompass reports 0–100, so set 0.01 there.
@@ -162,8 +162,8 @@ class GroundingLeaderboardJS(UpstreamSource):
         entries.sort(key=lambda e: e.score, reverse=True)
         return PublishedTable(
             source_url=self.url,
-            # The leaderboard's OWN timestamp when it publishes one: stamping today's date on a
-            # table that stopped updating in 2025 is exactly how stale data passes for current.
+            # Leaderboard's OWN timestamp when it publishes one: stamping today's date on a table
+            # that stopped updating in 2025 is exactly how stale data passes for current.
             retrieved=self.retrieved or stamped or _today(),
             lib_recommendation=entries[0].model_name if entries else None,
             entries=entries,
@@ -260,12 +260,12 @@ UpstreamSource._register(
 )
 
 # Image + Video: OpenCompass OpenVLM is the only machine-readable aggregate covering these
-# benchmark families (no clean no-auth alternative exists — researched 2026-06-07). It serves a
-# valid JSON body but the HTTPS cert is expired (the official HF leaderboard Spaces fetch it the
-# same way), so `insecure=True`. Shape: {"time": "YYYYMMDD…", "results": {model: {<field>:
-# {"Overall": 0–100}}}} → root_path/score_path below, score_scale=0.01. NOTE: the leaderboard
-# itself last published 2025-09, so its numbers are OLDER than the packaged snapshot; whichever
-# source carries the newer `retrieved` date is the one that should be shown.
+# benchmark families (no clean no-auth alternative — researched 2026-06-07). Serves valid JSON but
+# an expired HTTPS cert (official HF leaderboard Spaces fetch it the same way), so
+# `insecure=True`. Shape: {"time": "YYYYMMDD…", "results": {model: {<field>: {"Overall": 0–100}}}}
+# → root_path/score_path below, score_scale=0.01. NOTE: leaderboard itself last published 2025-09,
+# older than the packaged snapshot — whichever source carries the newer `retrieved` date should be
+# shown.
 _OPENVLM = "https://opencompass.openxlab.space/assets/OpenVLM.json"
 _OPENVLM_VIDEO = "https://opencompass.openxlab.space/utils/video_leaderboard.json"
 for _bid, _field, _name in [

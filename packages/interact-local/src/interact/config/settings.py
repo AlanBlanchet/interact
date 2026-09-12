@@ -20,15 +20,15 @@ LOG_MAXLEN = 1000
 
 
 def _safe_dir_name(name: str) -> str:
-    """A filesystem-safe directory name (collapse anything outside [A-Za-z0-9._-] to '_')."""
+    """Filesystem-safe directory name; chars outside [A-Za-z0-9._-] become '_'."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_-. ") or "default"
 
 
 def _session_custom_title(session_id: str, home: str) -> str | None:
-    """The user-set title of a Claude Code session, read from its transcript under
-    ``~/.claude/projects`` — the same store ``scan_client_errors.py`` reads. The session id is
-    unique, so a glob finds the file regardless of how Claude slugs the project dir. Only the small
-    ``custom-title`` lines are parsed (cheap string pre-filter), and the LAST one wins (renames)."""
+    """User-set title of a Claude Code session, from its transcript under
+    ``~/.claude/projects`` (same store ``scan_client_errors.py`` reads). Session id is unique
+    so glob finds the file regardless of slug. Only ``custom-title`` lines are parsed (cheap
+    pre-filter); LAST one wins (renames)."""
     matches = glob.glob(str(Path(home) / ".claude" / "projects" / "*" / f"{session_id}.jsonl"))
     if not matches:
         return None
@@ -48,19 +48,18 @@ def _session_custom_title(session_id: str, home: str) -> str | None:
 
 @functools.lru_cache(maxsize=16)
 def _resolve_session_name(session_id: str, project_dir: str, cwd: str, home: str) -> str:
-    """Resolve the calling session's log-folder name (pure function of its inputs, so lru_cache is
-    safe + keyed by env): the Claude session's custom-title, else the project/cwd dir basename, else
-    'default'. Cached because the title means re-reading a (large) transcript."""
+    """Calling session's log-folder name: custom-title, else project/cwd basename, else
+    'default'. Pure function of inputs (lru_cache safe). Cached — title lookup re-reads a
+    large transcript."""
     title = _session_custom_title(session_id, home) if session_id else None
     base = Path(project_dir or cwd).name if (project_dir or cwd) else ""
     return _safe_dir_name(title or base or "default")
 
 
 def caller_session_name() -> str:
-    """The name of the Claude Code session driving interact, for separating logs per session: its
-    user-set custom-title (e.g. 'Aino') when resolvable, else the CLAUDE_PROJECT_DIR / cwd basename,
-    else 'default'. The dir basename and the session title can differ — the title is the authoritative
-    one the user sees (and set), so it wins."""
+    """Claude Code session name driving interact, for per-session logs: custom-title
+    (e.g. 'Aino') if resolvable, else CLAUDE_PROJECT_DIR / cwd basename, else 'default'.
+    Title wins over basename — it's what the user set and sees."""
     return _resolve_session_name(
         os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
         os.environ.get("CLAUDE_PROJECT_DIR", ""),
@@ -68,18 +67,17 @@ def caller_session_name() -> str:
         str(Path.home()),
     )
 
-# The "sovereign" GLM-4.5V models the low/medium quality tiers prefer (MIT, open-weight,
-# self-hostable) — a strong open VLM, cheap/private, the right default when peak frontier accuracy
-# isn't needed. Tried in order; the FIRST whose API key is present wins, so EITHER a z.ai key
-# (ZAI_API_KEY → first-party `zai/`) or a Novita key (NOVITA_API_KEY → reseller `novita/`) lights up
-# GLM with zero config. An explicit INTERACT_TIER_SOVEREIGN_MODEL overrides the whole list (e.g. a
-# self-hosted endpoint id). z.ai is preferred — it's GLM's first-party API.
+# "Sovereign" GLM-4.5V models for the low/medium quality tiers (MIT, open-weight, self-
+# hostable) — cheap/private, the default when peak frontier accuracy isn't needed. Tried in
+# order; FIRST present API key wins: ZAI_API_KEY (first-party `zai/`) or NOVITA_API_KEY
+# (reseller `novita/`). INTERACT_TIER_SOVEREIGN_MODEL overrides the whole list. z.ai preferred
+# — it's GLM's first-party API.
 _SOVEREIGN_MODELS = ("zai/glm-4.5v", "novita/zai-org/glm-4.5v")
-_DEFAULT_SOVEREIGN_MODEL = _SOVEREIGN_MODELS[0]  # preferred default (also a back-compat alias)
+_DEFAULT_SOVEREIGN_MODEL = _SOVEREIGN_MODELS[0]  # back-compat alias
 
-# Quality tiers for the UI tools (review_ui/verify_ui quality=...): the agent picks by STAKES, not
-# by model name — low = quick glance, critical = final pre-ship sign-off. interact maps the tier to
-# a model (sovereign for low/medium, best-available frontier for high/critical) + extra rigor.
+# Quality tiers for review_ui/verify_ui quality=. Agent picks by STAKES not model name: low =
+# quick glance, critical = final pre-ship sign-off. Maps to a model (sovereign for low/medium,
+# best-available frontier for high/critical) + extra rigor.
 QUALITY_TIERS = ("low", "medium", "high", "critical")
 
 
@@ -113,9 +111,9 @@ class Config(BaseSettings):
     video_model: str = ""
     component_model: str = ""
     audio_model: str = ""
-    # Generic media execution. Backend selects the transport; billing decides whether interact may
-    # call a metered API. Vendor CLIs can consume account credits after plan allowance, so session
-    # execution additionally requires an explicit operator attestation that those credits are off.
+    # Backend selects transport; billing decides if interact may call a metered API. Vendor
+    # CLIs can consume account credits past plan allowance, so session execution also needs
+    # explicit operator attestation those credits are off.
     media_backend: Literal["auto", "session", "api"] = "auto"
     media_billing: Literal["session_only", "api_allowed"] = "session_only"
     media_criteria: str = ""
@@ -134,69 +132,63 @@ class Config(BaseSettings):
     prompt_token_file: Path | None = None
     prompt_cache: Path = Path.home() / ".interact" / "prompts.sqlite3"
     claude_media_model: str = ""
-    # Fallback model chains (comma-separated litellm ids) tried, in order, when the primary
-    # model errors. Empty → the bundled per-role recommendations are used as the defaults.
+    # Fallback model chains (comma-separated litellm ids), tried in order when the primary
+    # errors. Empty → bundled per-role recommendations used as defaults.
     image_fallbacks: str = ""
     component_fallbacks: str = ""
     video_fallbacks: str = ""
     audio_fallbacks: str = ""
-    # The model the low/medium quality tiers prefer (see QUALITY_TIERS). Empty → GLM-4.5V default
-    # (_DEFAULT_SOVEREIGN_MODEL). Override with INTERACT_TIER_SOVEREIGN_MODEL (e.g. a local id).
+    # Sovereign-tier model (see QUALITY_TIERS); empty → GLM-4.5V default
+    # (_DEFAULT_SOVEREIGN_MODEL). Override: INTERACT_TIER_SOVEREIGN_MODEL.
     tier_sovereign_model: str = ""
     headless: bool = True
     slow_mo: int = 0
     browser_type: Literal["chromium", "firefox", "webkit"] = "chromium"
-    viewport_width: int = 1280
-    viewport_height: int = 720
-    # When set, browser sessions persist their profile (cookies, localStorage, login) on disk under
-    # <browser_profile_dir>/<session> instead of the default ephemeral context that starts logged
-    # out every launch. Lets an authenticated flow run through the reliable DOM-ref path (log in
-    # once, stay logged in across restarts) rather than the flaky desktop-window VLM path (#43).
-    # Each session gets its own subdir — Playwright locks a user-data-dir to one running context.
-    # Override with INTERACT_BROWSER_PROFILE_DIR.
+    viewport_width: Annotated[int, Field(ge=1)] = 1280
+    viewport_height: Annotated[int, Field(ge=1)] = 720
+    # Set: browser sessions persist profile (cookies, localStorage, login) under
+    # <browser_profile_dir>/<session>, instead of the default ephemeral context (logs out every
+    # launch). Lets an authenticated flow use the reliable DOM-ref path instead of the flaky
+    # desktop-window VLM path (#43). Own subdir per session — Playwright locks a user-data-dir
+    # to one running context. Override: INTERACT_BROWSER_PROFILE_DIR.
     browser_profile_dir: Path | None = None
     screenshot_dump_dir: Path | None = None  # explicit per-run override of the dump base
-    # Base dir for interact's local output: the usage log (debug_dir/usage.jsonl) and per-session debug
-    # dumps (debug_dir/sessions/…). Default ~/.interact/out — kept in an `out/` folder so the root stays clean
-    # (just config.env + out/) instead of being scattered with timestamped dump dirs. Override with
-    # INTERACT_DEBUG_DIR (e.g. a project's out/ when working locally). screenshot_dump_dir wins if set.
+    # Base dir for local output: usage log (debug_dir/usage.jsonl), per-session dumps
+    # (debug_dir/sessions/…). Default ~/.interact/out, kept under out/ so root stays clean.
+    # Override: INTERACT_DEBUG_DIR. screenshot_dump_dir wins if set.
     debug_dir: Path = Path.home() / ".interact" / "out"
     video_fps: int = 5
     video_duration: float = 3.0
-    # Cost cap for video understanding: a recording is sampled down to at most this many frames
-    # (evenly spaced) before going to the VLM, so spend is bounded by frame count, not clip
-    # length — enough frames to follow what happened (UI flow, gameplay), without paying per second.
+    # Cost cap: recording sampled to at most this many evenly-spaced frames before the VLM, so
+    # spend bounds by frame count not clip length — enough to follow UI flow without per-second cost.
     video_max_frames: int = 12
     max_tokens: int | None = None
     wait_timeout: int = 10000
-    # Auto-close a browser session whose browser has sat idle (no tool call) this many seconds,
-    # freeing its Chromium + driver; it re-opens lazily on next use (a non-default session starts
-    # fresh — cookies/login are not preserved across the close). 0 disables. Override with
-    # INTERACT_SESSION_IDLE_TTL.
+    # Auto-close a browser idle this many seconds (no tool call), freeing Chromium + driver;
+    # reopens lazily on next use (non-default session loses cookies/login on close). 0 disables.
+    # Override: INTERACT_SESSION_IDLE_TTL.
     session_idle_ttl: int = 900
-    # Same idea for the nested sandbox — but its Xephyr is a VISIBLE window on the user's desktop,
-    # which annoys per idle-minute in a way an invisible headless browser doesn't, so it defaults
-    # shorter. An abandoned sandbox auto-closes (the next launch_app respawns one); a live recording
-    # blocks reaping. 0 disables. Override with INTERACT_SANDBOX_IDLE_TTL.
+    # Same for the nested sandbox — its Xephyr is a VISIBLE desktop window (annoys per idle-
+    # minute unlike a headless browser), so a shorter default. Abandoned sandbox auto-closes
+    # (launch_app respawns); a live recording blocks reaping. 0 disables. Override:
+    # INTERACT_SANDBOX_IDLE_TTL.
     sandbox_idle_ttl: int = 300
-    # Refresh the live model catalog (OpenRouter) and benchmark scores (Artificial Analysis) in
-    # the background when the server starts, so the dashboard shows current prices and rankings
-    # instead of whatever was cached. Set false to keep interact from reaching those APIs at all —
-    # the panels then serve the last cache and say how old it is. Override with
+    # Refresh live model catalog (OpenRouter) + benchmark scores (Artificial Analysis) in the
+    # background on server start, so the dashboard shows current data, not stale cache. False:
+    # never reach those APIs; panels serve last cache and say how old. Override:
     # INTERACT_REFRESH_LIVE_DATA.
     refresh_live_data: bool = True
     vlm_max_dim: int = 1280
     vlm_min_dim: int = 768
     detection_max_retries: int = 3  # judge-driven re-detection passes to recover missed elements
-    # Desktop target: "local" drives the real session (uinput, system-wide);
-    # "nested" runs an isolated Xephyr display (xdotool into it) — for tests / a VM-like
-    # sandbox that never touches the user's real windows or cursor.
+    # "local": drives the real session (uinput, system-wide). "nested": isolated Xephyr display
+    # (xdotool) — sandbox that never touches the user's real windows or cursor.
     desktop_target: Literal["local", "nested"] = "local"
     nested_display: int = 99
-    nested_size: str = "1280x800"
-    # When the target is "nested": run the X server visible (Xephyr, default — watch the
-    # agent) or headless in the background (Xvfb — for CI / servers, no window).
-    nested_headless: bool = False
+    nested_size: Annotated[str, Field(pattern=r"^[1-9]\d*x[1-9]\d*$")] = "1280x800"
+    # For "nested" target: visible X server (Xephyr, default — watch the agent) or headless
+    # (Xvfb, for CI/servers, no window).
+    nested_headless: bool = True
 
     @field_validator(
         "debug_dir", "screenshot_dump_dir", "browser_profile_dir", "prompt_cache",
@@ -204,13 +196,13 @@ class Config(BaseSettings):
     )
     @classmethod
     def _expand_user(cls, value: Path | None) -> Path | None:
-        """Expand ``~`` once, here at the boundary where the value enters.
+        """Expand ``~`` once, at the boundary where the value enters.
 
-        These fields are free text everywhere they're set — the config TUI, the VS Code settings
-        UI, a hand-edited ``config.env`` — and their descriptions advertise ``~/.interact/out``,
-        so users type a tilde. Without this, ``INTERACT_DEBUG_DIR=~/.interact`` becomes a literal
-        ``Path("~/.interact")`` and every write lands in a ``./~/.interact`` dir relative to
-        wherever the server happened to start.
+        These fields are free text everywhere they're set — config TUI, VS Code settings UI,
+        a hand-edited ``config.env`` — and their descriptions advertise ``~/.interact/out``, so
+        users type a tilde. Without this, ``INTERACT_DEBUG_DIR=~/.interact`` becomes a literal
+        ``Path("~/.interact")`` and every write lands in ``./~/.interact`` relative to wherever
+        the server happened to start.
         """
         if value is None:
             return value
@@ -264,10 +256,9 @@ class Config(BaseSettings):
         return self.debug_dir / "usage.jsonl"
 
     def session_log_dir(self) -> Path:
-        """Per-caller output root: ``<debug_dir>/sessions/<session>/<date>``. The dir is organised BY
-        SESSION (not a flat 'logs' pile): ``<session>`` is the calling client's name — a Claude Code
-        session's custom-title (e.g. 'Aino'), else the VS Code / project / cwd basename, else 'default'
-        — and ``<date>`` is today. Every dump interact writes for a run lands here, dated."""
+        """Per-caller output root: ``<debug_dir>/sessions/<session>/<date>`` — organised BY
+        SESSION, not a flat 'logs' pile. ``<session>`` from ``caller_session_name()``;
+        ``<date>`` is today. Every dump interact writes for a run lands here."""
         return self.debug_dir / "sessions" / caller_session_name() / datetime.now().strftime("%Y-%m-%d")
 
     def media_workspace_root(self) -> Path:
@@ -317,26 +308,25 @@ class Config(BaseSettings):
     def resolve_model(
         self, role: ModelRole, override: str = "", breaker: CircuitBreaker | None = None
     ) -> str:
-        """Single resolution site for a role's model id — the boundary where "which model"
-        is decided once, so nothing downstream ever runs with an empty id (the bug behind the
-        "[Vision not configured]" returns: the auto path left ``model_for`` empty and that ``""``
-        flowed all the way into the VLM call). Precedence:
+        """Single resolution site for a role's model id — nothing downstream ever runs with an
+        empty id (prevents the "[Vision not configured]" bug: the auto path left ``model_for``
+        empty and that ``""`` flowed into the VLM call). Precedence:
 
-        1. an explicit per-call ``override`` (the agent's ``model=`` argument),
-        2. else the configured pin, IF it can actually run (its key is present),
+        1. explicit per-call ``override`` (the agent's ``model=`` argument),
+        2. else the configured pin, if it can actually run (its key is present),
         3. else the first available model in the role's preference chain — strongest first,
            skipping circuit-broken ones,
-        4. else the pin, or failing that the chain's top preference, so a missing key becomes a
-           clear downstream auth error naming the model the person asked for, never an empty-id
-           silent no-op.
+        4. else the pin, or failing that the chain's top preference — so a missing key becomes
+           a clear downstream auth error naming the requested model, never a silent empty-id
+           no-op.
 
-        Step 2 used to return the pin unconditionally. The reasoning was that a bad pin should
-        surface a clear auth error rather than be silently swapped — but honouring an unusable
-        pin honours nothing: the error arrived from deep inside a vendor call, and no work got
-        done. Falling through to a model that CAN run is strictly more useful, and it is not
-        silent — ``interact doctor`` prints "⚠ key missing" beside the pin. It also matters
-        because the VS Code extension used to bake catalog defaults into the environment, which
-        made every user look "pinned" and disabled the walk entirely.
+        Step 2 used to return the pin unconditionally: a bad pin should surface a clear auth
+        error rather than be silently swapped — but an unusable pin honours nothing, the error
+        arrived from deep inside a vendor call and no work got done. Falling through to a model
+        that CAN run is more useful, and still visible (``interact doctor`` flags "⚠ key
+        missing" beside the pin). Also matters because the VS Code extension used to bake
+        catalog defaults into the environment, making every user look "pinned" and disabling
+        the walk entirely.
 
         Raises if the catalog is empty (no models.json and no litellm) — fail loud here, at the
         one resolution site, not by leaking a sentinel for deeper code to re-validate.
@@ -346,7 +336,7 @@ class Config(BaseSettings):
         configured = self.model_for(role)
         chain = self.chain_for(role)
         # Honoured unless we can PROVE it cannot run. `key_missing` is deliberately narrower
-        # than `not is_available()`: the latter is also true for any id outside the catalog — a
+        # than `not is_available()`, which is also true for any id outside the catalog — a
         # self-hosted endpoint, a local runner — and overriding one of those would be auto-
         # selection quietly discarding a choice somebody made.
         if configured and not Model.from_litellm_id(configured).key_missing():
@@ -363,11 +353,11 @@ class Config(BaseSettings):
     def explain_model(self, role: ModelRole) -> ModelWalk:
         """Which model this role picks, and what it passed over on the way.
 
-        The chosen id alone cannot answer "are we using the best model we have" — that reads the
-        same whether the walk found the strongest available or whether a stale default was
-        returned without any walk at all, which is exactly what used to happen. The skipped list
-        is the evidence, and it distinguishes a key somebody could ADD from a provider interact
-        will not drive at all.
+        The chosen id alone can't answer "are we using the best model we have" — that reads
+        the same whether the walk found the strongest available, or a stale default was
+        returned with no walk at all, which is exactly what used to happen. The skipped list
+        is the evidence, distinguishing a key somebody could ADD from a provider interact will
+        not drive at all.
         """
         chain = self.chain_for(role)
         pinned = self.model_for(role)
@@ -380,8 +370,8 @@ class Config(BaseSettings):
                 absent = [k for k in keys if not os.environ.get(k)]
                 reason = "no " + ", ".join(absent)
             elif keys is not None:
-                # Declares no API keys: subscription CLI media runs through the separate session
-                # transport, not through this LiteLLM model-selection walk.
+                # No API keys declared: subscription CLI media runs through the separate
+                # session transport, not this LiteLLM model-selection walk.
                 reason = "subscription provider — available through media.backend=session"
             else:
                 reason = "unknown provider"
@@ -389,15 +379,15 @@ class Config(BaseSettings):
         return ModelWalk(role=role, chosen="", pinned=bool(pinned), skipped=skipped)
 
     def resolve_quality_model(self, quality: str) -> str:
-        """Map a quality tier to a model PREFERENCE (the "choose the model for me" literal). low/medium
-        prefer a sovereign self-host GLM (private, cheap); high/critical fall through to the normal
-        best-available resolution. Returns "" when the tier implies normal resolution OR no sovereign
-        candidate is reachable — a graceful preference layered on resolve_model, never a hard pin that
-        errors on a missing key. Pass the result as the per-call override.
+        """Map a quality tier to a model PREFERENCE. low/medium prefer a sovereign self-host
+        GLM (private, cheap); high/critical fall through to normal best-available resolution.
+        Returns "" when the tier is normal OR no sovereign candidate is reachable — a graceful
+        preference layered on resolve_model, never a hard pin erroring on a missing key. Pass
+        the result as the per-call override.
 
-        An explicit tier_sovereign_model is the only candidate (honour the user's pin); otherwise each
-        _SOVEREIGN_MODELS id is tried in order and the FIRST whose key is present wins — so a z.ai key
-        (`zai/`) and a Novita key (`novita/`) both light up GLM with no configuration."""
+        ``tier_sovereign_model``, if set, is the only candidate (honours the user's pin);
+        otherwise each ``_SOVEREIGN_MODELS`` id is tried in order, first present key wins.
+        """
         if quality not in ("low", "medium"):
             return ""
         candidates = (self.tier_sovereign_model,) if self.tier_sovereign_model else _SOVEREIGN_MODELS
@@ -416,8 +406,8 @@ class Config(BaseSettings):
         return [model.strip() for model in raw.split(",") if model.strip()]
 
     def chain_for(self, role: ModelRole) -> ModelChain:
-        """Build a model fallback chain for a role (image, component, video): the configured
-        primary, then user-configured fallbacks if any, else the bundled recommendations."""
+        """Build a fallback chain for a role: configured primary, then user fallbacks if any,
+        else bundled recommendations."""
         configured = self.model_for(role)
         recommendations = self.fallbacks_for(role) or self._recommendations.get(role, [])
         return ModelChain.from_config(role, configured, recommendations)

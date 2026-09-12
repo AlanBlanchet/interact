@@ -11,7 +11,7 @@
  *   - one of your own editor sessions can be READ but not driven. interact does not supervise it,
  *     so offering "message" would promise a reach the product does not have.
  *
- *  No `vscode` import: the decision is testable, and the caller executes the command.
+ *  No vscode import: the decision is testable, and the caller executes the command.
  */
 
 export interface AgentAction {
@@ -27,10 +27,10 @@ export interface AgentAction {
 export interface ActionSubject {
   run_id: string;
   status: string;
-  /** Present only when this run IS a definition — a plain `claude` run has no prompt to open. */
+  /** Present only when this run IS a definition — a plain claude run has no prompt to open. */
   definition_path?: string | null;
-  /** The DEFINITION this run is. A model preference is stored per definition, not per run: you are
-   *  choosing what `researcher` runs on, not what this one errand runs on. */
+  /** The DEFINITION this run is. A model preference is stored per definition, not per run: you're
+   *  choosing what researcher runs on, not what this one errand runs on. */
   agent?: string | null;
   faculties?: string[];
   brain?: boolean;

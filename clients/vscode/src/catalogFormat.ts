@@ -1,6 +1,6 @@
 /** Pure decisions about the model catalog — no imports, so they are unit-testable.
  *
- *  Same discipline as `agentsFormat.ts` / `paths.ts`. These are the judgements that go quietly
+ *  Same discipline as agentsFormat.ts / paths.ts. These are the judgements that go quietly
  *  wrong: whether data is fresh enough to present as current, and which models are worth showing
  *  in a tool that drives UIs by looking at them.
  */
@@ -37,13 +37,15 @@ export function describeAge(seconds: number): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-/** The models worth showing first. interact drives UIs by looking at them, so a model that cannot
- *  take an image is not a candidate however cheap it is; among those that can, prefer the larger
- *  context. */
-export function pickHighlights(cat: Catalog, limit = 6): ModelInfo[] {
-  const seeing = cat.models.filter((m) => (m.input_modalities || []).includes("image"));
-  return [...seeing]
-    .sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0))
-    .slice(0, limit);
+/** The models interact could actually drive a UI with: it works by LOOKING, so a model that
+ *  can't take an image is not a candidate however cheap or large it is.
+ *
+ *  A filter only — no ordering, no cap. Used to also sort by context length and slice, making
+ *  "the models worth showing first" mean "the 24 with the biggest context": the panel's own
+ *  comparison table then led with whatever had a million tokens and omitted every Anthropic
+ *  model while the hero named three of them. Which models can SEE is a fact about the product;
+ *  what a surface leads with is a fact about that surface, and each one now says its own.
+ */
+export function seeingModels(cat: Catalog): ModelInfo[] {
+  return cat.models.filter((m) => (m.input_modalities || []).includes("image"));
 }
-

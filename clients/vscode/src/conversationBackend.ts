@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 export type ConversationBackend =
-  | { available: true; command: string; args: string[] }
+  | { available: true; command: string; args: string[]; origin: "project_checkout" | "local_path" }
   | { available: false; reason: string };
 
 export interface ConversationBackendOptions {
@@ -78,6 +78,7 @@ export async function resolveConversationBackend(
       available: true,
       command: "uv",
       args: ["run", "--directory", projectPath, "interact", ...args],
+      origin: "project_checkout",
     };
   }
   const candidates = executableCandidates(
@@ -92,7 +93,7 @@ export async function resolveConversationBackend(
   for (const command of candidates) {
     const foundVersion = await versionOf(command);
     observedVersion ??= foundVersion;
-    if (foundVersion === options.extensionVersion) return { available: true, command, args };
+    if (foundVersion === options.extensionVersion) return { available: true, command, args, origin: "local_path" };
   }
   const found = observedVersion ? `Found ${observedVersion}; ` : "The installed version could not be verified; ";
   return {

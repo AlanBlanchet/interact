@@ -20,13 +20,13 @@ type Seed = [
   idle: number,
   /** The department the company file files them under, and the faculties their own definition
    *  grants. Both taken from the REAL roster rather than invented: a fixture that exercises a
-   *  shape the product does not use is not a fixture, it is an alibi — this project has been bitten
-   *  by that four times (a unit, an id space, a baked clock, a synthetic image). */
+   *  shape the product doesn't use is not a fixture, it's an alibi — this project has been
+   *  bitten by that four times (a unit, an id space, a baked clock, a synthetic image). */
   dept: string | null,
   faculties: string[],
 ];
 
-/** The rooms exactly as `~/.claude/org.json` words them, so the building's signs are the
+/** The rooms exactly as ~/.claude/org.json words them, so the building's signs are the
  *  company's own and not a paraphrase. */
 const ROOMS: Record<string, string> = {
   quality: "Quality & Critics",
@@ -68,10 +68,10 @@ const SEEDS: Seed[] = [
 
   /* A DEPARTMENT WHERE EVERY RUN HAS FINISHED, which nothing in this fixture could show before.
      The whole claim of the posture system is that you read a room's condition off where its
-     people ARE — desks or couches — with no word on screen, and a harness in which no room is
-     ever fully done cannot put that claim in front of anybody. An independent critic hit exactly
-     that and had to record the requirement as untestable, which is a hole in the fixture, not a
-     gap in the feature: the state exists, the harness simply never entered it. */
+     people ARE — desks or couches — with no word on screen, and a harness where no room is
+     ever fully done can't put that claim in front of anybody. An independent critic hit exactly
+     that and had to record the requirement as untestable — a hole in the fixture, not a gap in
+     the feature: the state exists, the harness simply never entered it. */
   ["teacher", "teacher", "done", "library", "wrote the lesson for Conv2d", "a", "interact", 0.31, 190, "records", ["reads", "writes", "delegates"]],
   ["advocate", "advocate", "done", "library", "measured every claim in the README", "a", "interact", 0.24, 275, "records", ["reads", "writes", "runs"]],
 ];
@@ -94,23 +94,23 @@ export function fixture(at = Date.UTC(2026, 7, 18, 14, 3, 22)): TeamState {
       idle_seconds: idle,
       department: dept ?? undefined,
       room: dept ? ROOMS[dept] : undefined,
-      // Exactly one brain: the first agent Alan asked for something. On the real roster that is
-      // `main`, and it is the run with no parent that started first.
+      // Exactly one brain: the first agent Alan asked for something. On the real roster that's
+      // main, the run with no parent that started first.
       brain: i === 0,
       faculties,
     }),
   );
-  // Real exchanges, both ends present. `run-a` is the first seed, `run-b` the second, and so on.
+  // Real exchanges, both ends present. run-a is the first seed, run-b the second, and so on.
   //
-  // Each carries an AGE in seconds, and the spread is the point: two of these happened moments
-  // ago and three are old news. A cold open must act out the first two and stay silent about the
-  // rest, and one link deliberately has NO stamp at all — the shape of a message recorded before
-  // `Link.at` existed, which must count as unknown rather than as new.
+  // Each carries an AGE in seconds, and the spread is the point: two happened moments ago and
+  // three are old news. A cold open must act out the first two and stay silent about the rest,
+  // and one link deliberately has NO stamp at all — the shape of a message recorded before
+  // Link.at existed, which must count as unknown rather than as new.
   //
-  // The stamps are in SECONDS because that is the unit the data layer actually writes (Python's
-  // `time.time()`), while a snapshot's own `at` here is whatever the caller passed. They are
-  // normalised where they meet rather than assumed to agree — a fixture that quietly used one
-  // unit for both is precisely what hid a 1970 clock in the panel for an entire arc.
+  // Stamps are in SECONDS because that's the unit the data layer actually writes (Python's
+  // time.time()), while a snapshot's own at here is whatever the caller passed. Normalised
+  // where they meet rather than assumed to agree — a fixture that quietly used one unit for
+  // both is precisely what hid a 1970 clock in the panel for an entire arc.
   const said = (seconds: number) => atSeconds(at) - seconds;
   const links = [
     { from_run_id: "run-c", to_run_id: "run-b", text: "css: use box-shadow steps for the sprite, not a png", at: said(9) },
@@ -123,7 +123,7 @@ export function fixture(at = Date.UTC(2026, 7, 18, 14, 3, 22)): TeamState {
 }
 
 /** The same team a moment later: three people have moved room and several have said something
- *  new. Rendering this straight after `fixture()` is how the walk is exercised — the view has to
+ *  new. Rendering this straight after fixture() is how the walk is exercised — the view has to
  *  produce travel from the difference alone, with nothing telling it who moved. */
 export function fixtureMoved(at = Date.UTC(2026, 7, 18, 14, 3, 31)): TeamState {
   const state = fixture(at);

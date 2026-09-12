@@ -1,14 +1,14 @@
 """The one declarative description of interact's user-configurable settings.
 
 Every front end that lets a user configure interact — the bare-``interact`` Textual TUI and the
-VS Code extension panel — renders from THIS list, instead of each re-declaring the fields, labels,
+VS Code extension panel — renders from THIS list instead of each re-declaring fields, labels,
 defaults and env-var mappings (which had already drifted: the TUI wrote ``INTERACT_BROWSER_HEADLESS``
 that :class:`~interact.config.Config` never reads, and TUI/extension disagreed on ``debug.dir``).
 
 A :class:`Setting` is keyed to a real ``Config`` attribute (``field``), so its env-var name and
-default are derived from the runtime config and can't drift; a test asserts every setting maps to
-an existing field. The schema is exported to JSON (``PackageData.settings_raw``) for the extension,
-which generates its env-map and renders its Configuration panel from the same source.
+default derive from the runtime config and can't drift; a test asserts every setting maps to an
+existing field. Schema exports to JSON (``PackageData.settings_raw``) for the extension, which
+generates its env-map and renders its Configuration panel from the same source.
 
 Front ends consume the common spec and override only presentation when they must (a richer widget,
 hiding a field) — the *behaviour* (which key, which env var, the default) stays shared.
@@ -25,10 +25,10 @@ from interact.config.settings import Config
 SettingKind = Literal["model", "enum", "bool", "int", "str", "path"]
 SettingGroup = Literal["Models", "Desktop", "Browser", "Advanced"]
 
-# Capability a model must have to appear in a role's dropdown. image/component need GUI grounding;
-# video needs NATIVE video input (Gemini / Qwen-VL / Nova — not every VLM, which was the old bug:
-# the list mirrored the image list); audio needs audio understanding / transcription. interact can
-# still drive a non-native model for video (it ffmpeg-samples frames) or audio, but the picker shows
+# Capability a model must have to appear in a role's dropdown. image/component need GUI
+# grounding; video needs NATIVE video input (Gemini/Qwen-VL/Nova — not every VLM, the old bug:
+# list mirrored the image list); audio needs audio understanding/transcription. interact can
+# still drive a non-native model for video (ffmpeg-samples frames) or audio, but the picker shows
 # only genuinely capable models so the choice is honest.
 _ROLE_CAP = {
     "image": "gui_grounding",
@@ -57,6 +57,19 @@ class Setting(BaseModel):
     kind: SettingKind
     role: str | None = None  # for kind="model": the model role (image/component/video)
     options: list[Option] | None = None  # for kind="enum"
+    @computed_field
+    @property
+    def minimum(self) -> int | None:
+        """Numeric lower bound projected from the runtime Config field, when declared."""
+        value = Config.model_json_schema()["properties"][self.field].get("minimum")
+        return int(value) if isinstance(value, int | float) else None
+
+    @computed_field
+    @property
+    def pattern(self) -> str | None:
+        """String constraint projected from the runtime Config field, when it declares one."""
+        value = Config.model_json_schema()["properties"][self.field].get("pattern")
+        return value if isinstance(value, str) else None
 
     @computed_field
     @property
@@ -80,9 +93,9 @@ class Setting(BaseModel):
         if value is None:
             return ""
         if isinstance(value, Path):
-            # Render path defaults POSIX-style (forward slashes) so the exported JSON is byte-identical
-            # on every OS — otherwise Windows bakes `~\.interact` and drifts from the bundled (Linux-
-            # generated) settings.json, failing the lockstep check.
+            # Render path defaults POSIX-style (forward slashes) so exported JSON is byte-identical
+            # on every OS — otherwise Windows bakes `~\.interact` and drifts from the bundled
+            # (Linux-generated) settings.json, failing the lockstep check.
             text, home = value.as_posix(), Path.home().as_posix()
         elif isinstance(value, tuple):
             text, home = ",".join(str(part) for part in value), str(Path.home())

@@ -60,13 +60,20 @@
         "interact.media.backend": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "session", "api"],
+          "enum": [
+            "auto",
+            "session",
+            "api"
+          ],
           "description": "Where image and sampled-video analysis runs. Auto follows the billing policy."
         },
         "interact.media.billing": {
           "type": "string",
           "default": "session_only",
-          "enum": ["session_only", "api_allowed"],
+          "enum": [
+            "session_only",
+            "api_allowed"
+          ],
           "description": "Session only prevents interact's metered API fallback; vendor CLI account credits are separate."
         },
         "interact.media.criteria": {
@@ -82,14 +89,22 @@
         "interact.media.noExtraUsageConfirmedFor": {
           "type": "string",
           "default": "",
-          "enum": ["", "claude"],
-          "enumDescriptions": ["No provider confirmed; session dispatch stays blocked.", "Claude only"],
+          "enum": [
+            "",
+            "claude"
+          ],
+          "enumDescriptions": [
+            "No provider confirmed; session dispatch stays blocked.",
+            "Claude only"
+          ],
           "markdownDescription": "Provider-scoped confirmation that extra usage is unavailable. For Claude, check [Settings → Usage](https://claude.ai/settings/usage): Usage credits disabled, zero prepaid balance, auto-reload off. Interact cannot verify these account settings."
         },
         "interact.media.providerOrder": {
           "type": "string",
           "default": "claude",
-          "enum": ["claude"],
+          "enum": [
+            "claude"
+          ],
           "description": "Media-capable subscription CLI, currently Claude."
         },
         "interact.media.claudeModel": {
@@ -165,11 +180,13 @@
         "interact.browser.viewportWidth": {
           "type": "number",
           "default": 1280,
+          "minimum": 1,
           "description": "Browser viewport width"
         },
         "interact.browser.viewportHeight": {
           "type": "number",
           "default": 720,
+          "minimum": 1,
           "description": "Browser viewport height"
         },
         "interact.browser.slowMo": {
@@ -218,11 +235,12 @@
         "interact.desktop.nestedSize": {
           "type": "string",
           "default": "1280x800",
+          "pattern": "^[1-9]\\d*x[1-9]\\d*$",
           "description": "Screen size of the nested desktop target (WIDTHxHEIGHT)"
         },
         "interact.desktop.nestedHeadless": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Nested target only: ON = Xvfb in the background (CI/servers); OFF = Xephyr you can watch"
         }
       }
@@ -415,6 +433,16 @@
           "group": "1_interact@2"
         },
         {
+          "command": "interact.agents.providers",
+          "when": "view == interactAgents.board",
+          "group": "1_interact@3"
+        },
+        {
+          "command": "interact.showLogs",
+          "when": "view == interactAgents.board",
+          "group": "1_interact@4"
+        },
+        {
           "command": "interact.agents.team",
           "when": "view == interactAgents.chat",
           "group": "navigation@0"
@@ -438,6 +466,16 @@
           "command": "interact.openDashboard",
           "when": "view == interactAgents.chat",
           "group": "1_interact@1"
+        },
+        {
+          "command": "interact.agents.providers",
+          "when": "view == interactAgents.chat",
+          "group": "1_interact@2"
+        },
+        {
+          "command": "interact.showLogs",
+          "when": "view == interactAgents.chat",
+          "group": "1_interact@3"
         }
       ],
       "view/item/context": [
@@ -464,23 +502,19 @@
       ],
       "commandPalette": [
         {
-          "command": "interact.agents.spawn",
-          "when": "false"
-        },
-        {
-          "command": "interact.agents.send",
-          "when": "false"
-        },
-        {
           "command": "interact.agents.broadcast",
           "when": "false"
         },
         {
-          "command": "interact.agents.stop",
+          "command": "interact.agents.definition",
           "when": "false"
         },
         {
-          "command": "interact.agents.showEvents",
+          "command": "interact.agents.groupBy",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.model",
           "when": "false"
         },
         {
@@ -492,11 +526,19 @@
           "when": "false"
         },
         {
-          "command": "interact.agents.groupBy",
+          "command": "interact.agents.send",
           "when": "false"
         },
         {
-          "command": "interact.agents.definition",
+          "command": "interact.agents.showEvents",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.stop",
+          "when": "false"
+        },
+        {
+          "command": "interact.agents.spawn",
           "when": "false"
         }
       ]

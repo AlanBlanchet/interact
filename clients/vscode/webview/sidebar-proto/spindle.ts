@@ -6,16 +6,16 @@
  *  project, so it cannot be the answer for THIS one.
  *
  *  The second answer, once you know the workplace exists, is to shrink the workplace: a little
- *  cutaway building in the side bar. That one is worse than conventional, it is REDUNDANT. Two
- *  views of the same picture, one of them strictly worse, and the honest question becomes why the
- *  big one exists at all. Coherence is not repetition.
+ *  cutaway building in the side bar. That one is worse than conventional — REDUNDANT: two views
+ *  of the same picture, one of them strictly worse, and the honest question becomes why the big
+ *  one exists at all. Coherence is not repetition.
  *
  *  So the two surfaces split the WORK instead of the picture. The workplace is spatial: it answers
  *  "where is everyone, what is the team doing" and it has no clock. This panel is the desk that
- *  building reports to — every job is a WORK ORDER, impaled on one steel spike, and the spike runs
- *  the whole height of the panel and straight on down through the composer at the bottom. That rod
- *  is the answer to "two products bolted together": everything in the side bar hangs on one piece
- *  of ironmongery, so there are no longer two halves to be incoherent between.
+ *  building reports to — every job is a WORK ORDER, impaled on one steel spike, running the whole
+ *  height of the panel and down through the composer at the bottom. That rod is the answer to "two
+ *  products bolted together": everything in the side bar hangs on one piece of ironmongery, so
+ *  there are no longer two halves to be incoherent between.
  *
  *  The one idea that makes it more than a nicer list: PAPER SINKS. A spike is physical, so depth in
  *  the pile means something. Live work sits on top at full height; work that is finished, held or
@@ -237,17 +237,17 @@ function team(t: Team, accent: string, at: number): string {
 /** The board. */
 export function renderBoard(board: Board): string {
   const teams = orderTeams(teamsOf(board.dockets));
-  // The pod hues come from the workplace's own greedy allocator, and they are fed EXACTLY what the
-  // building feeds it: every lead in the snapshot, foreign ones included.
+  // Pod hues come from the workplace's own greedy allocator, fed EXACTLY what the building feeds
+  // it: every lead in the snapshot, foreign ones included.
   //
-  // This panel used to hold a foreign session out of the allocation — it is nobody's team, so why
-  // burn one of seven distinct colours on it. That reasoning was right about the COLOUR and wrong
-  // about the ALLOCATOR: it is greedy, so a lead whose preferred hue is taken steps to the next
-  // free one, and which hues are taken depends on the whole SET of leads. Drop one and another
-  // lead can move. Simulated over random run ids, a real team's hue comes out different between
-  // the two panels in 26% of four-lead snapshots and 38% of five-lead ones — and the pod hue is
-  // the ONLY thing tying a report standing three rooms away back to its lead, so a disagreement
-  // there is the two surfaces disagreeing about who is on whose team.
+  // This panel used to hold a foreign session out of the allocation — nobody's team, so why burn
+  // one of seven colours on it. Right about the COLOUR, wrong about the ALLOCATOR: it's greedy, so
+  // a lead whose preferred hue is taken steps to the next free one, and which hues are taken
+  // depends on the whole SET of leads — drop one and another lead can move. Simulated over random
+  // run ids, a real team's hue comes out different between the two panels in 26% of four-lead
+  // snapshots, 38% of five-lead ones — and the pod hue is the ONLY thing tying a report three
+  // rooms away back to its lead, so a disagreement there is the two surfaces disagreeing about who
+  // is on whose team.
   // One input, one assignment. The foreign slip still draws no colour; it just no longer changes
   // anyone else's.
   const accents = assignAccents(teams.map((t) => t.lead.run_id));

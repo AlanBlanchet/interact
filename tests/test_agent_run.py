@@ -8,19 +8,24 @@ on a vendor binary being installed.
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
 from interact.agents import registry as reg
 from interact.agents.events import AgentEvent
 from interact.agents.providers import AgentProvider
-from interact.agents.run import mesh_config, run_agent
+from interact.agents.run import mesh_config, run_agent, validate_image_paths
 
 
 @pytest.fixture(autouse=True)
 def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    from interact.agents.policy import Policy
+    monkeypatch.setattr("interact.agents.run.load_policy", lambda: Policy(
+        agents={"tester": "fixture-model"}, reasoning={"tester": "medium"},
+    ))
     # A run's raw stream is parsed by the provider named on its record, looked up in the global
     # registry — so a test double has to be registered exactly like a real provider is.
     from interact.agents.providers import PROVIDERS
@@ -47,7 +52,7 @@ class _FakeProvider(AgentProvider):
         return True
 
     def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
-                permission_mode=None, allowed_tools=None):
+                permission_mode=None, allowed_tools=None, reasoning=None):
         return [sys.executable, "-c", self.script]
 
     def parse(self, line):
@@ -59,13 +64,13 @@ class _CrashingProvider(_FakeProvider):
     name = "crash"
 
     def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
-                permission_mode=None, allowed_tools=None):
+                permission_mode=None, allowed_tools=None, reasoning=None):
         return [sys.executable, "-c", "import sys; sys.exit(3)"]
 
 
 @pytest.mark.asyncio
 async def test_a_run_streams_its_events_and_records_its_cost(tmp_path):
-    run = await run_agent(_FakeProvider(), "do a thing", name="worker", cwd=str(tmp_path))
+    run = await run_agent(_FakeProvider(), "do a thing", agent="tester", name="worker", cwd=str(tmp_path))
     await asyncio.wait_for(run.wait(), timeout=30)
 
     events = reg.read_events(run.run_id)
@@ -74,11 +79,13 @@ async def test_a_run_streams_its_events_and_records_its_cost(tmp_path):
     assert listed.status == "done" and listed.exit_code == 0
     assert listed.cost_usd == pytest.approx(0.5)
     assert listed.last == "done"
+    assert listed.provider_session_id == "SID"
+    assert listed.requested_criterion == "fixture-model" and listed.reasoning == "medium"
 
 
 @pytest.mark.asyncio
 async def test_a_failing_run_is_recorded_as_failed(tmp_path):
-    run = await run_agent(_CrashingProvider(), "boom", name="w", cwd=str(tmp_path))
+    run = await run_agent(_CrashingProvider(), "boom", agent="tester", name="w", cwd=str(tmp_path))
     await asyncio.wait_for(run.wait(), timeout=30)
     assert [r for r in reg.list_runs() if r.run_id == run.run_id][0].status == "failed"
 
@@ -88,7 +95,7 @@ async def test_the_run_appears_in_the_registry_while_still_alive(tmp_path):
     """The supervisor must see a run BEFORE it finishes — otherwise there is nothing to watch."""
     slow = _FakeProvider()
     slow.command = lambda *a, **k: [sys.executable, "-c", "import time; time.sleep(5)"]
-    run = await run_agent(slow, "slow", name="w", cwd=str(tmp_path))
+    run = await run_agent(slow, "slow", agent="tester", name="w", cwd=str(tmp_path))
     try:
         listed = [r for r in reg.list_runs() if r.run_id == run.run_id]
         assert listed and listed[0].status == "running"
@@ -98,8 +105,8 @@ async def test_the_run_appears_in_the_registry_while_still_alive(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_child_is_attributed_to_its_parent(tmp_path):
-    parent = await run_agent(_FakeProvider(), "p", name="parent", cwd=str(tmp_path))
-    child = await run_agent(_FakeProvider(), "c", name="child", cwd=str(tmp_path),
+    parent = await run_agent(_FakeProvider(), "p", agent="tester", name="parent", cwd=str(tmp_path))
+    child = await run_agent(_FakeProvider(), "c", agent="tester", name="child", cwd=str(tmp_path),
                             parent_run_id=parent.run_id)
     await asyncio.wait_for(parent.wait(), timeout=30)
     await asyncio.wait_for(child.wait(), timeout=30)
@@ -133,13 +140,52 @@ def test_the_mesh_config_carries_no_credential():
         assert banned not in cfg, f"{banned!r} must never be handed to a spawned agent"
 
 
+def test_image_paths_are_absolute_supported_readable_and_bounded(tmp_path):
+    image = tmp_path / "screen.JPEG"
+    image.write_bytes(b"jpeg")
+    assert validate_image_paths((image,)) == (image,)
+
+    with pytest.raises(ValueError, match="absolute"):
+        validate_image_paths((Path("relative.png"),))
+    with pytest.raises(ValueError, match="unsupported image attachment type"):
+        validate_image_paths((tmp_path / "notes.txt",))
+
+    too_many = []
+    for index in range(9):
+        path = tmp_path / f"screen-{index}.png"
+        path.write_bytes(b"png")
+        too_many.append(path)
+    with pytest.raises(ValueError, match="at most 8"):
+        validate_image_paths(too_many)
+
+
+def test_unknown_model_is_refused_for_image_attachments(monkeypatch):
+    import interact.agents.run as run_mod
+
+    monkeypatch.setattr(run_mod.Model, "catalog", lambda: [])
+    monkeypatch.setattr(run_mod.Model, "match_published", lambda model: None)
+    with pytest.raises(run_mod.ModelUnavailable, match="not known.*cap.vlm"):
+        run_mod._require_vlm_model("unknown-model")
+
+
+def test_non_vlm_model_is_refused_for_image_attachments(monkeypatch):
+    import interact.agents.run as run_mod
+    from interact.models import Model, ModelCapability
+
+    candidate = Model(id="text-model", provider="openai", capabilities={ModelCapability.LLM})
+    monkeypatch.setattr(run_mod.Model, "catalog", lambda: [candidate])
+    monkeypatch.setattr(run_mod.Model, "match_published", lambda model: candidate)
+    with pytest.raises(run_mod.ModelUnavailable, match="does not meet cap.vlm"):
+        run_mod._require_vlm_model("text-model")
+
+
 @pytest.mark.asyncio
 async def test_events_survive_the_spawning_loop_ending(tmp_path):
     """The defect this replaced: the event stream ran on the CALLER's event loop, so a caller that
     spawned and returned lost every event — and the run then looked HEALTHY (status done, exit 0,
     no cost, no activity), which is worse than looking crashed. The child writes its own stream to
     disk now, so nothing is lost when the supervising coroutine goes away."""
-    run = await run_agent(_FakeProvider(), "t", name="w", cwd=str(tmp_path))
+    run = await run_agent(_FakeProvider(), "t", agent="tester", name="w", cwd=str(tmp_path))
     run.pump.cancel()  # the caller went away mid-run
     await asyncio.wait_for(run.process.wait(), timeout=30)
 

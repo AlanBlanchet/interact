@@ -1,8 +1,8 @@
 /** Turning what an agent is DOING into where it stands.
  *
  *  The workplace only means anything if a worker's position is earned: someone in the Web room is
- *  there because they are fetching a page right now. This is the pure half of that — no I/O, no
- *  rendering — so the mapping can be argued with in tests rather than eyeballed on a canvas.
+ *  there because they're fetching a page right now. This is the pure half of that — no I/O, no
+ *  rendering — so the mapping can be argued with in tests, not eyeballed on a canvas.
  */
 import type { Link, TeamState, Worker, ZoneId } from "./team";
 
@@ -39,19 +39,17 @@ const HOME: [ZoneId, RegExp][] = [
   ["data", /^(fiscal-auditor|business-strategist)$/],
 ];
 
-/**
- * Where a worker stands.
+/** Where a worker stands.
  *
- * Three things decide it, in order. Status first: a finished worker is back at the entrance
- * whatever it was last holding, and a session interact did not start is never shown mid-task —
- * watching it work would claim a supervision we do not have. Then the WORK in hand, because a
- * position has to be earned: a librarian reading source is in the code, not at their desk.
- * Only then their ROLE, so a thinking agent sits somewhere that means something.
+ *  Three things decide it, in order. Status first: a finished worker is back at the entrance
+ *  whatever it was last holding, and a session interact didn't start is never shown mid-task —
+ *  watching it work would claim a supervision we don't have. Then the WORK in hand, because a
+ *  position has to be earned: a librarian reading source is in the code, not at their desk.
+ *  Only then their ROLE, so a thinking agent sits somewhere that means something.
  */
 export function zoneOf(step: Step | undefined, status: string, agent?: string | null): ZoneId {
-  // Your own editor sessions stand at the main entrance: that is where work originates. Never
-  // placed mid-task — interact does not supervise them, and drawing one "in the code" would
-  // claim a supervision it does not have.
+  // Own editor sessions stand at the main entrance: where work originates. Never placed mid-task
+  // — interact doesn't supervise them (see doc above).
   if (status === "foreign") return "entry";
   if (status !== "running") return "entry";
   if (step?.kind === "spawn") return "managers";
@@ -73,9 +71,9 @@ export function zoneOf(step: Step | undefined, status: string, agent?: string | 
 /** Where a worker stands, given everything it has done.
  *
  *  A FINISHED worker keeps the room it was last working in. Sending it back to the entrance
- *  emptied every room the moment a team stopped — which is the state a team is in most of the
- *  time — and collapsed the building into one crowded grid, the exact shape this view replaced.
- *  Only someone who never worked anywhere stands at the door.
+ *  emptied every room the moment a team stopped — the state a team is in most of the time —
+ *  collapsing the building into one crowded grid, the exact shape this view replaced. Only
+ *  someone who never worked anywhere stands at the door.
  */
 export function zoneOfSteps(steps: Step[], status: string, agent?: string | null): ZoneId {
   if (status === "foreign") return "entry";
@@ -89,18 +87,18 @@ export function zoneOfSteps(steps: Step[], status: string, agent?: string | null
   return home === "managers" ? "entry" : home;
 }
 
-//: Kinds that say nothing about what a worker is DOING. The vendor emits housekeeping constantly,
-//: so the newest event is usually one of these — taking it literally showed a researcher in the
-//: middle of a web search as "waiting".
-//: An ALLOWLIST, not a denylist: a kind nobody has taught us defaults to silent rather than
-//: leaking onto a worker's plate. `tool_result` is deliberately absent — it is meaningful, but it
-//: is what came BACK, not what the worker is doing, and showing it put raw file bytes in a speech
-//: bubble where "reading style.ts" belonged.
+//: Kinds that say nothing about what a worker is DOING. Vendor emits housekeeping constantly, so
+//: the newest event is usually one of these — taking it literally showed a researcher mid-search
+//: as "waiting".
+//: An ALLOWLIST, not a denylist: an untaught kind defaults to silent rather than leaking onto a
+//: worker's plate. tool_result is deliberately absent — meaningful, but it's what came BACK, not
+//: what the worker is doing; showing it put raw file bytes in a speech bubble where "reading
+//: style.ts" belonged.
 const MEANINGFUL = new Set(["tool", "spawn", "thinking", "message", "text", "done", "error"]);
 
-/** Mirrors `RECENT_SECONDS` in `rail.ts` (the rule's home) — how long finished work stays
- *  "current". Duplicated for the same mechanical reason as `HELD_SECONDS`: the test loader
- *  cannot resolve a shared import, so the EQUALITY is enforced by the brain parity test. */
+/** Mirrors RECENT_SECONDS in rail.ts (the rule's home) — how long finished work stays "current".
+ *  Duplicated for the same mechanical reason as HELD_SECONDS: the test loader can't resolve a
+ *  shared import, so EQUALITY is enforced by the brain parity test. */
 const RECENT_SECONDS = 86400;
 
 /** The most recent step that actually says something, oldest-first input. */
@@ -113,7 +111,7 @@ export function latestMeaningful(steps: Step[]): Step | undefined {
 
 /** What a person would NAME as the subject of the work: a file, a query, a target.
  *
- *  A path wins. Otherwise a quoted phrase, but only one that reads as a name — a shell command's
+ *  A path wins. Otherwise a quoted phrase, but only one reading as a name — a shell command's
  *  arguments are full of quoted CODE, and taking it produced "running \${\" in a speech bubble
  *  where a filename belonged.
  */
@@ -186,17 +184,11 @@ export interface RunLike {
   definition_path?: string | null;
 }
 
-/**
- * The whole room, from the runs on disk plus each one's latest step.
- *
- * `latestStep` is passed in rather than read here so this stays pure: the view can be driven from
- * a fixture, and the test above does not need a registry on disk to place a researcher at the web.
- */
 /** When this agent was last SEEN doing something, if the events carry a time at all.
  *
- *  interact observes the vendor's stream, so it can stamp when it first saw a line even though
- *  the vendor writes no timestamp of its own. That observation time is exactly the right clock
- *  for a watched workplace: not when the agent acted (unknowable), but when we noticed.
+ *  interact observes the vendor's stream, stamping when it first saw a line even though the
+ *  vendor writes no timestamp of its own. That observation time is exactly the right clock for a
+ *  watched workplace: not when the agent acted (unknowable), but when we noticed.
  */
 export function lastObservedAt(steps: Step[]): number | null {
   for (let i = steps.length - 1; i >= 0; i--) {
@@ -207,22 +199,10 @@ export function lastObservedAt(steps: Step[]): number | null {
 }
 
 
-/** The registry's status as the FLOOR understands it.
- *
- *  The registry says running / done / failed / crashed / stopped / foreign; the floor's stamp
- *  table knows running / done / error / foreign. This was a bare `as` cast, which silenced
- *  TypeScript over a real mismatch — a crashed agent arrived as "crashed", matched nothing, and
- *  got NO stamp at all. The tree drew it red while the floor showed it as though nothing had
- *  happened, which is the worse of the two lies: a supervisor scanning the building for trouble
- *  saw none.
- *
- *  `stopped` reads as done rather than as an error: somebody halted it deliberately, and stamping
- *  that as a failure would be the same kind of wrong in the other direction.
- */
 /** The domain a run belongs to, or nothing.
  *
  *  Nothing rather than a guess: filing a character into the wrong room silently merges unrelated
- *  work — the same reason `project_for` refuses to name a project it cannot derive. A resolver
+ *  work — the same reason project_for refuses to name a project it cannot derive. A resolver
  *  that throws (no company file at all, which is the common case) leaves it unplaced.
  */
 function placeByDomain(
@@ -241,17 +221,17 @@ function placeByDomain(
 
 /** Which run is the orchestrator — the first one YOU asked for something.
  *
- *  A ROOT (nobody sent it) that others report to, earliest first. Roots are ranked by start time
- *  rather than by array order so the answer does not depend on how the filesystem happened to
- *  list the records. Your own editor sessions are excluded: interact does not drive them, so
- *  putting one at the head of the company would claim an authority this view does not have.
+ *  A ROOT (nobody sent it) that others report to, earliest first. Roots ranked by start time
+ *  rather than array order, so the answer doesn't depend on how the filesystem happened to list
+ *  records. Your own editor sessions are excluded: interact doesn't drive them, so putting one
+ *  at the head of the company would claim authority this view doesn't have.
  */
 function brainOf(runs: readonly RunLike[], nowSeconds?: number): string | null {
-  // Declared-but-never-asked agents are not candidates: with no runs at all there is no brain,
-  // and crowning a ready desk would invent an orchestrator nobody hired.
-  // The crown also EXPIRES (mirrored in rail.ts, pinned by the parity test): earliest-root-EVER
-  // left an 8-day-old smoke probe wearing "brain" over a live team. A root counts while it runs
-  // or is recent; with nothing current there is no brain.
+  // Declared-but-never-asked agents aren't candidates: with no runs at all there's no brain, and
+  // crowning a ready desk would invent an orchestrator nobody hired.
+  // Crown also EXPIRES (mirrored in rail.ts, pinned by the parity test): earliest-root-EVER left
+  // an 8-day-old smoke probe wearing "brain" over a live team. A root counts while running or
+  // recent; nothing current means no brain.
   const current = (r: RunLike) => r.status === "running"
     || nowSeconds === undefined || nowSeconds - (r.started_at ?? nowSeconds) < RECENT_SECONDS;
   const ours = runs.filter((r) =>
@@ -270,7 +250,7 @@ function brainOf(runs: readonly RunLike[], nowSeconds?: number): string | null {
 /** What a run can do, or nothing.
  *
  *  A resolver that throws — a missing or moved definition file — degrades to no faculties rather
- *  than taking the whole workplace down. Claiming powers we could not verify would be worse than
+ *  than taking the whole workplace down. Claiming powers we couldn't verify would be worse than
  *  claiming none.
  */
 function safeFaculties(run: RunLike, resolve: (run: RunLike) => string[]): string[] {
@@ -281,6 +261,17 @@ function safeFaculties(run: RunLike, resolve: (run: RunLike) => string[]): strin
   }
 }
 
+/** The registry's status as the FLOOR understands it.
+ *
+ *  Registry says running / done / failed / crashed / stopped / foreign; floor's stamp table
+ *  knows running / done / error / foreign. This was a bare "as" cast, which silenced TypeScript
+ *  over a real mismatch — a crashed agent arrived as "crashed", matched nothing, got NO stamp at
+ *  all. Tree drew it red while the floor showed it as though nothing had happened, the worse of
+ *  the two lies: a supervisor scanning the building for trouble saw none.
+ *
+ *  stopped reads as done rather than an error: somebody halted it deliberately, and stamping
+ *  that as a failure would be the same kind of wrong in the other direction.
+ */
 export function floorStatus(status: string | undefined): Worker["status"] {
   // Declared in the company, never asked: READY reaches the world as itself, so the posture
   // table can draw it standing at ease — collapsing it to "done" made every never-asked agent a
@@ -308,18 +299,18 @@ export function buildTeam(
   messages: { from_run: string; to_run: string; text?: string; at?: number | null }[] = [],
   /** What a run can DO, resolved by the caller from its definition file. Injected rather than
    *  imported so this module stays free of the filesystem — and loadable by the test runner,
-   *  which demands ".ts" specifiers that tsc refuses to emit. The parsing lives at the edge in
-   *  `capabilities.ts`; this only carries the answer. */
+   *  which demands ".ts" specifiers tsc refuses to emit. Parsing lives at the edge in
+   *  capabilities.ts; this only carries the answer. */
   facultiesFor: (run: RunLike) => string[] = () => [],
   /** The department an agent definition is filed under, resolved by the caller from the company
    *  file. Injected for the same reason as the faculties: this module reads no files. */
   departmentFor: (agent: string) => { id: string; room?: string | null } | null = () => null,
   /** WHO a run was held with — the role's stable id and what to call it.
    *
-   *  The world drew one body per RUN, so an agent given three errands stood in the room three
-   *  times and every definition-less session rendered as another identical "claude". An agent is a
-   *  PERSON; the errands are what it was given. Injected for the same reason as the others: this
-   *  module reads no files, and the coordinator resolution lives in `roster.ts`. */
+   *  World drew one body per RUN, so an agent given three errands stood in the room three times,
+   *  every definition-less session rendering as another identical "claude". An agent is a
+   *  PERSON; errands are what it was given. Injected for the same reason as the others: this
+   *  module reads no files, and coordinator resolution lives in roster.ts. */
   identify: (run: RunLike) => { id: string; label: string } =
     (run) => ({ id: run.agent ?? run.name, label: run.name || run.run_id.slice(0, 8) }),
 ): TeamState {
@@ -333,13 +324,13 @@ export function buildTeam(
     if (held) held.push(run); else byAgent.set(id, [run]);
   }
   const workers: Worker[] = [...byAgent.values()].map((held) => {
-    // Two different questions, so two different answers. WHICH errand the character opens is the
-    // orchestrating one where this agent holds it (otherwise the rail and the building would crown
-    // the same agent through different runs); WHAT the character shows is whichever errand most
-    // needs you, because an agent with one failure and two successes is not "done".
-    // Only CURRENT errands speak, mirroring the rail's rule exactly: a week-old crash must not
-    // stamp ERROR over a character whose live errand is going fine, and an agent whose every
-    // errand aged out RESTS — the same "ready" his rail row shows, one truth on both surfaces.
+    // Two different questions, two different answers. WHICH errand the character opens is the
+    // orchestrating one where this agent holds it (else rail and building would crown the same
+    // agent through different runs); WHAT the character shows is whichever errand most needs
+    // you — an agent with one failure and two successes isn't "done".
+    // Only CURRENT errands speak, mirroring the rail's rule: a week-old crash must not stamp
+    // ERROR over a character whose live errand is fine, and an agent whose every errand aged
+    // out RESTS — the same "ready" its rail row shows, one truth on both surfaces.
     const terminal = new Set(["done", "stopped", "failed", "crashed"]);
     const currentHeld = held.filter((r) =>
       !(terminal.has(r.status) && now - (r.started_at ?? now) >= RECENT_SECONDS));
@@ -352,10 +343,10 @@ export function buildTeam(
     const steps = recentSteps(run.run_id);
     const step = latestMeaningful(steps);
     // Idleness is time since the last thing this agent was OBSERVED doing — not time since it
-    // started, which is what this used to measure. For a running agent `finished_at` is null, so
-    // the old expression returned total elapsed, and the view stamps HELD at two minutes and cuts
-    // the ambient animation: every agent working longer than that was drawn asleep, and the
-    // harder it worked the deader the building looked.
+    // started, which this used to measure. For a running agent finished_at is null, so the old
+    // expression returned total elapsed; the view stamps HELD at two minutes and cuts the ambient
+    // animation, so every agent working longer than that was drawn asleep — the harder it
+    // worked, the deader the building looked.
     const lastSeen = lastObservedAt(steps);
     const since = run.status === "running"
       // No observation time (a record written before stamping existed) means unknown, and a false
@@ -374,7 +365,7 @@ export function buildTeam(
       ...placeByDomain(run.agent, departmentFor),
       // The whole window, not one step: a finished worker keeps the room it last worked in.
       zone: zoneOfSteps(steps, run.status, run.agent ?? null),
-      // A session interact did not start gets named, never narrated: we do not read its stream,
+      // A session interact didn't start gets named, never narrated: we don't read its stream,
       // and "waiting" would claim it is doing nothing when it is somebody working.
       activity: run.status === "foreign" ? "your own session" : activityOf(step),
       parent_run_id: run.parent_run_id ?? null,

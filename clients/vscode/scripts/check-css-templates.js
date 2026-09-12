@@ -39,7 +39,12 @@ function rawTemplateFiles(dir, found = []) {
     if (entry.isDirectory()) {
       if (entry.name !== "node_modules") rawTemplateFiles(full, found);
     } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-      if (fs.readFileSync(full, "utf8").includes("String.raw`")) {
+      // ANY multi-line template literal, not just `String.raw`. The narrow predicate is why
+      // `webview/workplace/index.ts` — a plain-template HTML emitter — went unguarded and broke
+      // the build twice in one afternoon on backticks inside its comments. The defect is a
+      // property of "comment inside an open template", which no particular tag confers.
+      const text = fs.readFileSync(full, "utf8");
+      if (text.includes("String.raw`") || /`[^`]*\n[^`]*`/.test(text)) {
         found.push(path.relative(ROOT, full));
       }
     }

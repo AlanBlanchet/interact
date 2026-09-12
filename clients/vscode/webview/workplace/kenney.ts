@@ -1,9 +1,9 @@
 /** The bridge from the Kenney atlas to the document: defs, tile placement, and the paper doll.
  *
- *  The atlas is ONE `<image>` in the document's defs; every 16x16 cell of it is exposed as a
- *  nested `<svg id="kc-N" viewBox>` crop, and every TILE is a `<g id="wt-id">` of cell uses. A
- *  call site then costs one `<use>`, exactly like the pixel sheet before it — the document grows
- *  with references, never with pixels.
+ *  The atlas is ONE <image> in the document's defs; every 16x16 cell of it is exposed as a
+ *  nested <svg id="kc-N" viewBox> crop, and every TILE is a <g id="wt-id"> of cell uses. A call
+ *  site then costs one <use>, exactly like the pixel sheet before it — the document grows with
+ *  references, never with pixels.
  *
  *  The PEOPLE are compositions, not fixed sprites: the Roguelike Characters pack is a paper
  *  doll — bare bodies, shirts, hair, beards, hats as separate cells — so a worker is body +
@@ -59,13 +59,13 @@ export function cellUse(n: CellName, x = 0, y = 0): string {
   return `<use href="#kc-${n}" x="${x}" y="${y}"/>`;
 }
 
-/* ── the paper doll ──────────────────────────────────────────────────────────────────────────*/
+/* ── the paper doll ── */
 
 const BODIES: CellName[] = ["body0", "body1", "body2"];
-/** The pod's garment per accent hue (1..7 — the `--wp-h*` the rail and the ring use). The
- *  Kenney wardrobe has no exact chart colours, so each hue takes the nearest DISTINCT garment;
- *  what must hold is that two pods never dress alike, and the ring, the minimap dot and the
- *  nameplate underline still carry the exact accent. */
+/** The pod's garment per accent hue (1..7 — the --wp-h* the rail and the ring use). Kenney
+ *  wardrobe has no exact chart colours, so each hue takes the nearest DISTINCT garment; what
+ *  must hold: two pods never dress alike, and the ring, minimap dot and nameplate underline
+ *  still carry the exact accent. */
 const SHIRTS: CellName[] = ["shirt1", "shirt2", "shirt3", "shirt4", "shirt5", "shirt6", "shirt7"];
 const HAIR_BLOCKS = 5;
 const HAIR_STYLES = 5;

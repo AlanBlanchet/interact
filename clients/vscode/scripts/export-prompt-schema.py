@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 from interact_core import (
     PromptCatalogPage,
     PromptChannelEntry,
+    PromptCreateRequest,
     PromptExecutionRef,
     PromptKey,
     PromptPublicationRequest,
@@ -19,7 +20,7 @@ from interact_core import (
 def main() -> None:
     contract = Union[
         PromptKey, PromptRevision, PromptChannelEntry, PromptCatalogPage, PromptSelection,
-        PromptExecutionRef, PromptPublicationRequest,
+        PromptCreateRequest, PromptExecutionRef, PromptPublicationRequest,
     ]
     print(json.dumps(TypeAdapter(contract).json_schema(), indent=2, sort_keys=True))
 

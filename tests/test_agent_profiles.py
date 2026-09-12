@@ -78,6 +78,8 @@ async def test_the_spawn_tool_refuses_a_profile_nobody_defined(monkeypatch):
     and quietly used the wrong model. Refuse, and say which profiles exist."""
     import interact.server as srv
 
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+
     monkeypatch.delenv("INTERACT_PROFILE_CHEAP", raising=False)
     out = await srv.agent_spawn("do a thing", profile="does-not-exist")
     assert out.startswith("ERROR:"), out
@@ -90,6 +92,8 @@ async def test_a_defined_profile_reaches_the_spawn(monkeypatch):
     merely exist in a module nothing calls."""
     import interact.server as srv
     from interact.agents import run as run_mod
+
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
 
     monkeypatch.setenv("INTERACT_PROFILE_CHEAP", "ollama/deepseek-v4-flash")
     seen: dict = {}

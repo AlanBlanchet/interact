@@ -13,7 +13,7 @@ from typing import Self
 
 from pydantic import BaseModel, ValidationError
 
-from interact.vision.usage import UsageEntry
+from interact.vision.usage_records import UsageEntry
 
 
 def default_log_path() -> Path:

@@ -1,8 +1,8 @@
 /** Live per-benchmark leaderboard tables, preferred over the bundled snapshot.
  *
- *  `benchmarks.json` is baked into the extension at BUILD time, so its scores can never change
+ *  benchmarks.json is baked into the extension at BUILD time, so its scores can never change
  *  once packaged — which is how a months-old model stayed on screen as the best at MMMU. Python
- *  fetches the upstream leaderboards at runtime into `~/.interact/out/benchmark_tables.json`;
+ *  fetches the upstream leaderboards at runtime into ~/.interact/out/benchmark_tables.json;
  *  this reads that and lets it win, per benchmark, falling back to the snapshot for any the
  *  upstreams could not answer.
  */
@@ -24,7 +24,7 @@ export interface LiveTable {
 }
 
 export function tablesPath(): string {
-  // The same fixed location Python writes, and the one `leaderboard.ts` already reads from —
+  // The same fixed location Python writes, and the one leaderboard.ts already reads from —
   // deliberately not following INTERACT_DEBUG_DIR, since two front ends must find one file.
   return path.join(os.homedir(), ".interact", "out", "benchmark_tables.json");
 }
@@ -39,7 +39,7 @@ export function readLiveTables(): Record<string, LiveTable> {
   }
 }
 
-/** The bundled file with live tables merged in. Returns a COPY: the bundle is `require`d once and
+/** The bundled file with live tables merged in. Returns a COPY: the bundle is required once and
  *  shared, so mutating it would leak one render's data into every later one. */
 export function mergeLiveTables(bundled: any, live: Record<string, LiveTable>): any {
   // An empty live table is not an answer — an upstream can return 200 with zero rows, and

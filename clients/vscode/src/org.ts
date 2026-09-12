@@ -1,16 +1,15 @@
-/** The company: who exists, which department they sit in, and where they can actually run.
+/** The company: who exists, which department, where they can actually run.
  *
- *  Written by the prompt repo (`paradigms.yaml` -> `org.json`, symlinked to `~/.claude/org.json`)
- *  and read here. Two things it carries that a directory listing of agent files cannot:
+ *  Written by the prompt repo (paradigms.yaml -> org.json, symlinked to ~/.claude/org.json), read
+ *  here. Two things it carries that a directory listing of agent files cannot:
  *
- *  - a HIERARCHY — departments, reporting lines, who pairs with whom — so the panel can show an
- *    org rather than a bag of names;
- *  - PROVIDER availability, and whether each provider is actually wired (`env`) or only designed
- *    for. "Shared between providers... not all in the env" is a real distinction: an agent can be
- *    part of the company on paper and have nowhere to run today.
+ *  - a HIERARCHY — departments, reporting lines, who pairs with whom — so the panel shows an org,
+ *    not a bag of names;
+ *  - PROVIDER availability: whether each provider is actually wired (env) or only designed for.
+ *    An agent can be part of the company on paper and have nowhere to run today.
  *
- *  Absent for most installs — interact is used without any prompt repo — so every path here
- *  degrades to "no company known" rather than failing.
+ *  Absent for most installs (interact runs with no prompt repo) — every path here degrades to
+ *  "no company known" rather than failing.
  */
 import * as fs from "fs";
 import * as os from "os";
@@ -18,9 +17,9 @@ import * as path from "path";
 
 export interface OrgProvider {
   label: string;
-  /** The CLI token a definition-less run of this provider gets RECORDED under (`claude`, `codex`).
-   *  Present only where it is actually confirmed — a guessed binary would silently mis-resolve a
-   *  run onto the coordinator. */
+  /** CLI token a definition-less run of this provider gets RECORDED under (claude, codex).
+   *  Present only when confirmed — a guessed binary would silently mis-resolve a run onto the
+   *  coordinator. */
   binary?: string | null;
   /** True when a consumer sync target exists NOW. False = shared design, nowhere to run yet. */
   env: boolean;
@@ -95,9 +94,9 @@ export interface OrgNode extends OrgDepartment {
 
 /** Departments in declared order, each with its people; anyone unfiled gets their own desk.
  *
- *  Unfiled people are KEPT. A roster that silently omits someone because a yaml row is missing is
- *  worse than one with an obvious "unassigned" bucket — the omission is invisible, the bucket is
- *  a prompt to go and file them.
+ *  Unfiled people are KEPT — silently omitting someone because a yaml row is missing is worse
+ *  than an obvious "unassigned" bucket: the omission is invisible, the bucket is a prompt to go
+ *  file them.
  */
 export function orgTree(org: Org): OrgNode[] {
   const resolve = (a: OrgAgent): OrgSeat => ({
@@ -133,20 +132,70 @@ export interface SpawnChoice {
   detail?: string;
 }
 
+/** One provider reported by the installed interact CLI.
+ *
+ * This is deliberately separate from the prompt repo's `OrgProvider`: org.json says where a
+ * role is designed to run, while this answer says which vendor CLI is installed and enabled now.
+ */
+export interface AgentProviderStatus {
+  id: string;
+  label: string;
+  active: boolean;
+  available: boolean;
+}
+
+const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
+
+/** Parse the machine-readable `interact agents providers --json-out` response.
+ *
+ * Human provider output is intentionally not accepted here. It is a presentation surface and
+ * its wording is allowed to change; using it as a protocol made a provider disappear silently.
+ */
+export function parseAgentProviders(stdout: string): AgentProviderStatus[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(stdout); } catch { return []; }
+  const providerValue = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as { providers?: unknown }).providers
+    : undefined;
+  const rows: unknown[] = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(providerValue)
+      ? providerValue
+      : providerValue && typeof providerValue === "object"
+        ? Object.entries(providerValue as Record<string, unknown>).map(([id, value]) =>
+          value && typeof value === "object" && !Array.isArray(value)
+            ? { ...(value as Record<string, unknown>), id } : value)
+        : [];
+  const out: AgentProviderStatus[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const value = row as { id?: unknown; name?: unknown; label?: unknown; active?: unknown; available?: unknown };
+    const id = typeof value.id === "string" ? value.id : value.name;
+    if (typeof id !== "string" || !PROVIDER_ID.test(id)
+        || typeof value.active !== "boolean" || typeof value.available !== "boolean") continue;
+    const label = typeof value.label === "string" && value.label.trim() ? value.label.trim() : id;
+    out.push({ id, label, active: value.active, available: value.available });
+  }
+  return out;
+}
+
 /** Who you can put to work, presented as the company rather than a directory listing.
  *
- *  The picker used to show `~/.claude/agents/<name>.md` beside each name, which is a file path,
- *  not a colleague. With the org in hand it can say what the person DOES, which department they
- *  sit in, and where they can actually run.
+ *  The picker used to show ~/.claude/agents/<name>.md beside each name — a file path, not a
+ *  colleague. With the org in hand it says what the person DOES, which department, and where
+ *  they can actually run.
  *
- *  The definitions list stays the ground truth for what is runnable: an agent the org does not
- *  mention is still offered, marked as unlisted, because a runnable agent made invisible by a
- *  missing yaml row is a worse failure than an unlabelled row.
+ *  Definitions stay ground truth for what's runnable: an agent the org doesn't mention is still
+ *  offered, marked unlisted — invisible-by-missing-row is worse than unlabelled.
  */
-export function spawnChoices(definitions: readonly string[], org: Org | null): SpawnChoice[] {
+export function spawnChoices(
+  definitions: readonly string[], org: Org | null,
+  options: { includePlain?: boolean; provider?: string } = {},
+): SpawnChoice[] {
   const plain: SpawnChoice = { label: "claude", description: "a plain agent, no definition" };
+  const includePlain = options.includePlain !== false;
   if (!org) {
-    return [plain, ...definitions.map((d) => ({ label: d }))];
+    return [...(includePlain ? [plain] : []), ...definitions.map((d) => ({ label: d }))];
   }
   const seats = new Map(orgTree(org).flatMap((d) => d.agents.map((a) => [a.name, { a, d }] as const)));
   const ordered = orgTree(org)
@@ -155,10 +204,11 @@ export function spawnChoices(definitions: readonly string[], org: Org | null): S
   const unlisted = definitions.filter((d) => !seats.has(d));
 
   return [
-    plain,
+    ...(includePlain ? [plain] : []),
     ...ordered.map((name) => {
       const { a, d } = seats.get(name)!;
-      const where = a.providers.filter((p) => p.env).map((p) => p.id);
+      const where = options.provider ? [options.provider]
+        : a.providers.filter((p) => p.env).map((p) => p.id);
       return {
         label: name,
         description: a.title ?? undefined,
@@ -170,21 +220,15 @@ export function spawnChoices(definitions: readonly string[], org: Org | null): S
   ];
 }
 
-/** The model an agent declares it should run on, or null for "whatever the session uses".
- *
- *  Half the roster declares `inherit`, which is a real value in the org file and meaningful there
- *  — it says "do not override" — but would be nonsense passed to `--model`. Translating it to null
- *  here keeps that decision in one place rather than in every caller that reads the field.
- */
 /** The company facts the roster needs to name a definition-less run.
  *
- *  The prompt repo's finding: a bare session is not file-less — the main thread's system prompt IS
- *  `instructions.md`, so the coordinator is its definition, and the org marks that case
- *  `matches: "definition-less"`. This turns the org into the two things the panel needs: who
- *  coordinates, and which recorded names are merely a vendor's binary.
+ *  The prompt repo's finding: a bare session isn't file-less — the main thread's system prompt IS
+ *  instructions.md, so the coordinator has a definition, and the org marks that case
+ *  "definition-less" to match. Gives the panel the two things it needs: who coordinates, and
+ *  which recorded names are merely a vendor's binary.
  *
- *  Null when there is no company file — interact must work with no prompt repo at all, and then
- *  the provider genuinely is all anyone knows.
+ *  Null with no company file — interact works with no prompt repo, and then the provider is all
+ *  anyone knows.
  */
 export function companyOf(org: Org | null): { coordinator: { id: string; title: string }; binaries: string[] } | null {
   if (!org) return null;
@@ -199,12 +243,12 @@ export function companyOf(org: Org | null): { coordinator: { id: string; title: 
 
 /** Where an agent's system prompt actually lives on disk.
  *
- *  The company file records `def` RELATIVE to the prompt repo ("agents/researcher.md"), and
- *  `~/.claude/org.json` is a symlink INTO that repo — so the relative string only means anything
- *  once resolved against the file's REAL location. Opening it unresolved silently opens nothing,
- *  which is the dead-control failure this project keeps guarding against.
+ *  Company file records def RELATIVE to the prompt repo ("agents/researcher.md"), and
+ *  ~/.claude/org.json is a symlink INTO that repo — the relative string only means anything once
+ *  resolved against the file's REAL location. Opening it unresolved silently opens nothing, the
+ *  dead-control failure this project keeps guarding against.
  *
- *  Null when the company file names no definition: better no chip than a chip that does nothing.
+ *  Null when the company file names no definition: better no chip than one that does nothing.
  */
 export function definitionFile(agent: string, org: Org | null, orgPath_: string = orgPath()): string | null {
   const rel = org?.agents.find((a) => a.name === agent)?.def;
@@ -217,10 +261,16 @@ export function definitionFile(agent: string, org: Org | null, orgPath_: string 
   }
 }
 
+/** The model an agent declares it should run on, or null for "whatever the session uses".
+ *
+ *  Half the roster declares inherit — a real value in the org file meaning "do not override" —
+ *  but nonsense passed to --model. Translating it to null here keeps that decision in one place
+ *  rather than in every caller.
+ */
 export function modelFor(agent: string, org: Org | null, chosen?: string | null): string | null {
-  // A choice made in the editor beats the company file, which is GENERATED and would otherwise be
-  // the only answer — see `agentModels.ts`. Passed in rather than imported: this module is loaded
-  // directly by the test runner, which cannot resolve an extensionless sibling.
+  // A choice made in the editor beats the company file (GENERATED, otherwise the only answer —
+  // see agentModels.ts). Passed in rather than imported: this module is loaded directly by the
+  // test runner, which cannot resolve an extensionless sibling.
   if (chosen && chosen !== "inherit" && chosen !== "default") return chosen;
   const model = org?.agents.find((a) => a.name === agent)?.model;
   if (!model || model === "inherit" || model === "default") return null;
@@ -229,24 +279,29 @@ export function modelFor(agent: string, org: Org | null, chosen?: string | null)
 
 /** The argv for starting an agent, so the flags are checkable without spawning anything.
  *
- *  Built here rather than inline in the command because "which flags did we actually pass" is the
- *  question that matters and was previously only answerable by running a real agent.
+ *  Built here rather than inline in the command: "which flags did we actually pass" used to be
+ *  answerable only by running a real agent.
  */
 export function spawnArgs(
   opts: {
     task: string;
-    agent: string;
+    provider: string;
+    /** A named role for Start an Agent; null is the intentional generic-session route. */
+    agent: string | null;
     cwd?: string | null;
     org: Org | null;
     /** How much autonomy to grant. Null/absent leaves the CLI's own default alone. */
     permissionMode?: string | null;
-    /** The model YOU chose for this agent, overriding the company file's declaration. */
+    /** An explicit model/profile/criterion supplied by a generic session caller. Named roles leave
+     *  this absent so the common launcher reads and resolves their policy exactly once. */
     model?: string | null;
   },
 ): string[] {
-  const args = ["agents", "spawn", opts.task];
-  if (opts.agent !== "claude") args.push("--agent", opts.agent);
-  const model = modelFor(opts.agent, opts.org, opts.model);
+  const args = ["agents", "spawn", opts.task, "--provider", opts.provider];
+  if (opts.agent) args.push("--agent", opts.agent);
+  const model = opts.model === undefined
+    ? null
+    : opts.agent ? modelFor(opts.agent, opts.org, opts.model) : opts.model;
   if (model) args.push("--model", model);
   if (opts.cwd) args.push("--cwd", opts.cwd);
   if (opts.permissionMode) args.push("--permission-mode", opts.permissionMode);

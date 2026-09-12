@@ -16,7 +16,7 @@ from interact.vision.core import (
     analyze_screenshot,
 )
 from interact.vision.measure import blank_frame_reason
-from interact.vision.types import MediaItem, VLMResult
+from interact.vision.types import MediaItem, VLMResult, evenly_sampled
 
 _log = logging.getLogger("interact")
 def _describe(err: Exception) -> str:
@@ -55,13 +55,13 @@ async def _vlm(
     extra_images: list[MediaItem | bytes] | None = None,
     _api_model_override: str | None = None,
 ) -> VLMResult:
-    # An empty frame is decided on the pixels, not by a model. Asked to describe a black capture
-    # of a crashed window, the VLM answered the question anyway — returning the agent's own action
-    # text in a full-frame bounding box, as if it had read it on screen (#112).
+    # Empty frame decided on pixels, not by a model. Asked to describe a black capture of a
+    # crashed window, the VLM once answered anyway — returning the agent's own action text in a
+    # full-frame bounding box, as if it had read it on screen (#112).
     #
-    # Here rather than in _media_response, because that is one caller of three: review_ui and
-    # verify_ui reach the model through this function directly, and describing a frame is their
-    # whole job, so they were the paths most exposed to the bug.
+    # Here, not in _media_response: that's one caller of three — review_ui/verify_ui reach the
+    # model through this function directly, describing a frame is their whole job, so they were
+    # most exposed to the bug.
     if media_type == "image" and (why := blank_frame_reason(data)):
         return VLMResult(
             text=(
@@ -74,9 +74,9 @@ async def _vlm(
         )
     item_type = media_type if media_type in ("video", "audio") else "image"
     routing = media_type or "image"
-    # extra_images ride alongside the primary frame in ONE call (e.g. a reference + the build, for a
-    # divergence review) — judging two images together is what stops the isolation-against-a-generic-
-    # ideal false PASSes seen in real usage.
+    # extra_images ride alongside the primary frame in ONE call (e.g. reference + build, for a
+    # divergence review) — judging two images together stops isolation-against-a-generic-ideal
+    # false PASSes seen in real usage.
     media = [MediaItem.from_bytes(data, item_type, mime)]
     media += [
         item if isinstance(item, MediaItem) else MediaItem.from_bytes(item)
@@ -152,8 +152,8 @@ async def _run_compare(
         return f"compare error: {e}"
 
 
-#: Every query answer is a REPORT from the agent's eyes, never an act. Without this the caller's
-#: query ("close the dialog") read as an instruction and came back as "Closed." (#119).
+#: Every query answer is a REPORT from the agent's eyes, never an act — without this, a query
+#: ("close the dialog") read as an instruction and came back as "Closed." (#119).
 _OBSERVER = (
     "You are the eyes of an automation agent and can only LOOK. Answer with what is visible — "
     "which element (by its number), where it is, what state it is in — never as an action you "
@@ -189,8 +189,8 @@ async def _media_response(
             )
             result = _fmt_timing(vlm_result)
     finally:
-        # Save AFTER the (slow) VLM call, in a finally — so the file on disk is exactly the frame
-        # that was analyzed/returned, and is still written even if the VLM errors (#17).
+        # Save AFTER the (slow) VLM call, in a finally — file on disk is exactly the frame
+        # analyzed/returned, still written even if the VLM errors (#17).
         dest = core._save_to_path(path, data) if path else None
     response = result if dest is None else f"{result or context}\n{core._saved_note(dest, data)}"
     return _MediaResponse(response, vlm_result)
@@ -217,8 +217,6 @@ async def _analyze_interaction_frames(frames: list[bytes], query: str | None) ->
     each action produced — not just the end state. One frame per step is captured during the run;
     here it's sampled down to config.video_max_frames (evenly) to bound cost, then sent to the
     video model with the query."""
-    from interact.vision import evenly_sampled
-
     sampled = evenly_sampled(frames, config.video_max_frames)
     media = [MediaItem.from_bytes(f, "image", "image/png") for f in sampled]
     context = (

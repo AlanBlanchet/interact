@@ -2,25 +2,25 @@
  *
  *  Every piece of art in this view — a person, a server rack, a coffee machine — is authored as
  *  rows of characters and coloured by a palette. Nothing here knows what it is drawing, which is
- *  the point: the art is DATA (`art.ts`), this file is the only renderer, and a new prop costs a
+ *  the point: the art is DATA (art.ts), this file is the only renderer, and a new prop costs a
  *  string literal rather than a hand-tuned SVG path.
  *
  *  Three things it does that authoring by hand would not:
  *   - the OUTLINE is derived, never drawn. Any empty cell touching a solid one becomes ink, so a
  *     sprite always reads against whatever wall it stands on and the art stays about the shape.
- *   - runs of one colour merge, and every run of the SAME colour is then emitted as ONE `<path>`,
- *     so a person costs 9 nodes instead of 69 and a wall of books 8 instead of 137. The browser
- *     gets one shape per colour to lay out, style and paint, which is most of why an empty
- *     workplace is 62 shapes rather than 827.
- *   - a body already drawn is not drawn twice. The props do not change when a worker moves, and
+ *   - runs of one colour merge, and every run of the SAME colour is then emitted as ONE <path>,
+ *     so a person costs 9 nodes instead of 69 and a wall of books 8 instead of 137 — one shape
+ *     per colour for the browser to lay out, style and paint, most of why an empty workplace is
+ *     62 shapes rather than 827.
+ *   - a body already drawn is not drawn twice. Props don't change when a worker moves, and
  *     twelve running workers are twelve copies of one drawing, so the engine keeps what it has
  *     built and every render after the first is a lookup.
  */
 
-/** Rows of equal length. `.` is empty; every other char is a palette key. */
+/** Rows of equal length. "." is empty; every other char is a palette key. */
 export type Grid = readonly string[];
 
-/** Palette key to any CSS colour — a literal, or a `var(--vscode-…)` so it follows the theme. */
+/** Palette key to any CSS colour — a literal, or a var(--vscode-…) so it follows the theme. */
 export type Palette = Readonly<Record<string, string>>;
 
 export const EMPTY = ".";
@@ -32,7 +32,7 @@ export interface DrawOptions {
   scale?: number;
   /** Derive the ink rim. Off for flat props that are already framed. */
   outline?: boolean;
-  /** Class on the `<svg>`. */
+  /** Class on the <svg>. */
   className?: string;
   /** Extra attributes, already safe (we author them). */
   attrs?: string;
@@ -83,14 +83,14 @@ function outline(c: Cells): void {
   for (const [x, y] of rim) c.set(x, y, INK);
 }
 
-/** Horizontal run-length merge, then one `<path>` per colour.
+/** Horizontal run-length merge, then one <path> per colour.
  *
- *  The runs are still exactly the runs the art was authored as — a wrong pixel is found by reading
- *  along the row it is on, which is why vertical merging is still refused. What changed is what
- *  carries them: a run is a `M x y h w v1 h-w z` subpath rather than an element of its own, so all
- *  the metal in a server rack is ONE node instead of forty, and the colour is named once instead
- *  of forty times. Runs never overlap, so painting them grouped by colour puts the same cells on
- *  screen as painting them in scan order. */
+ *  Runs are still exactly the runs the art was authored as — a wrong pixel is found by reading
+ *  along the row it's on, why vertical merging is still refused. What changed is what carries
+ *  them: a run is an "M x y h w v1 h-w z" subpath rather than an element of its own, so all the
+ *  metal in a server rack is ONE node instead of forty, colour named once instead of forty times.
+ *  Runs never overlap, so painting them grouped by colour puts the same cells on screen as
+ *  painting them in scan order. */
 function paint(c: Cells, pal: Palette): string {
   const byFill = new Map<string, string[]>();
   for (let y = 0; y < c.h; y++) {
@@ -124,7 +124,7 @@ interface Body {
 }
 
 /** Identity, so a grid and a palette can key a cache without being stringified. Both are module
- *  constants in `art.ts`, so the numbering is bounded by how many pieces of art exist. */
+ *  constants in art.ts, so the numbering is bounded by how many pieces of art exist. */
 const ids = new WeakMap<object, number>();
 let nextId = 0;
 function idOf(o: object): number {
@@ -135,9 +135,9 @@ function idOf(o: object): number {
 
 /** What a piece of art actually costs: pad, derive the rim, merge the runs, name the colours.
  *  Pure in its three arguments, and the whole view draws from about two dozen combinations of
- *  them, so it is computed once per combination and never again. Deliberately keyed on the art
- *  alone: the scale, the class and the attributes belong to the `<svg>` wrapper, which is a
- *  hundred characters of concatenation and is built fresh every time. */
+ *  them, so it's computed once per combination and never again. Deliberately keyed on the art
+ *  alone: scale, class and attributes belong to the <svg> wrapper, a hundred characters of
+ *  concatenation built fresh every time. */
 const bodies = new Map<string, Body>();
 function bodyOf(grid: Grid, pal: Palette, rim: boolean): Body {
   const key = `${idOf(grid)}:${idOf(pal)}:${rim ? 1 : 0}`;
@@ -158,26 +158,26 @@ function open(w: number, h: number, size: string, opts: DrawOptions): string {
   );
 }
 
-/* ── one drawing, referenced many times ──────────────────────────────────────────────────────
+/* ── one drawing, referenced many times ──────────────────────────────
  *
- *  The engine already refuses to BUILD a body twice, but it still WROTE it out at every call
- *  site, and a workplace is overwhelmingly the same few drawings repeated: one worker sprite per
+ *  The engine already refuses to BUILD a body twice, but still WROTE it out at every call site —
+ *  and a workplace is overwhelmingly the same few drawings repeated: one worker sprite per
  *  person, one prop per room, the same marks and stamps everywhere. At fifteen people that was
- *  merely wasteful; at a hundred and fifty the document reached 621 kB, and with the live loop
- *  that is now 621 kB pushed down the message channel on every refresh rather than a rebuild.
+ *  wasteful; at a hundred and fifty the document reached 621 kB, and with the live loop that's
+ *  now 621 kB pushed down the message channel on every refresh, not just a rebuild.
  *
- *  So a render may open a SHEET: every distinct body is written once into a `<defs>` block and
- *  each call site becomes a `<use>`. Two details make it safe rather than clever:
+ *  So a render may open a SHEET: every distinct body is written once into a <defs> block, each
+ *  call site becomes a <use>. Two details make it safe rather than clever:
  *
- *   - the ids live in a `<g>`, never a `<symbol>`. A `<symbol>` establishes its own viewport and
- *     would re-scale content whose frames differ in size; a `<g>` places the identical paths at
- *     the identical coordinates, so the pixels are the ones already reviewed.
- *   - `drawFrames` puts its `wp-fN` class on the `<use>` ELEMENT, not inside the referenced body.
- *     Content inside a `use` is a shadow tree the document's stylesheet cannot select, so a class
- *     buried in there would have silently killed every frame animation in the building.
+ *   - ids live in a <g>, never a <symbol>. A <symbol> establishes its own viewport and would
+ *     re-scale content whose frames differ in size; a <g> places the identical paths at the
+ *     identical coordinates, so the pixels are the ones already reviewed.
+ *   - drawFrames puts its wp-fN class on the <use> ELEMENT, not inside the referenced body.
+ *     Content inside a use is a shadow tree the stylesheet cannot select, so a class buried in
+ *     there would silently kill every frame animation in the building.
  *
- *  With no sheet open, both functions inline exactly as before — so a caller that renders one
- *  sprite on its own (the side bar borrows this engine) needs to know nothing about any of it.
+ *  With no sheet open, both functions inline exactly as before — a caller rendering one sprite
+ *  on its own (the side bar borrows this engine) needs to know nothing about any of it.
  */
 interface Sheet {
   ids: Map<string, string>;
@@ -185,14 +185,14 @@ interface Sheet {
 }
 let sheet: Sheet | null = null;
 
-/** Begin collecting bodies. Every `draw` until `closeSheet` emits a reference instead of a copy. */
+/** Begin collecting bodies. Every draw until closeSheet emits a reference instead of a copy. */
 export function openSheet(): void {
   sheet = { ids: new Map(), parts: [] };
 }
 
-/** The `<defs>` block for everything drawn since `openSheet`, and the end of collecting. Must be
- *  placed in the document BEFORE or after the references — id resolution does not care — but it
- *  must be present, so callers put it at the top of the scene where it cannot be dropped. */
+/** The <defs> block for everything drawn since openSheet, and the end of collecting. Placement
+ *  in the document doesn't matter — before or after the references, id resolution doesn't care —
+ *  but callers put it at the top of the scene where it can't be dropped. */
 export function closeSheet(): string {
   const open_ = sheet;
   sheet = null;
@@ -216,7 +216,7 @@ function useOrInline(grid: Grid, pal: Palette, rim: boolean, body: Body): string
   return `<use href="#${id}"/>`;
 }
 
-/** One grid as a standalone `<svg>`, sized to an exact integer multiple so edges stay hard. */
+/** One grid as a standalone <svg>, sized to an exact integer multiple so edges stay hard. */
 export function draw(grid: Grid, pal: Palette, opts: DrawOptions = {}): string {
   const { scale = 2, outline: rim = true, fluid = false } = opts;
   const body = bodyOf(grid, pal, rim);
@@ -228,16 +228,15 @@ export function draw(grid: Grid, pal: Palette, opts: DrawOptions = {}): string {
 
 /** One grid PLACED at a coordinate inside an enclosing SVG, as one node instead of two.
  *
- *  `draw` has to wrap its body in an `<svg>` because a caller may be putting it anywhere in an
- *  HTML document, at any scale, and needs a box. Inside the map that box is redundant: the map's
- *  own user units ARE tile cells, a tile is authored 8x8 and drawn at scale 1, so the wrapper is
- *  exactly `<svg x y width="8" height="8" viewBox="0 0 8 8">` — which is what a bare `<use x y>`
- *  already means. The wrapper was therefore one element per prop and one per prop SHADOW, for no
- *  geometry at all.
+ *  draw has to wrap its body in an <svg> because a caller may put it anywhere in an HTML
+ *  document, at any scale, needing a box. Inside the map that box is redundant: the map's own
+ *  user units ARE tile cells, a tile authored 8x8 and drawn at scale 1, so the wrapper is
+ *  exactly <svg x y width="8" height="8" viewBox="0 0 8 8"> — what a bare <use x y> already
+ *  means. The wrapper was one element per prop and one per prop SHADOW, for no geometry at all.
  *
  *  Measured on the landscaped site: four hundred and thirty-six plants plus their silhouettes is
  *  about nine hundred wrapper nodes the browser lays out, styles and paints for nothing. Falls
- *  back to `draw` with no sheet open, so a caller outside a scene render is unaffected.
+ *  back to draw with no sheet open, so a caller outside a scene render is unaffected.
  */
 export function place(grid: Grid, pal: Palette, x: number, y: number, opts: DrawOptions = {}): string {
   const { outline: rim = false, className = "", attrs = "" } = opts;
@@ -249,9 +248,9 @@ export function place(grid: Grid, pal: Palette, x: number, y: number, opts: Draw
   );
 }
 
-/** Two poses in ONE `<svg>`, stacked as groups the stylesheet flips between. A frame animation
- *  needs both frames present and identically placed; drawing them as separate elements is how the
- *  sprite ends up jittering by a pixel when one grid is a row taller than the other. */
+/** Two poses in ONE <svg>, stacked as groups the stylesheet flips between. A frame animation
+ *  needs both frames present and identically placed; drawing them as separate elements is how
+ *  the sprite ends up jittering by a pixel when one grid is a row taller than the other. */
 export function drawFrames(
   frames: readonly Grid[],
   pal: Palette,
@@ -261,8 +260,8 @@ export function drawFrames(
   const built = frames.map((g) => bodyOf(g, pal, rim));
   const w = Math.max(...built.map((b) => b.w));
   const h = Math.max(...built.map((b) => b.h));
-  // The class goes on the element in the LIGHT dom. Put it inside the referenced body instead and
-  // every `.wp-f0` rule in the stylesheet stops matching, which is the whole sprite animation.
+  // Class stays on the <use> ELEMENT, never inside the referenced body (shadow tree, unselectable
+  // by the stylesheet — see the sheet note above for why).
   const groups = built
     .map((b, i) => {
       const ref = useOrInline(frames[i], pal, rim, b);

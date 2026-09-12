@@ -1,10 +1,10 @@
 /** The agent-activity log as a READ-ONLY document.
  *
- *  This used to open through `workspace.openTextDocument({content})`, which produces an UNTITLED
+ *  This used to open through workspace.openTextDocument({content}), which produces an UNTITLED
  *  document — and VS Code treats those as dirty. So glancing at what an agent did left an unsaved
  *  file behind, and closing it asked the user to save a log they never wrote.
  *
- *  A document served by a `TextDocumentContentProvider` under our own scheme is read-only by
+ *  A document served by a TextDocumentContentProvider under our own scheme is read-only by
  *  construction: there is nothing to save, and nothing to prompt about.
  */
 

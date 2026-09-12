@@ -118,7 +118,7 @@ class CoordFormat(BaseModel):
     def _box_of(self, entry: dict) -> list | None:
         """The entry's box: under the key we asked for, a known alias, or — last — a key the model
         MISSPELLED (`box_2dd`, #122). A four-number list under a name one edit away from a box key
-        is a box, and dropping it silently turned one typo into "0 elements"; it is logged, and
+        is a box — dropping it silently once turned one typo into "0 elements"; it's logged, and
         never guessed from any random four-list (a `color: [r, g, b, a]` stays what it is)."""
         asked = (self.box_key,) if self.box_key else ()
         for key in asked + _BOX_KEYS:

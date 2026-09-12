@@ -492,11 +492,11 @@ class DesktopWindow(BaseModel):
     async def _assert_focused(self) -> None:
         """Confirm the intended window really has focus before any keystroke.
 
-        ``windowactivate`` is asynchronous and best-effort: a WM can refuse it, another window can
-        take focus first, or it can simply lose the race. Typing regardless sends the keys to
-        WHATEVER holds focus — which is how a command aimed at one editor landed in another and
-        killed the session issuing it. Keystrokes are unrecoverable once delivered, so this
-        refuses rather than hoping."""
+        ``windowactivate`` is asynchronous and best-effort: a WM can refuse it, another window
+        can take focus first, or it can simply lose the race. Typing regardless sends the keys
+        to WHATEVER holds focus — how a command aimed at one editor landed in another and killed
+        the session issuing it. Keystrokes are unrecoverable once delivered, so this refuses
+        rather than hoping."""
         if self.is_screen or not self.wid:
             return
         try:
@@ -523,7 +523,7 @@ class DesktopWindow(BaseModel):
         Focus the EXACT window this DesktopWindow resolved to (``self.wid``) — the same window
         click/scroll act on — not a re-search by title: a title can match a hidden helper window
         (Chrome spawns a 10x10 "clipboard" window), so re-resolving could focus the wrong one and
-        the keystrokes land nowhere ("clicks work, typing doesn't", #25)."""
+        keystrokes land nowhere ("clicks work, typing doesn't", #25)."""
         backend = self._backend
         focus_wid = getattr(backend, "focus_wid", None)
         if focus_wid is not None and self.wid:
@@ -631,13 +631,13 @@ class DesktopWindow(BaseModel):
             horizontal = direction in ("left", "right")
             positive = direction in ("up", "right")  # up / right are the +clicks directions
             clicks = amount if positive else -amount
-            # A wheel in a WM-less nested display does not always stay inside the widget it was
+            # A wheel in a WM-less nested display doesn't always stay inside the widget it was
             # aimed at: reported twice, it RESIZED the whole app window (1600x1200 -> 1600x2000,
-            # #82) and once took the window down entirely (#90). The caller asked to scroll a
-            # WIDGET, so the window's own geometry is a post-condition of this call, not something
-            # the wheel may change — snapshot it and put it back. Left un-restored, a taller window
-            # also reveals content genuinely clipped at the real size, manufacturing false layout
-            # verdicts from every later capture.
+            # #82), once took the window down entirely (#90). The caller asked to scroll a
+            # WIDGET, so the window's own geometry is a post-condition of this call, not
+            # something the wheel may change — snapshot it and put it back. Left un-restored, a
+            # taller window also reveals content genuinely clipped at the real size,
+            # manufacturing false layout verdicts from every later capture.
             guarded = self._tracks_geometry()
             before = await asyncio.to_thread(self._backend_geometry) if guarded else None
 

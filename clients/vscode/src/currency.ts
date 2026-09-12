@@ -1,5 +1,5 @@
 // Display-currency conversion for the dashboard's spend figures. Usage cost is recorded in USD
-// (litellm pricing); this converts it to the user's `interact.display.currency` for display only.
+// (litellm pricing); this converts it to the user's interact.display.currency for display only.
 // Rates are fetched LIVE from the ECB via frankfurter.app (no key, no hardcoded table — they
 // update when the ECB updates) and cached; formatting uses the built-in Intl currency formatter.
 // Offline / unknown currency falls back to USD so the panel never breaks.
@@ -30,7 +30,7 @@ export async function usdRateTo(target: string): Promise<number> {
   return 1;
 }
 
-/** Format a USD amount in `target` currency at `rate`, via Intl (locale-aware symbol). */
+/** Format a USD amount in target currency at rate, via Intl (locale-aware symbol). */
 export function formatMoney(usd: number, target: string, rate: number): string {
   const cur = (target || "USD").toUpperCase();
   const amount = usd * rate;
@@ -45,7 +45,7 @@ export function formatMoney(usd: number, target: string, rate: number): string {
   }
 }
 
-/** The currency symbol for `target` (for chart axis prefixes), e.g. "$", "€", "£". */
+/** The currency symbol for target (for chart axis prefixes), e.g. "$", "€", "£". */
 export function currencySymbol(target: string): string {
   const cur = (target || "USD").toUpperCase();
   try {

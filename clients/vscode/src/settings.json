@@ -9,6 +9,8 @@
       "kind": "str",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_CRITERIA",
       "default": ""
     },
@@ -21,6 +23,8 @@
       "kind": "str",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_CRITERIA_WEIGHTS",
       "default": ""
     },
@@ -46,6 +50,8 @@
           "value": "api"
         }
       ],
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_BACKEND",
       "default": "auto"
     },
@@ -67,6 +73,8 @@
           "value": "api_allowed"
         }
       ],
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_BILLING",
       "default": "session_only"
     },
@@ -88,6 +96,8 @@
           "value": "claude"
         }
       ],
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_SESSION_NO_EXTRA_USAGE_CONFIRMED_FOR",
       "default": ""
     },
@@ -105,6 +115,8 @@
           "value": "claude"
         }
       ],
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_PROVIDER_ORDER",
       "default": "claude"
     },
@@ -117,6 +129,8 @@
       "kind": "str",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_CLAUDE_MEDIA_MODEL",
       "default": ""
     },
@@ -129,6 +143,8 @@
       "kind": "model",
       "role": "image",
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_IMAGE_MODEL",
       "default": ""
     },
@@ -141,6 +157,8 @@
       "kind": "model",
       "role": "component",
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_COMPONENT_MODEL",
       "default": ""
     },
@@ -153,6 +171,8 @@
       "kind": "model",
       "role": "video",
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_VIDEO_MODEL",
       "default": ""
     },
@@ -165,6 +185,8 @@
       "kind": "model",
       "role": "audio",
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_AUDIO_MODEL",
       "default": ""
     },
@@ -186,6 +208,8 @@
           "value": "nested"
         }
       ],
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_DESKTOP_TARGET",
       "default": "local"
     },
@@ -198,8 +222,10 @@
       "kind": "bool",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_NESTED_HEADLESS",
-      "default": "false"
+      "default": "true"
     },
     {
       "key": "desktop.nestedDisplay",
@@ -210,6 +236,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_NESTED_DISPLAY",
       "default": "99"
     },
@@ -222,6 +250,8 @@
       "kind": "str",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": "^[1-9]\\d*x[1-9]\\d*$",
       "env": "INTERACT_NESTED_SIZE",
       "default": "1280x800"
     },
@@ -234,6 +264,8 @@
       "kind": "bool",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_HEADLESS",
       "default": "true"
     },
@@ -259,6 +291,8 @@
           "value": "webkit"
         }
       ],
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_BROWSER_TYPE",
       "default": "chromium"
     },
@@ -271,6 +305,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": 1,
+      "pattern": null,
       "env": "INTERACT_VIEWPORT_WIDTH",
       "default": "1280"
     },
@@ -283,6 +319,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": 1,
+      "pattern": null,
       "env": "INTERACT_VIEWPORT_HEIGHT",
       "default": "720"
     },
@@ -295,6 +333,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_SLOW_MO",
       "default": "0"
     },
@@ -307,6 +347,8 @@
       "kind": "path",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_BROWSER_PROFILE_DIR",
       "default": ""
     },
@@ -319,6 +361,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MAX_TOKENS",
       "default": ""
     },
@@ -331,6 +375,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_TIMEOUT",
       "default": "120"
     },
@@ -343,6 +389,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_MAX_ITEMS",
       "default": "16"
     },
@@ -355,6 +403,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_MAX_TOTAL_BYTES",
       "default": "52428800"
     },
@@ -367,6 +417,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_MEDIA_MAX_CONTEXT_CHARS",
       "default": "32768"
     },
@@ -379,6 +431,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_WAIT_TIMEOUT",
       "default": "10000"
     },
@@ -391,6 +445,8 @@
       "kind": "int",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_VIDEO_FPS",
       "default": "5"
     },
@@ -403,6 +459,8 @@
       "kind": "str",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_VIDEO_DURATION",
       "default": "3.0"
     },
@@ -415,6 +473,8 @@
       "kind": "path",
       "role": null,
       "options": null,
+      "minimum": null,
+      "pattern": null,
       "env": "INTERACT_DEBUG_DIR",
       "default": "~/.interact/out"
     }

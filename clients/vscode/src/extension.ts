@@ -8,8 +8,16 @@ import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
 import { ScopeStore, setScopeStore } from "./scopeStore";
-import { companyOf, definitionFile, readOrg, spawnArgs, spawnChoices } from "./org";
-import { chooseModel, clearChoice, modelChosenFor } from "./agentModels";
+import {
+  definitionFile, parseAgentProviders, readOrg, spawnArgs, spawnChoices,
+  type AgentProviderStatus,
+} from "./org";
+import {
+  adoptLegacyChoices, agentsPolicyPath, chooseModel, clearChoice, modelChosenFor, profilesIn,
+  ruleReads,
+} from "./agentModels";
+import { shortCompetence } from "./competence";
+import { CompetenceStore } from "./competenceStore";
 import { knownModes, modeChoices } from "./permissionModes";
 import {
   KeyManager,
@@ -39,6 +47,57 @@ interface ModelSettingItem extends vscode.QuickPickItem {
 function cfg() {
   return vscode.workspace.getConfiguration(SETTING_SECTION);
 }
+
+function permissionModeKey(provider: string): string {
+  return `${DEFAULT_MODE_KEY}.${provider}`;
+}
+
+/** Errors from the child CLI are diagnostic data, not user-facing copy. In particular, stderr can
+ * contain vendor output with account details; keep it out of notifications and logs. */
+function cliFailure(action: string): string {
+  return `Interact: ${action} could not be completed. Check the Interact output for details.`;
+}
+
+async function agentProviderStatuses(): Promise<AgentProviderStatus[] | null> {
+  const result = await interactCli(["agents", "providers", "--json-out"]);
+  if (result.error || !result.stdout.trim()) return null;
+  const providers = parseAgentProviders(result.stdout);
+  return providers.length ? providers : null;
+}
+
+async function chooseAgentProvider(title: string): Promise<AgentProviderStatus | undefined> {
+  const providers = await agentProviderStatuses();
+  if (!providers) {
+    void vscode.window.showErrorMessage(cliFailure("read installed agent providers"));
+    return undefined;
+  }
+  const active = providers.filter((provider) => provider.active);
+  const available = active.filter((provider) => provider.available);
+  if (!active.length) {
+    void vscode.window.showErrorMessage(
+      "Interact: every agent provider is switched off. Enable one under Providers that Run Agents.",
+    );
+    return undefined;
+  }
+  if (!available.length) {
+    void vscode.window.showErrorMessage(
+      "Interact: no enabled agent provider is installed or available on PATH.",
+    );
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(
+    available.map((provider) => ({
+      label: provider.label,
+      description: provider.id,
+      detail: "installed and enabled",
+      provider,
+    })),
+    { title, placeHolder: "Choose the CLI that will run this agent" },
+  );
+  return picked?.provider;
+}
+
+
 
 function buildEnv(
   keyManager: KeyManager,
@@ -88,7 +147,7 @@ function buildEnv(
 
   env["INTERACT_MODELS_JSON"] = JSON.stringify(modelsData);
 
-  // The catalog's `defaults` are NOT written into the environment. They used to be, and that one
+  // The catalog's "defaults" are NOT written into the environment. They used to be, and that one
   // block defeated model selection entirely: interact reads these vars as a user's explicit pin,
   // so every extension user looked pinned, the best-available walk never ran, and somebody with
   // only an OpenAI key got a Gemini id and an auth error. Leaving them unset lets the server rank
@@ -344,6 +403,9 @@ function refreshWorkplace(): void {
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
+  // v0.38 kept each agent's model choice in its own file; they live in the agents policy now.
+  // Carried over once, here, so nobody's choice vanished the day the store moved.
+  adoptLegacyChoices();
   let modelsData: ModelsData = { providers: {} };
   try {
     const loaded = require("./models.json");
@@ -379,8 +441,8 @@ export async function activate(
 
 
   // The Agents sidebar — the panel you click, in the SECONDARY side bar (right), beside Claude
-  // Code / Codex / Gemini, where a chat panel belongs. `viewsContainers.secondarySidebar` is what
-  // puts it there; the manifest's `engines.vscode` floor is past the build that added it.
+  // Code / Codex / Gemini, where a chat panel belongs. "viewsContainers.secondarySidebar" is what
+  // puts it there; the manifest's "engines.vscode" floor is past the build that added it.
 
   // One workspace scope, shared by every view, so the tree and the building can never disagree
   // about which team you are looking at. Defaults to the folder you have open.
@@ -398,9 +460,6 @@ export async function activate(
   // focusing the rail puts you where you were — so "open a conversation" and "see the team" are
   // one column used two ways rather than three panes fighting over it.
   context.subscriptions.push(
-    // Choosing what runs on what. The company file DECLARES a model per agent, but it is generated
-    // from the prompt repo — so a choice made here is stored beside interact's own state, where no
-    // generator owns it, and shown as overriding rather than replacing the declaration.
     // "See their instructions" opened the TRANSCRIPT — a label that lied, caught by the sweep.
     // This opens the definition file itself, resolved against the prompt repo's real location.
     vscode.commands.registerCommand("interact.agents.definition", (arg?: { run?: { agent?: string | null; definition_path?: string | null } }) => {
@@ -430,6 +489,9 @@ export async function activate(
       }
       if (agent) chatProvider.showAgent(agent);
     }),
+    // Choosing what runs on what. The company file DECLARES a model per agent, but it is generated
+    // from the prompt repo — so a choice made here is stored beside interact's own state, where no
+    // generator owns it, and shown as overriding rather than replacing the declaration.
     vscode.commands.registerCommand("interact.agents.model", async (arg?: string | { run?: { agent?: string } }) => {
       const org = readOrg();
       const named = typeof arg === "string" ? arg : arg?.run?.agent ?? undefined;
@@ -447,12 +509,59 @@ export async function activate(
       const items: Promise<vscode.QuickPickItem[]> = (async () => {
         const { loadCatalog } = await import("./catalog");
         const cat = await loadCatalog().catch(() => null);
+        // A CRITERION comes FIRST, because a pinned id is a claim frozen when somebody typed it:
+        // "we shouldn't write a model, but resolve a model from the constraints". The bars are
+        // POSITIONS on the board, never numbers — "> 45" is itself frozen on the day it was typed
+        // and would quietly mean "the middle" a year from now.
+        const offered = [
+          { rule: "aa.intelligence >= p99", means: "the very top of the board" },
+          { rule: "aa.intelligence >= p95", means: "stronger than 19 in 20 measured" },
+          { rule: "aa.intelligence >= p90", means: "beats nine tenths, cheapest such — a workhorse" },
+        ];
+        const resolved = await Promise.all(offered.map(({ rule }) =>
+          interactCli(["agents", "criterion", rule, "--json-out"])
+            .then(({ stdout, error }) => (error ? null : JSON.parse(stdout) as
+              { model: string | null; providers?: Record<string, string | null> }))
+            .catch(() => null)));
+        const measured = new CompetenceStore();
+        await measured.ensure([...(cat?.models ?? []).map((m) => m.id).slice(0, 60),
+                               declared, current ?? ""].filter(Boolean) as string[]);
         return [
+          { label: "Resolved from a criterion", kind: vscode.QuickPickItemKind.Separator },
+          { label: "$(edit) Write a criterion…",
+            description: "re-resolves at every spawn",
+            detail: "the cheapest model clearing every term — never a model frozen at the moment you picked it" },
+          // Read by the SAME function that labels a row afterwards, so what the picker previews is
+          // word-for-word what the roster will say once it is chosen.
+          ...offered.map(({ rule, means }, i) => {
+            const answer = resolved[i];
+            const reads = answer && ruleReads({
+              name: agent, rule, criterion: true, resolves: answer.model, why: null,
+              providers: answer.providers,
+            });
+            return {
+              label: rule,
+              description: means,
+              detail: [reads?.line
+                         ?? "your installed interact cannot preview this — it still resolves at spawn",
+                       "stored as the rule, not as the model it means today"].join(" · "),
+            };
+          }),
+          { label: "Or pin one model", kind: vscode.QuickPickItemKind.Separator },
           { label: "$(discard) Use the company file", description: `declared: ${declared}`,
             detail: current ? `clears your choice of ${current}` : "no choice is set" },
+          // A profile is a NAME for a criterion: a rule written once and worn by many agents.
+          ...Object.entries(profilesIn()).map(([name, rule]) => ({
+            label: `@${name}`, description: "profile", detail: rule,
+          })),
           ...(cat?.models ?? []).map((m) => ({
             label: m.id,
-            description: m.id === current ? "current choice" : m.id === declared ? "declared" : "",
+            // "Models should also spell out their intelligence score, such that we can compare the
+            // most competents": a list of bare ids says nothing about which is stronger.
+            description: shortCompetence(measured.competence(m.id))
+              ?? (measured.unavailable ? "" : "not scored"),
+            detail: m.id === current ? "current choice"
+              : m.id === declared ? "declared by the company file" : "",
           })),
         ];
       })();
@@ -461,13 +570,61 @@ export async function activate(
         placeHolder: current ? `currently ${current}` : `currently ${declared} (from the company file)`,
       });
       if (!pick) return;
+      if (pick.label.startsWith("$(edit)")) {
+        // The newest keystroke, so a validation that has been waiting can tell it was superseded.
+        let typed = "";
+        const written = await vscode.window.showInputBox({
+          title: `A criterion for ${agent} — resolved at every spawn, never frozen`,
+          prompt: "e.g. aa.intelligence >= p95 and price.in < 5",
+          placeHolder: "aa.intelligence >= p95",
+          ignoreFocusOut: true,
+          // Validated by the resolver ITSELF, so a criterion nobody can evaluate is refused where
+          // it is written rather than silently matching nothing at 3am.
+          validateInput: async (text) => {
+            if (!text.trim()) return null;
+            // Each keystroke spawned a child process that loads the whole model registry. Wait,
+            // then answer only if this is still the newest thing typed.
+            typed = text;
+            await new Promise((done) => setTimeout(done, 400));
+            if (text !== typed) return null;
+            const { stdout, error } = await interactCli(
+              ["agents", "criterion", text, "--json-out"])
+              .catch(() => ({ stdout: "", error: "interact could not be run" }));
+            if (error && !stdout) {
+              return /unknown command|no such command/i.test(error)
+                // Not a verdict on THEIR criterion — a fact about the binary. Refusing here would
+                // block a rule the spawn would have honoured.
+                ? { message: "your installed interact cannot check this here; it still resolves at spawn",
+                    severity: vscode.InputBoxValidationSeverity.Warning }
+                : "could not evaluate that criterion";
+            }
+            try {
+              const r = JSON.parse(stdout) as { model: string | null; why: string };
+              return r.model ? null : r.why || "nothing clears that right now";
+            } catch { return "could not evaluate that criterion"; }
+          },
+        });
+        if (!written?.trim()) return;
+        if (chooseModel(agent, written.trim())) {
+          void vscode.window.showInformationMessage(
+            `${agent} now resolves its model from: ${written.trim()}`);
+        } else {
+          void vscode.window.showWarningMessage(
+            `Interact could not store that criterion — is ${agentsPolicyPath()} valid JSON?`);
+        }
+        refreshWorkplace();
+        chatProvider.repaintAgent(agent);
+        return;
+      }
       if (pick.label.startsWith("$(discard)")) {
         clearChoice(agent);
         void vscode.window.showInformationMessage(`${agent} follows the company file again (${declared}).`);
       } else if (chooseModel(agent, pick.label)) {
         void vscode.window.showInformationMessage(`${agent} will run on ${pick.label}.`);
       } else {
-        void vscode.window.showWarningMessage(`${pick.label} is not a model id interact will store.`);
+        void vscode.window.showWarningMessage(
+          `Interact could not store that choice — is ${agentsPolicyPath()} valid JSON?`,
+        );
       }
       refreshWorkplace();
       // And the panel you are looking at, or the override you just set stays invisible until you
@@ -487,11 +644,6 @@ export async function activate(
   context.subscriptions.push(
     agentsProvider,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatProvider),
-    // The rail: the panel's own chrome, VISIBLE AT REST. A TreeView's title actions are hidden
-    // until the pointer enters the header and clipped with no overflow menu, which is why the
-    // team view could not be reached at all — measured on a real editor, not inferred. Clicking
-    // somebody here aims the chat at them, exactly as the tree does.
-    // Picking an agent aims the chat at it — the reason the two views sit together.
     // Switching which agent you are reading meant leaving the chat for the tree, which is half of
     // "i can't control everything from there". Scoped to the current workspace, so the list is the
     // team you are actually looking at.
@@ -583,28 +735,35 @@ export async function activate(
     /* WHICH PROVIDERS DRIVE AGENTS HERE. "we should be able to, from interact, chose if we
      *  activate the agents or not for a provider (claude, codex, other...)". A checklist of the
      *  providers interact knows; unticking one switches it off at the one place every spawn
-     *  passes through (`~/.interact/agents.json`, via the CLI, so the panel and the terminal
+     *  passes through ("~/.interact/agents.json", via the CLI, so the panel and the terminal
      *  agree on a single fact). */
     vscode.commands.registerCommand("interact.agents.providers", async () => {
-      const listed = await interactCli(["agents", "providers"]);
-      // Only `<name> on|off …` rows are providers; the indented `agents:` / `permission modes:`
-      // continuation lines under each one are detail, not a provider called "agents:".
-      const rows = listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
-        .map((l) => l.split(/\s+/)).filter((p) => p.length >= 2 && (p[1] === "on" || p[1] === "off"));
-      if (!rows.length) {
-        void vscode.window.showInformationMessage("Interact: no agent providers are installed here.");
+      const providers = await agentProviderStatuses();
+      if (!providers) {
+        void vscode.window.showErrorMessage(cliFailure("read installed agent providers"));
         return;
       }
       const picked = await vscode.window.showQuickPick(
-        rows.map(([name, state]) => ({ label: name, picked: state === "on",
-          description: state === "on" ? "agents run through it" : "switched off" })),
+        providers.map((provider) => ({
+          label: provider.label,
+          picked: provider.active,
+          description: provider.id,
+          detail: provider.available ? "installed" : "not installed or unavailable",
+          provider,
+        })),
         { title: "Providers that run agents", canPickMany: true,
           placeHolder: "Tick a provider to let interact drive agents through it" },
       );
       if (!picked) return;  // Escape cancels; nothing changes
-      const on = new Set(picked.map((p) => p.label));
-      for (const [name] of rows) {
-        await interactCli(["agents", "providers", name, on.has(name) ? "on" : "off"]);
+      const on = new Set(picked.map((p) => p.provider.id));
+      for (const provider of providers) {
+        const result = await interactCli([
+          "agents", "providers", "--name", provider.id, "--state", on.has(provider.id) ? "on" : "off",
+        ]);
+        if (result.error) {
+          void vscode.window.showErrorMessage(cliFailure(`update ${provider.id} agent provider`));
+          return;
+        }
       }
       agentsProvider.refresh();
     }),
@@ -617,61 +776,32 @@ export async function activate(
     scope.onDidChange(() => agentsProvider.refresh()),
     // Starting an agent from the panel. Without this the panel could only WATCH — you had to
     // leave it for a terminal to put anyone to work, which is not a team you manage.
-    /* A NEW SESSION, with no questions but the one that matters.
-     *
-     *  "I should always be able to create a new session, and when i click on a session, then
-     *  inside i see everything (just like in claude code)." Starting work meant picking a
-     *  definition out of forty first — a staffing decision, at the moment you have a task. The
-     *  entry agent (the company's coordinator: what the org file calls `main`) takes it, and it
-     *  is the one that puts the specialists to work — so the session begins where Claude Code's
-     *  begins, and the roster stays for when you deliberately want one person.
-     */
+    // Conversations use the existing route-aware composer. Named delegation goes through spawn.
     vscode.commands.registerCommand("interact.agents.newSession", async () => {
-      const { execFile } = await import("child_process");
-      const company = companyOf(readOrg());
-      const entry = company?.coordinator.id ?? "main";
-      const task = await vscode.window.showInputBox({
-        title: "New session",
-        prompt: "What do you want done? The session's agent can put others to work.",
-        placeHolder: "e.g. find why the panel renders twice on a cold open",
-        ignoreFocusOut: true,
-      });
-      if (!task) return;
-      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const args = spawnArgs({
-        task, agent: entry, cwd, org: readOrg(),
-        // The workspace's own autonomy setting applies, exactly as it does for a picked agent —
-        // a new session must not be a back door around `/permissions`.
-        permissionMode: context.workspaceState.get<string | null>(DEFAULT_MODE_KEY, null),
-        model: modelChosenFor(entry),
-      });
-      execFile("interact", args, (err, stdout, stderr) => {
-        const said = (stdout || stderr || "").trim();
-        if (err) {
-          void vscode.window.showErrorMessage(`Interact: could not start a session — ${said || err}`);
-          return;
-        }
-        agentsProvider.refresh();
-        refreshWorkplace();
-        // Straight INTO it: a new session you have to go and find is not a new session.
-        const id = said.split(/\s+/).find((w) => w.length >= 8) ?? said.slice(0, 36);
-        if (id) chatProvider.show(id);
-      });
+      await chatProvider.newConversation();
     }),
     vscode.commands.registerCommand("interact.agents.spawn", async () => {
-      const { execFile } = await import("child_process");
-      // A machine-readable list, not the human providers table: scraping that would empty the
-      // picker the day its wording changed.
-      const definitions = await new Promise<string[]>((resolve) => {
-        execFile("interact", ["agents", "definitions"], (err, stdout) => {
-          resolve(err ? [] : stdout.split("\n").map((n) => n.trim()).filter(Boolean));
-        });
-      });
+      const provider = await chooseAgentProvider("Start an agent — choose a provider");
+      if (!provider) return;
+      // Definitions are provider-local. A shared role is only offered after this CLI confirms it
+      // can resolve the role; the company file alone is design metadata, not launch proof.
+      const listed = await interactCli(["agents", "definitions", "--provider", provider.id]);
+      if (listed.error) {
+        void vscode.window.showErrorMessage(cliFailure(`read ${provider.id} agent roles`));
+        return;
+      }
+      const definitions = listed.stdout.split("\n").map((name) => name.trim()).filter(Boolean);
+      if (!definitions.length) {
+        void vscode.window.showErrorMessage(
+          `Interact: ${provider.label} has no verified agent roles available here.`,
+        );
+        return;
+      }
       // Presented as the COMPANY, not a directory listing: what the person does, which
       // department they sit in, and where they can actually run. The definitions list stays the
       // ground truth for what is runnable, so an agent the org file omits is still offered.
       const picked = await vscode.window.showQuickPick(
-        spawnChoices(definitions, readOrg()),
+        spawnChoices(definitions, readOrg(), { includePlain: false, provider: provider.id }),
         { title: "Who should take this?", placeHolder: "the definition it will run as",
           matchOnDetail: true },
       );
@@ -686,12 +816,14 @@ export async function activate(
       // How much this one may do on its own — the decision that makes a heterogeneous team
       // possible rather than N copies of the same autonomy. Read from the CLI, never hardcoded:
       // two copies of a vendor's flag values drift, and it is always this copy that drifts.
-      const modes = await knownModes();
-      // The workspace default — what `/permissions` set. It APPLIES; it does not merely float to
+      const modes = await knownModes(provider.id);
+      // The workspace default — what "/permissions" set. It APPLIES; it does not merely float to
       // the top of the picker. Those were two meanings of one setting in two files, and the
       // command's own confirmation ("New agents here start with X") promised the first while the
       // spawn path did the second: dismiss the picker and you silently got the CLI's default.
-      const workspaceDefault = context.workspaceState.get<string | null>(DEFAULT_MODE_KEY, null);
+      const workspaceDefault = context.workspaceState.get<string | null>(
+        permissionModeKey(provider.id), null,
+      );
       let permissionMode: string | null = workspaceDefault;
       if (modes.length) {
         const mode = await vscode.window.showQuickPick(modeChoices(modes, workspaceDefault), {
@@ -707,47 +839,52 @@ export async function activate(
         // dismiss gesture mean what it means everywhere else.
         if (mode === undefined) return;
         permissionMode = mode.id;
-        if (mode.id) await context.workspaceState.update(DEFAULT_MODE_KEY, mode.id);
+        await context.workspaceState.update(permissionModeKey(provider.id), mode.id);
       }
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const args = spawnArgs({
-        task, agent: picked.label, cwd, org: readOrg(), permissionMode,
-        // Whatever you chose for this agent in the editor; absent, the company file decides.
-        model: modelChosenFor(picked.label),
+        task, provider: provider.id, agent: picked.label, cwd, org: readOrg(), permissionMode,
+        // The launcher reads the named role's current policy and resolves model/effort there.
+        // Passing the editor's old model pin here would bypass that single policy decision.
       });
-      execFile("interact", args, (err, stdout, stderr) => {
-        const said = (stdout || stderr || "").trim();
-        if (err) {
-          void vscode.window.showErrorMessage(`Interact: could not start ${picked.label} — ${said || err}`);
-          return;
-        }
-        void vscode.window.showInformationMessage(`${picked.label} is working (${said.slice(0, 8)}).`);
-        agentsProvider.refresh();
-        refreshWorkplace();
-      });
+      const result = await interactCli(args);
+      if (result.error) {
+        void vscode.window.showErrorMessage(cliFailure(`start ${picked.label} through ${provider.id}`));
+        return;
+      }
+      const runId = result.stdout.trim().split(/\s+/)
+        .find((word) => /^[A-Za-z0-9._:@+-]{8,160}$/.test(word));
+      void vscode.window.showInformationMessage(
+        `${picked.label} is working${runId ? ` (${runId.slice(0, 8)})` : ""}.`,
+      );
+      agentsProvider.refresh();
+      refreshWorkplace();
     }),
     // The autonomy a new agent gets here, set WITHOUT having to spawn one to be asked. A
     // workspace-wide default is the setting people actually want: "in this repo, agents plan
     // first" is a property of the repo, and choosing it per spawn is how you end up not choosing.
     vscode.commands.registerCommand("interact.agents.permissions", async () => {
-      const modes = await knownModes();
+      const provider = await chooseAgentProvider("Default agent autonomy — choose a provider");
+      if (!provider) return;
+      const modes = await knownModes(provider.id);
       if (!modes.length) {
         void vscode.window.showInformationMessage(
-          "Interact: this agent CLI does not expose a permission setting we have verified.");
+          `Interact: ${provider.label} does not expose a permission setting we have verified.`);
         return;
       }
-      const current = context.workspaceState.get<string | null>(DEFAULT_MODE_KEY, null);
+      const key = permissionModeKey(provider.id);
+      const current = context.workspaceState.get<string | null>(key, null);
       const picked = await vscode.window.showQuickPick(modeChoices(modes, current), {
-        title: "How much may agents started here do on their own?",
-        placeHolder: current ? `currently: ${current}` : "currently: your CLI's own setting",
+        title: `How much may ${provider.label} agents started here do on their own?`,
+        placeHolder: current ? `currently: ${current}` : "currently: this CLI's own setting",
         matchOnDetail: true,
       });
       if (!picked) return;
-      await context.workspaceState.update(DEFAULT_MODE_KEY, picked.id);
+      await context.workspaceState.update(key, picked.id);
       void vscode.window.showInformationMessage(
         picked.id
           ? `New agents here start with: ${picked.label.replace(/^\$\([^)]+\)\s*/, "")}.`
-          : "New agents here use your CLI's own setting.");
+          : `New ${provider.label} agents here use this CLI's own setting.`);
     }),
     // The log the extension already writes, made reachable from the panel rather than only from
     // the Output dropdown — a place people look only after being told it exists.
@@ -755,7 +892,7 @@ export async function activate(
     // The team as a workplace: who is here, and what room the work has them in.
     vscode.commands.registerCommand("interact.agents.team", async () => {
       const { WorkplacePanel } = await import("./workplacePanel");
-      WorkplacePanel.show(log);
+      WorkplacePanel.show(log, context.globalState);
     }),
     vscode.commands.registerCommand("interact.agents.sequence", async () => {
       const { SequencePanel } = await import("./sequencePanel");
@@ -796,8 +933,7 @@ export async function activate(
     vscode.commands.registerCommand("interact.agents.openConversation", async (arg?: string | { run?: { run_id: string } }) => {
       const runId = typeof arg === "string" ? arg : arg?.run?.run_id;
       if (!runId) return;
-      const { ConversationPanel } = await import("./conversation");
-      ConversationPanel.show(runId);
+      chatProvider.show(runId);
     }),
     vscode.commands.registerCommand("interact.agents.groupBy", async () => {
       const pick = await vscode.window.showQuickPick(
@@ -842,7 +978,7 @@ export async function activate(
   void revealAgentsPanelOnce();
   context.subscriptions.push(log);
 
-  // No `secrets.onDidChange` listener: KeyManager stores keys in ~/.interact/config.env (the
+  // No secrets.onDidChange listener: KeyManager stores keys in ~/.interact/config.env (the
   // file the CLI + server share), not SecretStorage, so nothing ever writes a secret for that
   // event to fire on. Key edits refresh the panel through KeyManager.set/remove directly.
   const emitter = new vscode.EventEmitter<void>();
@@ -903,6 +1039,7 @@ export async function activate(
       modelsData,
       benchmarksData,
       emitter,
+      () => chatProvider.conversationCatalog(),
     ),
   );
 
@@ -934,6 +1071,7 @@ export async function activate(
         modelsData,
         benchmarksData,
         emitter,
+        () => chatProvider.conversationCatalog(),
       ),
     ),
     vscode.commands.registerCommand("interact.reloadPanel", () =>
