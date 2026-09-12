@@ -166,7 +166,7 @@ export interface PromptKey {
   slug: string;
 }
 /**
- * A benchmark for evaluating VLM capability.
+ * A benchmark for evaluating a model capability.
  *
  * Scores come from published online leaderboards (:attr:`published`). Optional measured
  * scores — injected via ``INTERACT_GROUNDING_JSON`` (e.g. fetched from an online source),
@@ -176,7 +176,7 @@ export interface Benchmark {
   id: string;
   name: string;
   description: string;
-  category?: "image" | "gui_grounding" | "video" | "audio";
+  category?: "text" | "image" | "gui_grounding" | "video" | "audio";
   source?: string;
   source_auth?: string;
   requires_auth?: boolean;
@@ -185,6 +185,7 @@ export interface Benchmark {
   url?: string;
   score_url?: string;
   methodology_url?: string;
+  source_field?: string;
   score_range?: [unknown, unknown] | null;
   higher_is_better?: boolean | null;
   published?: PublishedTable | null;

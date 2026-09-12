@@ -122,6 +122,15 @@ class AgentRun(BaseModel):
     cached_input_tokens: int | None = None
     last: str = ""
 
+    def handoff_header(self) -> str:
+        """Registry-owned origin for an agent message or returned report."""
+        identity = self.model_dump(mode="json", include={
+            "run_id", "agent", "provider", "model", "reasoning", "requested_criterion",
+            "cataloged_at",
+        })
+        identity["benchmark_evidence"] = "not recorded in this run; criterion is a selection rule, not a score"
+        return "[Interact agent provenance]\n" + json.dumps(identity, sort_keys=True) + "\n[Agent content]\n"
+
     @classmethod
     def from_foreign(cls, raw: dict) -> "AgentRun | None":
         """One of the user's OWN sessions, as reported by a provider's discovery.

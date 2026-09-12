@@ -80,6 +80,7 @@ export interface PromptSelection {
  */
 export interface PromptRevision {
   key: PromptKey;
+  name?: string | null;
   revision: string;
   parent_digest?: string | null;
   digest: string;

@@ -822,7 +822,7 @@ def _per_vendor(rule: str) -> dict[str, str | None]:
 
 @agents_app.command(name="criterion")
 def agents_criterion(criterion: str, json_out: bool = False) -> None:
-    """What a CRITERION picks right now — the cheapest model clearing every term.
+    """Resolve current model: bare benchmarks rank; comparison terms filter.
 
     "We shouldn't write a model, but resolve a model from the constraints." A pinned id freezes
     when typed; a criterion is that claim written down instead, re-read every time it's asked.

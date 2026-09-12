@@ -413,7 +413,8 @@ class Model(RegistryMixin, BaseModel):
     @classmethod
     def match_published(cls, name: str) -> "Model | None":
         """Match only an exact normalized model identity; substrings silently misroute models."""
-        needle = re.sub(r"[^a-z0-9]", "", name.lower())
+        needle = re.sub(r"\s*\(.*$", "", name).lower()
+        needle = re.sub(r"[^a-z0-9]", "", needle)
         for m in cls.registry():
             bare = re.sub(r"[^a-z0-9]", "", m.id.split("/", 1)[-1].lower())
             if needle == bare:
@@ -837,9 +838,35 @@ class Model(RegistryMixin, BaseModel):
             cls.merge_ranked(live_scores(), ranked_extras())
         except Exception:
             _log.debug("board pricing unavailable; using the bundled catalog", exc_info=True)
+        try:
+            # Role criteria need the same fresh source rows as the benchmark panel. Stale rows
+            # stay visible in the source cache, but cannot make a model eligible for routing.
+            from interact import benchmark_source
+
+            board = benchmark_source.load_scores()
+            if board.is_live:
+                cls.hydrate_benchmark_scores(
+                    [(score.name, score.metrics) for score in board.scores]
+                )
+        except Exception:
+            _log.debug("Artificial Analysis benchmark hydration failed", exc_info=True)
         # Applied at LOAD, never on every read: a test that registers its own models is stating
         # what they score, and rescoring those against this machine's board would erase it.
         cls.rescored(cls._registry)
+
+    @classmethod
+    def hydrate_benchmark_scores(
+        cls, rows: list[tuple[str, dict[str, float]]]
+    ) -> None:
+        """Attach current source scores to registered models through the benchmark registry."""
+        for model_name, metrics in rows:
+            model = cls.match_published(model_name)
+            if model is None:
+                continue
+            for benchmark_id, score in metrics.items():
+                benchmark = Benchmark.by_id(benchmark_id)
+                if benchmark is not None:
+                    benchmark._measured[model.id] = score
 
 
 __all__ = [
@@ -878,7 +905,7 @@ def _namespace_of(source: str) -> str:
 
 
 class Benchmark(RegistryMixin, BaseModel):
-    """A benchmark for evaluating VLM capability.
+    """A benchmark for evaluating a model capability.
 
     Scores come from published online leaderboards (:attr:`published`). Optional measured
     scores — injected via ``INTERACT_GROUNDING_JSON`` (e.g. fetched from an online source),
@@ -889,7 +916,7 @@ class Benchmark(RegistryMixin, BaseModel):
     name: str
     description: str
     # Which capability the benchmark measures, so the UI can group + explain by task.
-    category: Literal["image", "gui_grounding", "video", "audio"] = "gui_grounding"
+    category: Literal["text", "image", "gui_grounding", "video", "audio"] = "gui_grounding"
     # Where its live scores come from, and the env key that source needs ("" = keyless / auto).
     # Surfaced in the config so the user can supply an optional key per source — no CLI needed.
     source: str = ""
@@ -905,6 +932,9 @@ class Benchmark(RegistryMixin, BaseModel):
     url: str = ""
     score_url: str = ""
     methodology_url: str = ""
+    #: Exact field in the live source payload. Empty means this benchmark is backed by a
+    #: published table or local measurement instead.
+    source_field: str = ""
     score_range: tuple[float, float] | None = None
     higher_is_better: bool | None = None
     published: PublishedTable | None = None
@@ -917,7 +947,7 @@ class Benchmark(RegistryMixin, BaseModel):
         return f"{self.namespace or _namespace_of(self.source)}.{self.id}"
 
     def score_for(self, model: "Model") -> float | None:
-        """Measured [0, 1] score for ``model``, or None if not evaluated."""
+        """Measured source score for ``model``, or None if not evaluated."""
         return self._measured.get(model.id)
 
     def quality_per_dollar(self, model: "Model") -> float | None:
@@ -1180,6 +1210,33 @@ Benchmark._register(
         published=PublishedTable.load("mmmu_pro"),
     )
 )
+# Language-model role metrics. Names are registry data; the live adapter maps only these exact
+# Artificial Analysis API fields, so an example or an unavailable field cannot become a route.
+for _id, _name, _field, _range in (
+    ("coding_index", "Artificial Analysis Coding Index", "artificial_analysis_coding_index", (0.0, 100.0)),
+    ("scicode", "SciCode", "scicode", (0.0, 1.0)),
+    ("aa_lcr", "Artificial Analysis Long Context Reasoning", "aa_lcr", (0.0, 1.0)),
+    ("aa_omniscience_index", "Artificial Analysis Omniscience Index", "aa_omniscience_index", None),
+    ("aa_omniscience_accuracy", "Artificial Analysis Omniscience Accuracy", "aa_omniscience_accuracy", (0.0, 1.0)),
+    ("ifbench", "IFBench", "ifbench", (0.0, 1.0)),
+    ("terminalbench_hard", "Terminal-Bench Hard", "terminalbench_hard", (0.0, 1.0)),
+    ("terminalbench_v2_1", "Terminal-Bench v2.1", "terminalbench_v2_1", (0.0, 1.0)),
+):
+    Benchmark._register(
+        Benchmark(
+            id=_id,
+            name=_name,
+            category="text",
+            source="Artificial Analysis public evaluation",
+            namespace="aa",
+            description=f"{_name} as published by Artificial Analysis.",
+            url="https://artificialanalysis.ai/data-api/docs",
+            score_url="https://artificialanalysis.ai/data-api/docs",
+            source_field=_field,
+            score_range=_range,
+            higher_is_better=True,
+        )
+    )
 Benchmark._register(
     Benchmark(
         id="mmbench",

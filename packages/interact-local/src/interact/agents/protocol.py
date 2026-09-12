@@ -120,14 +120,10 @@ class ConversationRoute(BaseModel):
                 criterion = Criteria.parse(selection.criterion)
             except CriteriaError as exc:
                 raise ValueError(str(exc)) from exc
-            models = [
-                model for model in self.models
-                if all(term.holds(model) for term in criterion.terms)
-            ]
-            models.sort(key=lambda model: model.cost_score)
-            if not models:
+            model = criterion.choose(available_only=False, candidates=self.models)
+            if model is None:
                 raise ValueError("no model on the selected route clears this criterion")
-            return models[0]
+            return model
         if self.default_model is not None:
             model = self.model_by_id(self.default_model)
             if model is not None:

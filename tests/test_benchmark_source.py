@@ -64,6 +64,31 @@ def test_scores_come_back_ranked():
     assert [s.name for s in scores] == ["Claude Sonnet 5", "GPT-5.4"]
 
 
+def test_verified_aa_fields_become_registry_named_metrics_and_nulls_stay_missing():
+    scores = bs._from_artificial_analysis({
+        "data": [
+            {
+                "name": "Coding model",
+                "model_creator": {"name": "Provider"},
+                "evaluations": {
+                    "artificial_analysis_coding_index": 88.0,
+                    "scicode": None,
+                    "ifbench": 0.72,
+                },
+            },
+            {
+                "name": "No coding score",
+                "model_creator": {"name": "Provider"},
+                "evaluations": {"artificial_analysis_coding_index": None},
+            },
+        ]
+    })
+    assert len(scores) == 1
+    assert scores[0].metrics == {"coding_index": 88.0, "ifbench": 0.72}
+    assert "aa.coding_index" in {benchmark.variable for benchmark in Benchmark.registry()}
+    assert "aa.frontier_code" not in {benchmark.variable for benchmark in Benchmark.registry()}
+
+
 def test_without_a_key_it_says_so_rather_than_pretending():
     board = bs.load_scores()
     assert board.source == "unavailable"

@@ -19,6 +19,7 @@ import pytest
 
 from interact.models import Benchmark, Model, ModelCapability
 from interact.criteria import Criteria, CriteriaError, Variables
+from interact.agents.protocol import ConversationRoute, ModelSelection
 
 
 @contextmanager
@@ -123,6 +124,142 @@ def test_it_selects_the_cheapest_model_that_clears_the_bar(registry):
     assert Criteria.parse("aa.intelligence >= 30").choose(available_only=False).id == "sharp-eyes"
     assert Criteria.parse("aa.intelligence >= 5").choose(available_only=False).id == "blind-but-cheap"
     assert Criteria.parse("price.in < 1").choose(available_only=False).id == "blind-but-cheap"
+
+
+def test_bare_intelligence_excludes_snapshot_scores_outside_the_current_board(monkeypatch):
+    from interact import model_catalog
+
+    monkeypatch.setattr(model_catalog, "live_scores", lambda: {"current": 40.0})
+    with catalog_of(
+        Model(provider="p", id="snapshot", capabilities=set(), intelligence_score=99.0),
+        Model(provider="p", id="current", capabilities=set(), intelligence_score=40.0),
+    ):
+        assert Criteria.parse("aa.intelligence").choose(available_only=False).id == "current"
+
+
+def test_bare_benchmark_obeys_lower_is_better_direction():
+    bench = Benchmark(id="fixture-error", name="Error", description="Lower error wins",
+                      namespace="fx", higher_is_better=False)
+    Benchmark._register(bench)
+    bench._measured.update({"low": 0.0, "high": 0.9})
+    try:
+        with catalog_of(Model(provider="p", id="low", capabilities=set()),
+                        Model(provider="p", id="high", capabilities=set())):
+            criterion = Criteria.parse("fx.fixture-error")
+            assert criterion.choose(available_only=False).id == "low"
+            assert criterion.choose(available_only=False, weights="fx.fixture-error=1").id == "low"
+            assert "best measured match is low" in criterion.explain(available_only=False)
+    finally:
+        Benchmark.registry().remove(bench)
+
+
+def test_a_bare_benchmark_ranks_measured_models_after_filters(registry):
+    bench = Benchmark.by_id("coding_index")
+    assert bench is not None
+    models = (
+        Model(provider="p", id="cheap-low", capabilities={ModelCapability.LLM},
+              input_cost_per_million=0.1, output_cost_per_million=0.1),
+        Model(provider="p", id="expensive-high", capabilities={ModelCapability.LLM},
+              input_cost_per_million=5.0, output_cost_per_million=5.0),
+    )
+    bench._measured.update({"cheap-low": 20.0, "expensive-high": 90.0})
+    try:
+        criterion = Criteria.parse("cap.llm and aa.coding_index")
+        assert criterion.choose(available_only=False, candidates=list(models)).id == "expensive-high"
+    finally:
+        bench._measured.clear()
+
+
+def test_a_bare_benchmark_excludes_unmeasured_and_provider_ineligible_models(registry):
+    bench = Benchmark.by_id("coding_index")
+    assert bench is not None
+    models = (
+        Model(provider="allowed", id="allowed-low", capabilities={ModelCapability.LLM},
+              input_cost_per_million=1.0),
+        Model(provider="blocked", id="blocked-high", capabilities={ModelCapability.LLM},
+              input_cost_per_million=0.1),
+        Model(provider="allowed", id="missing", capabilities={ModelCapability.LLM},
+              input_cost_per_million=0.01),
+    )
+    bench._measured.update({"allowed-low": 20.0, "blocked-high": 99.0})
+    try:
+        criterion = Criteria.parse("aa.coding_index")
+        chosen = criterion.choose(
+            available_only=False,
+            runnable=lambda model: model.provider == "allowed",
+            candidates=list(models),
+        )
+        assert chosen is not None and chosen.id == "allowed-low"
+        assert [model.id for model in criterion.qualifying(
+            available_only=False, candidates=list(models)
+        )] == ["blocked-high", "allowed-low"]
+    finally:
+        bench._measured.clear()
+
+
+def test_a_benchmark_threshold_can_be_combined_with_descending_ranking(registry):
+    bench = Benchmark.by_id("coding_index")
+    assert bench is not None
+    models = (
+        Model(provider="p", id="cheap-pass", capabilities={ModelCapability.LLM},
+              input_cost_per_million=0.1, output_cost_per_million=0.1),
+        Model(provider="p", id="expensive-best", capabilities={ModelCapability.LLM},
+              input_cost_per_million=8.0, output_cost_per_million=8.0),
+        Model(provider="p", id="cheap-fail", capabilities={ModelCapability.LLM},
+              input_cost_per_million=0.01, output_cost_per_million=0.01),
+    )
+    bench._measured.update({"cheap-pass": 60.0, "expensive-best": 90.0, "cheap-fail": 40.0})
+    try:
+        criterion = Criteria.parse("cap.llm and aa.coding_index >= 50 and aa.coding_index")
+        assert criterion.choose(available_only=False, candidates=list(models)).id == "expensive-best"
+    finally:
+        bench._measured.clear()
+
+
+def test_explicit_weights_still_normalize_source_metrics_before_scoring(registry):
+    coding = Benchmark.by_id("coding_index")
+    ifbench = Benchmark.by_id("ifbench")
+    assert coding is not None and ifbench is not None
+    models = [
+        Model(provider="p", id="coding-winner", capabilities={ModelCapability.LLM}),
+        Model(provider="p", id="ifbench-winner", capabilities={ModelCapability.LLM}),
+    ]
+    coding._measured.update({"coding-winner": 90.0, "ifbench-winner": 20.0})
+    ifbench._measured.update({"coding-winner": 0.2, "ifbench-winner": 0.9})
+    try:
+        criterion = Criteria.parse("cap.llm")
+        chosen = criterion.choose(
+            available_only=False,
+            weights="aa.coding_index=1, aa.ifbench=1",
+            candidates=models,
+        )
+        assert chosen is not None and chosen.id == "coding-winner"
+    finally:
+        coding._measured.clear()
+        ifbench._measured.clear()
+
+
+def test_route_resolver_uses_the_shared_metric_chooser(registry):
+    bench = Benchmark.by_id("coding_index")
+    assert bench is not None
+    models = [
+        Model(provider="p", id="route-cheap", capabilities={ModelCapability.LLM},
+              input_cost_per_million=0.1),
+        Model(provider="p", id="route-best", capabilities={ModelCapability.LLM},
+              input_cost_per_million=5.0),
+    ]
+    bench._measured.update({"route-cheap": 20.0, "route-best": 80.0})
+    route = ConversationRoute(
+        id="p:api", provider="p", connection="api", label="p API", availability="available",
+        charge_path="metered_api", cost_certainty="known", billing_note="test",
+        models=models, cataloged_at=0.0,
+    )
+    try:
+        criterion = Criteria.parse("cap.llm and aa.coding_index")
+        expected = criterion.choose(available_only=False, candidates=models)
+        assert route.resolve(ModelSelection(criterion=str(criterion))) == expected
+    finally:
+        bench._measured.clear()
 
 
 def test_a_capability_can_be_demanded_by_name(registry):

@@ -276,8 +276,10 @@ def test_the_cli_says_one_line_when_nothing_clears_a_criterion(monkeypatch, caps
             raise AssertionError("nothing clears the bar — the vendor CLI must never be reached")
 
     monkeypatch.setattr(providers, "provider_for", lambda name: _Vendor())
+    from interact.agents import run
+    monkeypatch.setattr(run, "load_policy", lambda: Policy(agents={"tester": "aa.intelligence > 999"}))
     with pytest.raises(SystemExit) as stop:
-        agents_spawn("say hi", model="aa.intelligence > 999")
+        agents_spawn("say hi", agent="tester")
     assert stop.value.code == 2
     err = capsys.readouterr().err
     assert err.startswith("ERROR:") and "999" in err and "Traceback" not in err

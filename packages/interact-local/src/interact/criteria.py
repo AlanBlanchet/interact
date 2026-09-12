@@ -4,8 +4,9 @@
 
 A pinned model id is a claim frozen at typing time. Can't notice a better model shipping, a price
 cut, or — the case that cost this project weeks — that the tier was never good enough for its job.
-A CRITERION is that claim written down instead: "whatever currently clears this bar, cheapest
-first", re-resolved every time it's asked.
+A CRITERION is that claim written down instead: "whatever currently clears this bar", re-resolved
+every time it's asked. A bare benchmark metric ranks the measured survivors; a price-only rule
+still chooses the cheapest survivor.
 
 Every variable is NAMESPACED BY ITS SOURCE — a bare ``intelligence`` hides who measured it, and
 two leaderboards rarely agree:
@@ -55,6 +56,10 @@ class Variable:
     source: str = ""
     #: True for a yes/no (a capability), which takes no operator.
     flag: bool = False
+    #: Numeric source measures can be written bare to request descending ranking. Prices remain
+    #: comparisons because "price.in" is a cost constraint, not a quality benchmark.
+    rankable: bool = False
+    higher_is_better: bool = True
     #: Distribution a PERCENTILE bar reads against — the source's OWN published population, when
     #: it has one. Namespace IS source, so source owns this: reading `90%` off the local catalog
     #: instead answers "the 90th percentile of what I happen to hold" — mixes live numbers with a
@@ -88,12 +93,16 @@ class Variables:
     def all(cls) -> list[Variable]:
         out: list[Variable] = []
         for name, (attr, describe, population, source) in cls._SCALARS.items():
-            out.append(Variable(name, describe, _reader(attr), source=source, population=population,
-                                measured=_board_measured if population is not None else None))
+            out.append(Variable(
+                name, describe, _reader(attr), source=source, rankable=name == "aa.intelligence",
+                population=population, measured=_board_measured if population is not None else None,
+            ))
         for bench in Benchmark.registry():
             out.append(Variable(
                 bench.variable, f"{bench.name} — {bench.source or 'published'}",
                 _bench_reader(bench), source=bench.source or "published",
+                rankable=True,
+                higher_is_better=bench.higher_is_better is not False,
                 population=_bench_population(bench),
                 measured=_bench_measured(bench),
             ))
@@ -139,6 +148,9 @@ def _bench_entries(bench: Benchmark) -> list[PublishedEntry]:
 
 def _bench_reader(bench: Benchmark) -> Callable[[Model], float | None]:
     def read(model: Model) -> float | None:
+        measured = bench.score_for(model)
+        if measured is not None:
+            return measured
         for entry in _bench_entries(bench):
             scored = Model.by_id(entry.model_id) if entry.model_id else None
             if scored is not None and scored.id == model.id:
@@ -162,14 +174,15 @@ def _board_measured(model: Model) -> bool:
 
 
 def _bench_measured(bench: Benchmark) -> Callable[[Model], bool] | None:
-    """Whether this benchmark's own published table lists the model."""
-    if bench.published is None or not bench.published.entries:
-        return None
+    """Whether this benchmark's source or published table lists the model."""
     from interact.model_catalog import bare_model_name
 
     def listed(model: Model) -> bool:
+        if bench.score_for(model) is not None:
+            return True
         key = bare_model_name(model.id)
-        return any(bare_model_name(entry.model_name) == key for entry in bench.published.entries)
+        return any(bare_model_name(entry.model_id or entry.model_name) == key
+                   for entry in _bench_entries(bench))
 
     return listed
 
@@ -181,14 +194,42 @@ def _bench_population(bench: Benchmark) -> Callable[[], list[float]]:
     import, so answering "this benchmark has no board" once would freeze that answer for the
     process's life. An empty board is not an error here — `_population` falls back.
     """
-    return lambda: [
-        entry.normalized_score for entry in _bench_entries(bench)
-        if entry.normalized_score is not None
-    ]
+    def population() -> list[float]:
+        measured = [
+            score for model in Model.catalog()
+            if (score := bench.score_for(model)) is not None
+        ]
+        if measured:
+            return measured
+        return [
+            entry.normalized_score for entry in _bench_entries(bench)
+            if entry.normalized_score is not None
+        ]
+
+    return population
 
 
 def _cap_reader(cap: ModelCapability) -> Callable[[Model], float | None]:
     return lambda model: 1.0 if model.can(cap) else 0.0
+
+
+def _weighted_value(variable: Variable | None, model: Model) -> float | None:
+    if variable is None:
+        return None
+    score = variable.read(model)
+    if score is None:
+        return None
+    benchmark = next(
+        (item for item in Benchmark.registry() if item.variable == variable.name), None
+    )
+    if benchmark is not None and benchmark.score_range is not None:
+        lower, upper = benchmark.score_range
+        if not lower <= score <= upper or lower >= upper:
+            return None
+        score = (score - lower) / (upper - lower)
+    if not 0 <= score <= 1:
+        return None
+    return score if variable.higher_is_better else 1 - score
 
 
 _OPS = {
@@ -258,6 +299,9 @@ class Term:
     #: Set on a RESOLVED percentile: a model this variable's source never measured is not in the
     #: population the percentile describes, so it can't clear a bar drawn on it.
     source_only: bool = False
+    #: A bare numeric metric is a ranking request. It still requires a measured value, but does
+    #: not create a zero-valued threshold.
+    ranking: bool = False
 
     def __str__(self) -> str:
         if not self.op:
@@ -304,6 +348,8 @@ class Term:
         got = self.score_of(model)
         if got is None:
             return False
+        if self.ranking:
+            return True
         if not self.op:
             return got > 0
         return _OPS[self.op](got, self.value)
@@ -361,13 +407,19 @@ class Criteria:
             elif (m := _BARE.match(clause)) is not None:
                 name = m.group(1)
                 var = Variables.by_name(name)
-                if var is None or not var.flag:
+                if var is None:
                     raise CriteriaError(
-                        f"{name!r} is not a capability.{_did_you_mean(name)}"
-                        if var is None else
-                        f"{name!r} is a measurement — compare it, e.g. '{name} > 0.8'"
+                        f"{name!r} is not a capability or metric.{_did_you_mean(name)}"
                     )
-                terms.append(Term(name))
+                if var.rankable:
+                    terms.append(Term(name, ranking=True, source_only=True))
+                    continue
+                if var.flag:
+                    terms.append(Term(name))
+                    continue
+                raise CriteriaError(
+                    f"{name!r} is a measurement — compare it, e.g. '{name} > 0.8'"
+                )
             else:
                 raise CriteriaError(
                     f"{clause.strip()!r} is not a criterion — write it as 'name > number'"
@@ -377,11 +429,15 @@ class Criteria:
         return cls(tuple(terms), text.strip())
 
     @staticmethod
-    def _pool(available_only: bool, runnable: Callable[[Model], bool] | None) -> list[Model]:
+    def _pool(
+        available_only: bool,
+        runnable: Callable[[Model], bool] | None,
+        candidates: list[Model] | None = None,
+    ) -> list[Model]:
         """Who is in the running. `runnable`, when given, IS the pool: the caller — a vendor CLI —
         knows what it can actually be pointed at, its own login included. Otherwise every model
         whose key is here (or every model, for a dry look at the catalog)."""
-        models = Model.catalog()
+        models = Model.catalog() if candidates is None else candidates
         if runnable is not None:
             return [m for m in models if runnable(m)]
         return [m for m in models if not available_only or m.is_available()]
@@ -396,62 +452,91 @@ class Criteria:
         return all(t.holds(model) for t in self.against_the_board())
 
     def qualifying(
-        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
+        self,
+        available_only: bool = True,
+        runnable: Callable[[Model], bool] | None = None,
+        candidates: list[Model] | None = None,
     ) -> list[Model]:
-        """Every model clearing EVERY term, cheapest first.
+        """Every model clearing EVERY term, ranked by a bare metric or otherwise by price.
 
-        Cheapest-first is the point: the criterion is a FLOOR on quality, and under that floor
-        thrift decides — the opposite of a pin, whose price is whatever it happened to cost the
-        day it was typed. "Cheapest" means :attr:`Model.thrift`: a known price beats an unknown
-        one, and at one price the better measure wins.
+        A bare numeric metric means "best measured value". Hard comparisons and bare capability
+        terms remain filters. With no bare metric, the historical cheapest-clearing behavior
+        remains: known price, then cost, then model id.
         """
         bars = self.against_the_board()
-        fit = [m for m in self._pool(available_only, runnable)
+        fit = [m for m in self._pool(available_only, runnable, candidates)
                if all(t.holds(m) for t in bars)]
+        ranking_fields = tuple(term.field for term in bars if term.ranking)
+        if ranking_fields:
+            variables = [Variables.by_name(name) for name in ranking_fields]
+            if all(variable is not None for variable in variables):
+                fit.sort(key=lambda model: (
+                    *[variable.read(model) * (-1 if variable.higher_is_better else 1)
+                      for variable in variables if variable is not None],
+                    model.thrift[0], model.thrift[1], model.id,
+                ))
+                return fit
         fit.sort(key=lambda m: m.thrift)
         return fit
 
-    def choose(
-        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None,
+    def ranked(
+        self,
+        available_only: bool = True,
+        runnable: Callable[[Model], bool] | None = None,
         weights: str = "",
-    ) -> Model | None:
-        """The one to use, or None. NEVER a fallback: silently resolving to some other model is
-        worse than no criterion — it looks like it worked."""
-        fit = self.qualifying(available_only, runnable)
+        candidates: list[Model] | None = None,
+    ) -> list[Model]:
+        """Eligible candidates in the same order used for execution and selection previews."""
+        fit = self.qualifying(available_only, runnable, candidates)
         parsed = _parse_weights(weights)
         if parsed:
             weighted: list[tuple[float, Model]] = []
             for model in fit:
                 values = [(Variables.by_name(name), weight) for name, weight in parsed.items()]
-                scores = [(variable.read(model) if variable else None, weight) for variable, weight in values]
+                scores = [(_weighted_value(variable, model), weight) for variable, weight in values]
                 numeric = [(score, weight) for score, weight in scores if score is not None]
-                if len(numeric) == len(scores) and all(0 <= score <= 1 for score, _ in numeric):
+                if len(numeric) == len(scores):
                     weighted.append((sum(score * weight for score, weight in numeric), model))
             weighted.sort(key=lambda pair: (-pair[0], pair[1].thrift, pair[1].id))
-            return weighted[0][1] if weighted else None
-        return fit[0] if fit else None
+            return [model for _score, model in weighted]
+        return fit
+
+    def choose(
+        self,
+        available_only: bool = True,
+        runnable: Callable[[Model], bool] | None = None,
+        weights: str = "",
+        candidates: list[Model] | None = None,
+    ) -> Model | None:
+        """The selected model, or None when the requested policy cannot be satisfied."""
+        ranked = self.ranked(available_only, runnable, weights, candidates)
+        return ranked[0] if ranked else None
 
     @staticmethod
     def validate_weights(weights: str) -> None:
         _parse_weights(weights)
 
     def explain(
-        self, available_only: bool = True, runnable: Callable[[Model], bool] | None = None
+        self,
+        available_only: bool = True,
+        runnable: Callable[[Model], bool] | None = None,
+        candidates: list[Model] | None = None,
     ) -> str:
         """Why nothing qualified — which term excluded everyone, and how close anyone got."""
-        pool = self._pool(available_only, runnable)
+        pool = self._pool(available_only, runnable, candidates)
         if not pool:
             if runnable is None:
                 return "no model is configured at all — add a provider key first"
             return ("nothing in the catalog is runnable through this CLI — it runs its own vendor's "
                     "models through its login; anything else needs a route and that provider's key")
-        fit = self.qualifying(available_only, runnable)
+        fit = self.qualifying(available_only, runnable, candidates)
         if fit:
             # The bar AS APPLIED, not as typed: `>= 50%` once picked a model ranked 81st while the
             # line said only "50%" — the two numbers couldn't be reconciled and the right answer
             # looked wrong. A percentile prints as the number it came out as.
             applied = " and ".join(str(t) for t in self.against_the_board())
-            return f"{len(fit)} model(s) clear {applied}; cheapest is {fit[0].id}"
+            selection = "best measured match" if any(term.ranking for term in self.terms) else "cheapest match"
+            return f"{len(fit)} model(s) clear {applied}; {selection} is {fit[0].id}"
         lines = []
         for term in self.against_the_board():
             # A board-relative bar always names itself, even alone: "nobody clears 99" reads only

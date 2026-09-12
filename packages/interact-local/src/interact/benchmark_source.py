@@ -17,15 +17,17 @@ Two constraints shape this:
 """
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from interact.model_catalog import describe_age
+from interact.models import Benchmark
 from interact.ttl_cache import TTL_SECONDS, TTLCache, age_of
 
-_ENDPOINT = "https://artificialanalysis.ai/api/v2/data/llms/models"
+_ENDPOINT = "https://artificialanalysis.ai/api/v2/language/models/free"
 _KEY_ENV = "ARTIFICIAL_ANALYSIS_API_KEY"
 
 
@@ -35,7 +37,10 @@ class Score:
     creator: str
     #: Artificial Analysis's composite intelligence index. Their number, their methodology —
     #: reported as theirs rather than restated as an interact judgement.
-    intelligence: float
+    intelligence: float | None = None
+    #: Values keyed by Benchmark.id. The source field → benchmark mapping comes from the
+    #: benchmark registry, so an unregistered or unverified API field cannot become a criterion.
+    metrics: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +67,14 @@ class Board:
             )
         return f"Artificial Analysis · {describe_age(self.age_seconds)}"
 
+    def metric_scores(self, benchmark_id: str) -> dict[str, float]:
+        """Return one registered metric's current source rows, without nulls."""
+        return {
+            score.name: score.metrics[benchmark_id]
+            for score in self.scores
+            if benchmark_id in score.metrics
+        }
+
 
 #: Never inside the package — these scores are not redistributable (see the licensing note).
 _CACHE = TTLCache("benchmark_scores.json", TTL_SECONDS)
@@ -76,7 +89,7 @@ def _num(value) -> float | None:
         out = float(value)
     except (TypeError, ValueError):
         return None
-    return out
+    return out if math.isfinite(out) else None
 
 
 def _from_artificial_analysis(payload: dict) -> list[Score]:
@@ -84,16 +97,31 @@ def _from_artificial_analysis(payload: dict) -> list[Score]:
     dropped rather than listed at zero, which would rank it below every measured model."""
     rows = payload.get("data") if isinstance(payload, dict) else payload
     out: list[Score] = []
+    source_fields = {
+        benchmark.source_field: benchmark.id
+        for benchmark in Benchmark.registry()
+        if benchmark.source_field
+    }
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         evals = row.get("evaluations") or {}
-        value = _num(evals.get("artificial_analysis_intelligence_index"))
-        if value is None:
+        values = {
+            benchmark_id: value
+            for source_field, benchmark_id in source_fields.items()
+            if (value := _num(evals.get(source_field))) is not None
+        }
+        intelligence = _num(evals.get("artificial_analysis_intelligence_index"))
+        if intelligence is not None:
+            values.setdefault("intelligence", intelligence)
+        if not values:
             continue
         creator = (row.get("model_creator") or {}).get("name") or "unknown"
-        out.append(Score(name=str(row.get("name") or "?"), creator=str(creator), intelligence=value))
-    out.sort(key=lambda s: s.intelligence, reverse=True)
+        out.append(Score(
+            name=str(row.get("name") or "?"), creator=str(creator),
+            intelligence=intelligence, metrics={k: v for k, v in values.items() if k != "intelligence"},
+        ))
+    out.sort(key=lambda s: (s.intelligence is not None, s.intelligence or float("-inf")), reverse=True)
     return out
 
 
@@ -103,7 +131,11 @@ def _read_cache() -> Board | None:
         return None
     try:
         scores = [
-            Score(name=s["name"], creator=s.get("creator", "unknown"), intelligence=float(s["intelligence"]))
+            Score(
+                name=s["name"], creator=s.get("creator", "unknown"),
+                intelligence=float(s["intelligence"]) if s.get("intelligence") is not None else None,
+                metrics={name: float(value) for name, value in (s.get("metrics") or {}).items()},
+            )
             for s in raw.get("scores", [])
         ]
     except (ValueError, KeyError, TypeError):
@@ -118,7 +150,8 @@ def _write_cache(board: Board) -> None:
     _CACHE.write({
         "source": board.source,
         "fetched_at": board.fetched_at,
-        "scores": [{"name": s.name, "creator": s.creator, "intelligence": s.intelligence}
+        "scores": [{"name": s.name, "creator": s.creator, "intelligence": s.intelligence,
+                    "metrics": s.metrics}
                    for s in board.scores],
     })
 

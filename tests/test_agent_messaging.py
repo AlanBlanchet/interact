@@ -6,12 +6,13 @@ agree on every refusal, so the checks live here once rather than being written t
 """
 
 import asyncio
+import json
 import sys
 import threading
 
 import pytest
 
-from interact.agents import messaging
+from interact.agents import agent_queue, messaging
 from interact.agents import registry as reg
 from interact.agents.policy import Policy
 from interact.agents.providers import PermissionMode
@@ -190,6 +191,28 @@ def test_delivery_queues_against_vendor_session_not_interact_id(monkeypatch):
     assert agent_queue.items("interact-run")[0].message_id
 
 
+def test_peer_message_carries_registry_model_context_without_inventing_capability(monkeypatch):
+    _continuation_policy(monkeypatch)
+    _record(run_id="recipient", provider="fake", provider_session_id="vendor-thread")
+    reg.register(
+        run_id="sender", pid=None, provider="fake", name="source reviewer", agent="tester",
+        model="fixture/reviewer", requested_criterion="aa.intelligence >= 35", reasoning="low",
+    )
+    monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
+
+    delivery = messaging.deliver_message("recipient", "Verified files are attached.", sender="sender")
+    queued = agent_queue.items("recipient")[0]
+    message = reg.message_for("recipient", queued.message_id)
+
+    assert delivery.state == "queued"
+    header = json.loads(message.text.splitlines()[1])
+    assert header["model"] == "fixture/reviewer"
+    assert header["reasoning"] == "low"
+    assert header["requested_criterion"] == "aa.intelligence >= 35"
+    assert header["benchmark_evidence"].startswith("not recorded")
+    assert message.text.endswith("Verified files are attached.")
+
+
 def test_stopped_delivery_resumes_with_fresh_policy_and_tracks_new_pid(monkeypatch):
     from interact.agents import agent_queue
     provider = _continuation_policy(monkeypatch)
@@ -325,6 +348,7 @@ def test_queued_reply_lookup_uses_persisted_attempt_anchor(monkeypatch):
     reply = asyncio.run(messaging.wait_for_reply(delivery))
 
     assert delivery.state == "replied" and "resumed reply" in reply
+    assert "[Interact agent provenance]" in reply
 
 
 def test_record_and_delivery_share_the_transcript_message_limit(monkeypatch):

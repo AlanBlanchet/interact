@@ -120,6 +120,9 @@ def deliver_message(run_id: str, message: str, *, sender: str | None = None) -> 
                 run_id=run.run_id,
             )
         message_id = secrets.token_hex(16)
+        origin = reg.get_run(speaker)
+        if origin is not None:
+            message = origin.handoff_header() + message
         try:
             # The queue intent is durable before either transcript append. A crash after this
             # point leaves a recoverable pending item instead of an invisible message.
@@ -204,7 +207,9 @@ async def wait_for_reply(delivery: Delivery) -> str:
         delivery.state = "error"
         return "ERROR: resumed agent exited without a reply event."
     delivery.state = "replied"
-    return f"{delivery.text}\n{replies[-1]}"
+    origin = reg.get_run(delivery.run_id)
+    header = origin.handoff_header() if origin is not None else ""
+    return f"{delivery.text}\n{header}{replies[-1]}"
 
 
 def sender_id() -> str:
