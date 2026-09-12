@@ -469,3 +469,10 @@ test("the rail's first action starts a SESSION, not a staffing decision", () => 
   assert.ok(CHIPS.some((c) => c.command === "interact.agents.spawn"),
     "the deliberate one-specialist path must stay reachable");
 });
+
+
+test("the visible Settings control opens the dashboard while unknown commands stay blocked", () => {
+  assert.deepEqual(railAction({ type: "command", command: "interact.openDashboard" }),
+    { kind: "command", command: "interact.openDashboard" });
+  assert.equal(railAction({ type: "command", command: "workbench.action.reloadWindow" }), null);
+});

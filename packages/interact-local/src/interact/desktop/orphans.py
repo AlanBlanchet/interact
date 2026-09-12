@@ -118,9 +118,9 @@ def is_orphan(server: XServer) -> bool:
     return _parent_is_reaper(server.ppid)
 
 
-#: Where our sandbox profiles live. A path under here is one WE created, per display, so killing
+#: Where our sandbox profiles live. A child path here is one WE created, per display, so killing
 #: what holds it cannot reach the user's own editor — which uses ~/.config/Code.
-_PROFILE_ROOT = "/.interact/out/sandbox-profiles/"
+_PROFILE_ROOT = Path.home() / ".interact" / "out" / "sandbox-profiles"
 
 
 def _process_table() -> list[tuple[int, str]]:
@@ -130,14 +130,7 @@ def _process_table() -> list[tuple[int, str]]:
     ``--user-data-dir`` far into a several-thousand-character command line, so the flag fell off
     the end — sweep matched nothing while ``pgrep`` found four processes holding the profile.
     """
-    rows: list[tuple[int, str]] = []
-    for pid in _all_pids():
-        try:
-            raw = (_PROC / str(pid) / "cmdline").read_bytes()
-        except OSError:
-            continue  # gone, or another user's
-        rows.append((pid, raw.replace(b"\0", b" ").decode("utf-8", "replace")))
-    return rows
+    return [(pid, cmdline) for pid in _all_pids() if (cmdline := cmdline_of(pid)) is not None]
 
 
 def profile_clients(profile: str) -> list[int]:
@@ -152,16 +145,16 @@ def profile_clients(profile: str) -> list[int]:
     Refuses any path outside our own profile directory: that constraint is the entire safety
     argument, since the user's real editor profile would otherwise match.
     """
-    if not profile or _PROFILE_ROOT not in profile:
+    profile_path = Path(profile)
+    if not profile or profile_path == _PROFILE_ROOT or _PROFILE_ROOT not in profile_path.parents:
         return []
-    me = os.getpid()
     return [pid for pid, args in _process_table()
-            if pid != me and f"--user-data-dir={profile}" in args]
+            if f"--user-data-dir={profile}" in args.split() and not _own_handle(pid)]
 
 
-def kill_profile_clients(profile: str) -> list[int]:
-    """Terminate whatever still holds a sandbox profile; returns the pids signalled."""
-    return [pid for pid in profile_clients(profile) if _terminate(pid)]
+def kill_profile_clients(profile: str, *, grace: float = 1.5) -> list[int]:
+    """Terminate profile holders, escalating after a bounded grace period."""
+    return _kill_escalating(profile_clients(profile), grace)
 
 
 def display_of(cmdline: str) -> str | None:
@@ -231,8 +224,49 @@ def _proc_display(pid: int) -> str | None:
     return None
 
 
+def _proc_ppid(pid: int) -> int | None:
+    """A process's parent, read from its own /proc status — None once it is gone."""
+    try:
+        status = (_PROC / str(pid) / "status").read_text()
+    except OSError:
+        return None
+    for line in status.splitlines():
+        if not line.startswith("PPid:"):
+            continue
+        try:
+            return int(line.split()[1])
+        except (IndexError, ValueError):
+            return None
+    return None
+
+
+def cmdline_of(pid: int) -> str | None:
+    """A process's full command line, read untruncated from /proc."""
+    try:
+        raw = (_PROC / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return None
+    return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+
+
+def _own_ancestors() -> set[int]:
+    """Pids in this server's current parent chain, stopping at an unreadable or root entry."""
+    ancestors: set[int] = set()
+    parent = _proc_ppid(os.getpid())
+    while parent not in (None, 0, 1) and parent not in ancestors:
+        ancestors.add(parent)
+        parent = _proc_ppid(parent)
+    return ancestors
+
+
+def _own_handle(pid: int) -> bool:
+    """Whether this process is this server, its ancestor, or a direct child handle."""
+    me = os.getpid()
+    return pid == me or pid in _own_ancestors() or _proc_ppid(pid) == me
+
+
 def display_clients(display: str | None) -> list[int]:
-    """Every process still bound to a sandbox display — minus this one.
+    """Every process still bound to a sandbox display — minus this one's handles.
 
     Killing the launcher's process GROUP misses these: Chromium (so VS Code and every Electron
     app) puts its helpers in their own session, so `killpg` never reaches them. They outlive the
@@ -240,12 +274,35 @@ def display_clients(display: str | None) -> list[int]:
     """
     if not display or display == os.environ.get("DISPLAY"):
         return []  # never sweep the user's real session — that would kill their whole desktop
-    me = os.getpid()
-    return [pid for pid in _all_pids() if pid != me and _proc_display(pid) == display]
+    return [pid for pid in _all_pids()
+            if _proc_display(pid) == display and not _own_handle(pid)]
 
 
 def _still_alive(pid: int) -> bool:
     return process_alive(pid)
+
+
+def _await_exit(pids: list[int], timeout: float) -> list[int]:
+    """Wait, bounded by ``timeout``, for signalled processes to exit."""
+    deadline = time.monotonic() + timeout
+    alive = [pid for pid in pids if _still_alive(pid)]
+    while alive and time.monotonic() < deadline:
+        time.sleep(0.05)
+        alive = [pid for pid in alive if _still_alive(pid)]
+    return alive
+
+
+def _kill_escalating(pids: list[int], grace: float) -> list[int]:
+    """SIGTERM, bounded grace, then SIGKILL for survivors."""
+    signalled = [pid for pid in pids if _terminate(pid)]
+    stubborn = _await_exit(signalled, grace)
+    for pid in stubborn:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    _await_exit(stubborn, grace)
+    return signalled
 
 
 def kill_display_clients(display: str | None, *, grace: float = 1.5) -> list[int]:
@@ -255,17 +312,4 @@ def kill_display_clients(display: str | None, *, grace: float = 1.5) -> list[int
     socket open, and the next launch hands its window to that displayless zombie instead of
     opening one, so the sandbox stays empty with no error anywhere.
     """
-    targets = display_clients(display)
-    signalled = [pid for pid in targets if _terminate(pid)]
-    if not signalled:
-        return []
-    deadline = time.monotonic() + grace
-    while time.monotonic() < deadline and any(_still_alive(pid) for pid in signalled):
-        time.sleep(0.1)
-    for pid in signalled:
-        if _still_alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-    return signalled
+    return _kill_escalating(display_clients(display), grace)

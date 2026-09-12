@@ -398,7 +398,8 @@ export function railAction(message: unknown): RailAction | null {
     return { kind: "agent", id: id || null };
   }
   if (msg.type === "command" && typeof msg.command === "string") {
-    const offered = CHIPS.some((c) => c.command === msg.command) || msg.command === SCOPE_COMMAND;
+    const offered = CHIPS.some((c) => c.command === msg.command) || msg.command === SCOPE_COMMAND
+      || msg.command === "interact.openDashboard";
     return offered ? { kind: "command", command: msg.command } : null;
   }
   if (msg.type === "open" && typeof msg.runId === "string" && msg.runId) {

@@ -150,6 +150,18 @@ def test_the_server_and_its_own_direct_children_are_never_clients(monkeypatch):
     assert orphans.display_clients(":99") == [13]
 
 
+def test_the_server_ancestors_are_never_clients(monkeypatch):
+    parent = 20
+    monkeypatch.setattr(orphans, "_proc_display", lambda pid: ":99")
+    monkeypatch.setattr(orphans, "_all_pids", lambda: [parent, 13])
+    monkeypatch.setattr(
+        orphans,
+        "_proc_ppid",
+        lambda pid: parent if pid == os.getpid() else 1,
+    )
+    assert orphans.display_clients(":99") == [13]
+
+
 @pytest.mark.parametrize("display", ["", None, ":0"])
 def test_it_refuses_to_sweep_the_real_session_display(monkeypatch, display):
     """A bug that pointed this at the user's own display would kill their whole desktop."""
@@ -338,6 +350,12 @@ def test_it_refuses_a_profile_outside_our_own_sandbox_directory(monkeypatch, pro
     the user's real profile — or their home — and sweep their editor."""
     monkeypatch.setattr(orphans, "_process_table", lambda: [(10, f"code --user-data-dir={profile}")])
     assert orphans.profile_clients(profile) == []
+
+
+def test_it_refuses_a_lookalike_profile_root(monkeypatch, tmp_path):
+    profile = tmp_path / ".interact" / "out" / "sandbox-profiles" / "editor-99"
+    monkeypatch.setattr(orphans, "_process_table", lambda: [(10, f"code --user-data-dir={profile}")])
+    assert orphans.profile_clients(str(profile)) == []
 
 
 def test_the_process_table_is_read_untruncated(tmp_path, monkeypatch):
