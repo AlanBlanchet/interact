@@ -103,7 +103,10 @@ export function railStyle(): string {
 body {
   margin: 0;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
+  --bd-text-body: max(15px, var(--vscode-font-size, 13px));
+  --bd-text-small: max(14px, calc(var(--vscode-font-size, 13px) * .9333));
+  font-size: var(--bd-text-body);
+  line-height: 1.5;
   color: var(--vscode-foreground);
   background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 
@@ -198,7 +201,7 @@ body ::-webkit-scrollbar-thumb:hover {
     color-mix(in srgb, var(--bd-wood-hi) 55%, var(--bd-woodplate));
   box-shadow: 2px 2px 0 var(--bd-shadow);
 }
-.scope::after { content: " ⌄"; opacity: .8; font-size: .85em; }
+.scope::after { content: " ⌄"; opacity: .8; font-size: var(--bd-text-small); }
 .scope:hover { background: color-mix(in srgb, var(--bd-wood) 88%, var(--bd-ink)); }
 .scope:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--bd-shadow); }
 .scope:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
@@ -218,13 +221,13 @@ body ::-webkit-scrollbar-thumb:hover {
 .roster {
   container-type: inline-size;
   --bd-row-columns:
-    18px minmax(9rem, 2fr) minmax(5rem, .9fr) minmax(9rem, 2fr)
-    minmax(4rem, .8fr) minmax(7rem, 1.2fr) minmax(4.5rem, .8fr)
-    minmax(5rem, .8fr) minmax(5rem, .8fr) minmax(4rem, .6fr) minmax(12rem, 1.4fr);
+    18px minmax(9rem, 2fr) minmax(6.5rem, .9fr) minmax(9rem, 2fr)
+    minmax(5rem, .8fr) minmax(7rem, 1.2fr) minmax(4.5rem, .8fr)
+    minmax(5rem, .8fr) minmax(5rem, .8fr) minmax(4rem, .6fr) minmax(15rem, 1.4fr);
 }
 .views { display: flex; gap: 2px; margin: 4px 0 2px; }
 .views .view {
-  font: inherit; font-size: .85em; cursor: pointer; padding: 1px 8px; min-height: 22px;
+  font: inherit; font-size: var(--bd-text-small); cursor: pointer; padding: 1px 8px; min-height: 32px;
   color: ${DIM}; background: transparent;
   border: 1px solid var(--vscode-panel-border, transparent); border-radius: 5px;
 }
@@ -257,10 +260,11 @@ body ::-webkit-scrollbar-thumb:hover {
 }
 .columnHead {
   padding: 4px 10px 2px;
-  color: ${DIM}; font-size: .72em; letter-spacing: .06em; text-transform: uppercase;
+  color: ${DIM}; font-size: var(--bd-text-small); letter-spacing: .06em; text-transform: uppercase;
   border-bottom: 1px solid var(--bd-line);
 }
 .columnHead span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-identity, .run-facts { display: contents; }
 .runs .who {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 4.5em;
 }
@@ -282,18 +286,25 @@ body ::-webkit-scrollbar-thumb:hover {
    one would shift every later fact left in that row and break column alignment. */
 /* A table needs width. Below this it stops being a comparison — 112px of horizontal overflow and
    seven-character names — so it stands down to the stacked reading rather than overflowing. */
-@container (max-width: 1160px) {
+@container (max-width: 1380px) {
   .runs .row, .view-table .runs .row {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+    display: grid; grid-template-columns: minmax(0, 66ch) auto;
+    justify-content: start; align-items: center; gap: 5px 14px; padding-block: 10px;
   }
-  .runs .who { flex: 1 1 12rem; }
-  .runs .oneliner { flex: 1 1 100%; order: 20; }
+  .run-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; grid-column: 1; grid-row: 1; min-width: 0; }
+  .runs .who { flex: 0 1 auto; font-weight: 650; }
+  .runs .oneliner { grid-column: 1; grid-row: 2; color: var(--bd-fg); }
+  .run-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; grid-column: 1; grid-row: 3; min-width: 0; }
   .runs .provider, .runs .model, .runs .effort, .runs .score, .runs .when, .runs .cost {
-    flex: 0 1 auto;
+    flex: 0 1 auto; max-width: 100%;
   }
-  .runs .acts { margin-left: auto; grid-template-columns: repeat(2, max-content); }
-  .runs .row > :empty { display: none; }
+  .runs .acts { grid-column: 2; grid-row: 1 / span 3; grid-template-columns: repeat(2, max-content); }
+  .runs .row > :empty, .run-facts > :empty { display: none; }
   .columnHead { display: none; }
+}
+@container (max-width: 560px) {
+  .runs .row, .view-table .runs .row { grid-template-columns: minmax(0, 1fr); }
+  .runs .acts { grid-column: 1; grid-row: 4; justify-self: start; }
 }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
@@ -327,7 +338,7 @@ body ::-webkit-scrollbar-thumb:hover {
 .seek::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .seek:focus { border-color: color-mix(in srgb, var(--bd-deep) 70%, var(--bd-fg)); }
 .seek:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-.crumbs { display: flex; align-items: baseline; gap: 5px; margin-top: 7px; font-size: .92em; }
+.crumbs { display: flex; align-items: baseline; gap: 5px; margin-top: 7px; font-size: var(--bd-text-small); }
 .crumb {
   font: inherit; cursor: pointer; padding: 0 5px; border-radius: 0;
   color: var(--bd-teal); background: transparent; border: 1px solid transparent;
@@ -340,7 +351,7 @@ body.vscode-light .crumb, body.vscode-high-contrast-light .crumb { color: var(--
 /* The role a conversation was held with. Quiet, but a real control: it is how you get from one
    engagement to every other engagement with the same colleague. */
 .role {
-  font: inherit; font-size: .82em; cursor: pointer;
+  font: inherit; font-size: var(--bd-text-small); cursor: pointer;
   padding: 0 5px; border-radius: 0; white-space: nowrap;
   color: ${DIM}; background: transparent;
   border: 1px solid var(--bd-line);
@@ -350,7 +361,7 @@ body.vscode-light .crumb, body.vscode-high-contrast-light .crumb { color: var(--
 /* The ×N task counter used to render as a BARE NATIVE BUTTON — the loudest "IDE widget" on the
    whole board, and no rule here ever addressed it. A small pixel counter chip now. */
 .tasks {
-  font: inherit; font-size: .78em; line-height: 1.2; cursor: pointer;
+  font: inherit; font-size: var(--bd-text-small); line-height: 1.2; cursor: pointer;
   margin-left: 5px; padding: 0 4px; border-radius: 0;
   color: var(--bd-fg); background: var(--bd-chrome);
   border: 1px solid var(--bd-line);
@@ -373,7 +384,7 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
 }
 
 .legend {
-  font-size: 10px;
+  font-size: var(--bd-text-small);
   letter-spacing: .04em;
   /* Legible: at .6 it measured 3.73:1, under the 4.5:1 floor, on the one line that says what the
      numbers beneath it are. */
@@ -388,7 +399,7 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 10px;
+  font-size: var(--bd-text-small);
   opacity: .7;
 }
 
@@ -409,7 +420,7 @@ ul.runs { list-style: none; margin: 0; padding: 4px 0; }
    grants about a pixel of overhang, and the tilt only has to say "pressed by hand". */
 .stamp {
   display: inline-flex; align-items: center;
-  font-size: .78em; font-weight: 700; letter-spacing: .11em; line-height: 1.1;
+  font-size: var(--bd-text-small); font-weight: 700; letter-spacing: .11em; line-height: 1.1;
   padding: 1px 4px 2px; border-radius: 0; white-space: nowrap;
   color: var(--accent, var(--bd-fg));
   border: 2px solid currentColor;
@@ -460,7 +471,7 @@ body.vscode-light .mark, body.vscode-high-contrast-light .mark {
   box-shadow: 2px 2px 0 var(--bd-shadow);
 }
 .act {
-  font: inherit; line-height: 1; padding: 4px 5px; min-width: 0; min-height: 26px;
+  font: inherit; line-height: 1.35; padding: 5px 7px; min-width: 0; min-height: 32px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   border: 1px solid transparent; border-radius: 0;
   background: transparent; color: ${DIM}; cursor: pointer;
@@ -476,13 +487,19 @@ body.vscode-light .mark, body.vscode-high-contrast-light .mark {
   font-weight: 500; min-width: 0; flex: 1 1 auto;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.when, .cost { flex: none; color: ${DIM}; font-size: .85em; }
-.provider, .model, .effort { color: ${DIM}; font-size: .85em; }
+.when, .cost { flex: none; color: ${DIM}; font-size: var(--bd-text-small); }
+.provider, .model, .effort { color: ${DIM}; font-size: var(--bd-text-small); }
 /* The grouped row's second line: what the speaking errand is about, clipped the same way. */
 .oneliner {
-  min-width: 0; color: ${DIM}; font-size: .9em;
+  min-width: 0; color: ${DIM}; font-size: var(--bd-text-small);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.task-detail > summary { cursor: pointer; display: flex; align-items: baseline; gap: 6px; min-height: 24px; }
+.task-detail > summary::before { content: "▸"; flex: none; }
+.task-detail[open] > summary::before { content: "▾"; }
+.task-detail > summary > span { overflow: hidden; text-overflow: ellipsis; }
+.task-detail > summary:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+.task-detail > p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; line-height: 1.5; color: var(--bd-fg); }
 /* Band headings are PLAQUES — the signs the building hangs on every department, pressed onto the
    board with a terracotta pushpin. Deep-teal plate mixed toward ink so paper text holds 6.8:1 in
    both themes; the same hard shadow every sign in the building throws. */
@@ -490,7 +507,7 @@ body.vscode-light .mark, body.vscode-high-contrast-light .mark {
   display: inline-block; position: relative;
   margin: 12px 10px 4px; padding: 3px 8px 3px 17px;
   color: var(--bd-papertext); background: var(--bd-plate);
-  font-size: .74em; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  font-size: var(--bd-text-small); font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
   box-shadow: 2px 2px 0 var(--bd-shadow);
 }
 /* The pin: a terracotta head with a glint on its lit shoulder and shade under it — the same
@@ -503,7 +520,7 @@ body.vscode-light .mark, body.vscode-high-contrast-light .mark {
 }
 details.ledger, details.staffBox { margin: 6px 0 0; }
 details.ledger > summary, details.staffBox > summary {
-  cursor: pointer; padding: 4px 10px; color: ${DIM}; font-size: .9em;
+  cursor: pointer; padding: 4px 10px; color: ${DIM}; font-size: var(--bd-text-small);
   list-style: none;
 }
 details.ledger > summary::-webkit-details-marker,
@@ -536,7 +553,7 @@ details.staffBox > summary.staffHead:hover {
    lamp's own --wp-h3 ring. */
 .brain {
   margin-left: 6px; padding: 0 4px;
-  font-size: .8em; border-radius: 0;
+  font-size: var(--bd-text-small); border-radius: 0;
   color: color-mix(in srgb, var(--vscode-charts-yellow, #d7ba7d) 55%, var(--bd-fg));
   border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow, #d7ba7d) 55%, var(--bd-bg));
   background: color-mix(in srgb, var(--vscode-charts-yellow, #d7ba7d) 12%, var(--bd-bg));
@@ -659,13 +676,13 @@ export function railBody(
       <li class="row" data-run="${esc(r.run.run_id)}" data-attention="${esc(r.attention)}"${
         r.depth ? ' data-report="1"' : ""}${r.brain ? ' data-brain="1"' : ""}
         style="--accent: var(${esc(voice.tinted ? voice.accent : "--vscode-descriptionForeground")})">
-        <span class="mark">${esc(voice.mark)}</span>
+        <span class="run-identity"><span class="mark">${esc(voice.mark)}</span>
         <span class="who">${esc(who)}${
           (r.tasks ?? 1) > 1 ? `<button class="tasks" data-agent="${esc(roleOf(r.run).id)}" title="Show all ${r.tasks} tasks">×${r.tasks}</button>` : ""}${
           r.brain ? '<span class="brain" title="the agent you asked — it put the others to work">brain</span>' : ""}</span>
-        <span class="stamp" title="${esc(voice.phrase)}">${esc(voice.word)}</span>
-        <span class="oneliner">${errand ? esc(errand) : ""}</span>
-        <span class="provider" title="${esc(provider ? `Provider ${provider}` : "No provider recorded")}">${esc(provider)}</span>
+        <span class="stamp" title="${esc(voice.phrase)}">${esc(voice.word)}</span></span>
+        ${errand ? `<details class="oneliner task-detail" data-fold-key="task:${esc(r.run.run_id)}"><summary title="Expand full task"><span>${esc(errand)}</span></summary><p>${esc(r.run.task ?? "")}</p></details>` : '<span class="oneliner"></span>'}
+        <span class="run-facts"><span class="provider" title="${esc(provider ? `Provider ${provider}` : "No provider recorded")}">${esc(provider)}</span>
         <span class="model" title="${esc(model || "No model recorded")}">${esc(model)}</span>
         <span class="effort" title="${esc(effort ? `Reasoning ${effort}` : "No reasoning level recorded")}">${esc(effort)}</span>
         ${(() => {
@@ -690,7 +707,7 @@ export function railBody(
           return `<span class="score" title="${esc(sc.title)}">${esc(sc.text)}</span>`;
         })()}
         <span class="when">${esc(agoOf(r.run.started_at))}</span>
-        <span class="cost">${r.attention !== "ready" && bill != null ? `$${bill.toFixed(2)}` : ""}</span>
+        <span class="cost">${r.attention !== "ready" && bill != null ? `$${bill.toFixed(2)}` : ""}</span></span>
         <span class="acts">${actionsFor(r.run).map((a) =>
           `<button class="act" data-action="${esc(a.id)}" data-command="${esc(a.command)}"` +
           ` title="${esc(a.label)}" aria-label="${esc(a.label)}"><span class="actGlyph">${esc(a.mark)}</span>` +
@@ -777,6 +794,9 @@ export function railScript(): string {
   document.querySelectorAll(".row").forEach((r) => {
     r.addEventListener("click", () => api.postMessage({ type: "open", runId: r.dataset.run }));
   });
+  document.querySelectorAll(".task-detail").forEach((detail) => {
+    detail.addEventListener("click", (event) => event.stopPropagation());
+  });
   {
     // The filter a professional reaches for before scrolling. Client-side, over what the row SAYS,
     // because that is what the person is matching on too.
@@ -830,7 +850,7 @@ export function railScript(): string {
     // repaint (a model picked, a run finishing) used to fold ON STAFF and empty the filter —
     // applying one profile to N agents cost a re-expand per agent.
     var open = {};
-    host.querySelectorAll("details[class]").forEach(function (d) { open[d.className] = d.open; });
+    host.querySelectorAll("details[class]").forEach(function (d) { open[d.dataset.foldKey || d.className] = d.open; });
     var seek = host.querySelector("#seek"), typed = seek ? seek.value : "", top = host.scrollTop;
     // ...and WHERE THE KEYBOARD WAS. The swap disconnects the focused row, so a reader tabbing
     // through the roster lost focus every time the list repainted — four times a second — and Tab
@@ -843,7 +863,7 @@ export function railScript(): string {
       var again = host.querySelector('li.row[data-run="' + focusedRun + '"]');
       if (again) again.focus();
     }
-    host.querySelectorAll("details[class]").forEach(function (d) { if (d.className in open) d.open = open[d.className]; });
+    host.querySelectorAll("details[class]").forEach(function (d) { const key = d.dataset.foldKey || d.className; if (key in open) d.open = open[key]; });
     bindRail();
     var seek2 = host.querySelector("#seek");
     if (seek2 && typed) { seek2.value = typed; seek2.dispatchEvent(new Event("input")); }

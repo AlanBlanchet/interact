@@ -8,9 +8,14 @@ body {
   font-family: var(--vscode-font-family);
   color: var(--vscode-editor-foreground);
   background: var(--vscode-editor-background);
-  font-size: 13px;
-  line-height: 1.5;
+  --ui-text-body: max(15px, var(--vscode-font-size, 13px));
+  --ui-text-small: max(14px, calc(var(--vscode-font-size, 13px) * .9333));
+  font-size: var(--ui-text-body);
+  line-height: 1.55;
 }
+
+input, select, textarea { font: inherit; }
+input:not([type="checkbox"]):not([type="radio"]), select { min-height: 36px; }
 
 /* Tab bar */
 .tab-bar {
@@ -29,7 +34,7 @@ body {
   border: none;
   color: var(--vscode-foreground);
   padding: 10px 16px;
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   font-weight: 500;
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -58,7 +63,7 @@ body {
   background: none;
   color: var(--vscode-foreground);
   opacity: 0.6;
-  font-size: 14px;
+  font-size: var(--ui-text-body);
   padding: 4px 8px;
   border-radius: 4px;
 }
@@ -92,7 +97,7 @@ body {
   font-weight: 600;
   margin-bottom: 14px;
   padding-bottom: 8px;
-  font-size: 14px;
+  font-size: var(--ui-text-body);
   letter-spacing: 0;
   color: var(--vscode-editor-foreground);
   border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
@@ -120,7 +125,7 @@ body {
 
 /* Group heading inside a cell (settings sections) */
 .group-heading {
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.6px;
@@ -183,9 +188,11 @@ button {
   padding: 5px 14px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--ui-text-body);
   font-family: var(--vscode-font-family);
-  white-space: nowrap;
+  line-height: 1.4;
+  min-height: 32px;
+  white-space: normal;
 }
 
 button:hover {
@@ -204,18 +211,18 @@ button.secondary:hover {
 .model-value {
   font-family: var(--vscode-editor-font-family);
   opacity: 0.85;
-  font-size: 12px;
+  font-size: var(--ui-text-small);
 }
 
 .row-label {
-  font-size: 13px;
+  font-size: var(--ui-text-small);
 }
 
 /* Tables */
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--ui-text-small);
 }
 
 th,
@@ -229,7 +236,7 @@ td {
 th {
   color: var(--vscode-descriptionForeground);
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -281,7 +288,7 @@ svg .empty-now {
 }
 .empty-hint {
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   padding: 4px 10px;
   border-radius: 5px;
   background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
@@ -298,7 +305,7 @@ svg .empty-now {
 
 svg .chart-label {
   fill: var(--vscode-descriptionForeground);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 svg .axis {
@@ -335,7 +342,7 @@ svg .chart-fill {
   gap: 10px;
 }
 .barlist-label {
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-foreground);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -365,7 +372,7 @@ svg .chart-fill {
 }
 .barlist-value {
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   font-variant-numeric: tabular-nums;
   color: var(--vscode-foreground);
   display: flex;
@@ -374,7 +381,7 @@ svg .chart-fill {
 }
 .barlist-pct {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   min-width: 3ch;
   text-align: right;
 }
@@ -403,7 +410,7 @@ svg .axis-grid {
   padding: 6px;
 }
 .small-multiples .panel-title {
-  font-size: 10px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-descriptionForeground);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -446,7 +453,7 @@ svg .donut-empty {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: var(--ui-text-small);
   font-weight: 600;
   line-height: 1.2;
   text-align: center;
@@ -465,7 +472,7 @@ svg .donut-empty {
   grid-template-columns: 10px 1fr auto;
   align-items: center;
   gap: 9px;
-  font-size: 12px;
+  font-size: var(--ui-text-small);
 }
 .legend-swatch {
   width: 10px;
@@ -501,7 +508,7 @@ svg .donut-empty {
   color: var(--vscode-foreground);
   border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   opacity: 0.7;
 }
 .range-btn:hover {
@@ -624,13 +631,13 @@ svg .donut-empty {
   min-width: 0;
 }
 .hero-label {
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--vscode-foreground);
 }
 .hero-sub {
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-descriptionForeground);
 }
 
@@ -649,7 +656,7 @@ svg .donut-empty {
   border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.22));
 }
 .group-control-label {
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-descriptionForeground);
   padding: 0 8px 0 6px;
 }
@@ -659,7 +666,7 @@ svg .donut-empty {
   border: none;
   padding: 4px 12px;
   border-radius: 5px;
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   opacity: 0.75;
   transition: background 0.12s, opacity 0.12s;
 }
@@ -728,14 +735,14 @@ svg .ribbon-line {
 }
 
 .aside-kicker {
-  font-size: 10px;
+  font-size: var(--ui-text-small);
   font-weight: 600;
   letter-spacing: 0.7px;
   text-transform: uppercase;
   color: var(--vscode-descriptionForeground);
 }
 .aside-peak {
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-foreground);
 }
 .aside-peak strong {
@@ -745,7 +752,7 @@ svg .ribbon-line {
 }
 .aside-note {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: var(--ui-text-small);
 }
 
 /* ---- time axis ---- */
@@ -761,7 +768,7 @@ svg .ribbon-line {
   top: 2px;
   transform: translateX(-100%);
   padding-right: 5px;
-  font-size: 10px;
+  font-size: var(--ui-text-small);
   font-variant-numeric: tabular-nums;
   color: var(--vscode-descriptionForeground);
   white-space: nowrap;
@@ -787,12 +794,12 @@ svg .ribbon-line {
   background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.08));
 }
 .group-caret {
-  font-size: 10px;
+  font-size: var(--ui-text-small);
   width: 10px;
   color: var(--vscode-descriptionForeground);
 }
 .group-name {
-  font-size: 13px;
+  font-size: var(--ui-text-small);
   font-weight: 600;
   color: var(--vscode-editor-foreground);
   overflow: hidden;
@@ -826,7 +833,7 @@ svg .ribbon-line {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11.5px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -843,10 +850,11 @@ svg .ribbon-line {
 
 /* ---- one lane ---- */
 
+.score-head-name, .score-head-hedge { display: block; }
 .board-score-col {
   min-width: 0;
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   opacity: .8;
   white-space: nowrap;
   overflow: hidden;
@@ -942,7 +950,7 @@ svg .g-fill {
    most disposable element on the line) to truncate first, instead of "worker-a" becoming
    "worke..." beside a fully-spelled model id. */
 .lane-name {
-  font-size: 12.5px;
+  font-size: var(--ui-text-small);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -952,7 +960,7 @@ svg .g-fill {
 }
 .chip {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--ui-text-small);
   line-height: 1.5;
   padding: 0 5px;
   border-radius: 4px;
@@ -976,7 +984,7 @@ svg .g-fill {
 }
 .ext-parent {
   flex: 0 0 auto;
-  font-size: 10.5px;
+  font-size: var(--ui-text-small);
   letter-spacing: 0.4px;
   color: var(--vscode-descriptionForeground);
   max-width: 90px;
@@ -991,7 +999,7 @@ svg .g-fill {
   align-items: center;
   gap: 5px;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-descriptionForeground);
 }
 .doing-text {
@@ -1180,11 +1188,11 @@ svg .g-fill {
   line-height: 1.35;
 }
 .meta-elapsed {
-  font-size: 12px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-foreground);
 }
 .meta-cost {
-  font-size: 10.5px;
+  font-size: var(--ui-text-small);
   color: var(--vscode-descriptionForeground);
 }
 .meta-unknown {

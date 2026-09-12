@@ -17,6 +17,13 @@ test("a conversation is named by what it is DOING, not by the CLI that ran it", 
   assert.equal(conversationTitle(r), "Fix the uinput attach race");
 });
 
+test("launch-role routing is not the conversation's visible task", () => {
+  const r = run({ run_id: "role-brief", agent: "app-engineer", task: "AGENT_ROLE: app-engineer. Improve the workflow editor" });
+  assert.equal(conversationTitle(r), "Improve the workflow editor");
+  assert.equal(r.task, "AGENT_ROLE: app-engineer. Improve the workflow editor");
+  assert.equal(conversationTitle(run({ run_id: "literal", task: "AGENT_ROLE: tester is part of this example" })), "AGENT_ROLE: tester is part of this example");
+});
+
 test("a name that merely repeats the CLI is not a name", () => {
   const r = run({ run_id: "abc12345", name: "claude", provider: "claude" });
   /* A bare id-slice reads as a typo, not an identifier — a critic mistook "run-fore" for one. */

@@ -14,6 +14,7 @@ from interact import desktop
 from interact.browser import BrowserManager
 from interact.config.settings import Config
 from interact.desktop import DesktopWindow
+from interact.desktop.nested import KillReport
 from interact.launch import (
     _resolve_nested_size, apply_launch_rewrites, needs_shell, split_env_assignments,
 )
@@ -292,11 +293,25 @@ async def launch_app(
             f"the wrong one). Drive the running app with:\n{existing}\n"
             f"To restart it, call reset_sandbox first, or launch a genuinely different command."
         )
-    replaced = 0
+    report = KillReport(killed=0)
     if replace:
         kill_apps = getattr(backend, "kill_apps", None)
         if kill_apps is not None:
-            replaced = await asyncio.to_thread(kill_apps)
+            report = await asyncio.to_thread(kill_apps)
+    if report.survivors:
+        return (
+            f"ERROR: replace stopped {report.killed} app(s) and swept {report.swept} leftover "
+            f"process(es), but successor was not launched. SURVIVED: "
+            f"{report.describe_survivors()}. Call reset_sandbox before retrying."
+        )
+    replaced_note = (
+        f" Replaced {report.killed} app(s) already in the sandbox." if report.killed else ""
+    )
+    if report.swept:
+        replaced_note += (
+            f" Swept {report.swept} leftover process(es) an earlier launch had left on the "
+            "sandbox display."
+        )
     # An exec that can't start once raised straight out of the tool, reaching the agent as
     # FastMCP's generic exception text instead of a guided ERROR — prefix consumed now, so the
     # name shown is the real command (#117).
@@ -346,9 +361,6 @@ async def launch_app(
     # target="nested:<title>" ambiguous the moment a second window exists — wid: cannot drift (#87).
     targets_out = "\n".join(
         f'  target="nested:{name}"  (unambiguous: target="nested:wid:{wid}")' for wid, name in windows
-    )
-    replaced_note = (
-        f" Replaced {replaced} app(s) already in the sandbox." if replaced else ""
     )
     return (
         f"Launched `{command}` in the sandbox.{flutter_note}{replaced_note} Drive it with:\n{targets_out}"

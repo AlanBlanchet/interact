@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import time
 
+from pydantic import BaseModel, Field, field_validator
+
 from interact.desktop import orphans
 
 from interact.desktop.backend import (
@@ -29,6 +31,33 @@ from interact.desktop.input import (
 from interact.desktop.video import _VideoSession, _ffmpeg_grab_args
 
 
+class KillReport(BaseModel):
+    """What replacing sandbox apps actually achieved.
+
+    ``killed`` counts tracked app leaders removed by their process groups. ``swept`` counts
+    detached helpers reached by the sandbox display/profile sweeps. Anything still alive is named
+    in ``survivors`` so launch_app never reports a hoped-for replacement as complete.
+    """
+
+    killed: int
+    swept: int = 0
+    survivors: dict[int, str] = Field(default_factory=dict)
+
+    @staticmethod
+    def executable_name(command: str) -> str:
+        """Keep only the executable basename in a survivor diagnostic."""
+        first = command.split(maxsplit=1)[0] if command else "unknown"
+        return os.path.basename(first) or first
+
+    @field_validator("survivors")
+    @classmethod
+    def normalize_survivors(cls, survivors: dict[int, str]) -> dict[int, str]:
+        return {pid: cls.executable_name(command) for pid, command in survivors.items()}
+
+    def describe_survivors(self) -> str:
+        return ", ".join(f"pid {pid} `{command}`" for pid, command in self.survivors.items())
+
+
 class NestedBackend(DesktopBackend):
     """An isolated nested X display the agent owns end to end.
 
@@ -47,6 +76,8 @@ class NestedBackend(DesktopBackend):
     _audio_module: str | None = None
     _last_used: float = 0.0  # monotonic timestamp of the last attach/launch (idle reaping)
     _opened_urls: str | None = None  # log of URLs a sandboxed app tried to open (#83)
+    _xserver: subprocess.Popen | None = None  # None until _start_server has claimed a display
+    _KILL_GRACE_S = 2.0  # per escalation step (SIGTERM, then SIGKILL)
 
     def __init__(self, display: int = 99, size: str = "1280x800", *,
                  headless: bool = True, ready_timeout: float = 5.0):
@@ -334,7 +365,7 @@ class NestedBackend(DesktopBackend):
                 return
             self._signal_tree(proc, hard)
             try:
-                proc.wait(timeout=2)
+                proc.wait(timeout=self._KILL_GRACE_S)
                 return
             except subprocess.TimeoutExpired:
                 continue
@@ -358,15 +389,52 @@ class NestedBackend(DesktopBackend):
         if proc.poll() is None:
             proc.kill() if hard else proc.terminate()
 
-    def kill_apps(self) -> int:
-        """Stop every app launched into this sandbox, leaving the display itself up. Returns how
-        many were running. The lighter alternative to a full ``reset_sandbox`` teardown that #92
-        asked for: a relaunch replaces the previous app instead of silently adding a ghost."""
-        live = [p for p in self._procs if p.poll() is None]
+    def _owns_display(self) -> bool:
+        """Whether this backend's X server still owns its display number.
+
+        Display numbers are reusable as soon as the X server lock disappears. A display sweep is
+        safe only while this backend's own server is still alive; otherwise another interact server
+        may have claimed the number and its apps are not ours to kill.
+        """
+        return self._xserver is not None and self._xserver.poll() is None
+
+    def kill_apps(self) -> KillReport:
+        """Stop sandbox apps and report what was actually removed.
+
+        Process groups handle normal app trees. Electron/Chromium helpers can call ``setsid`` and
+        escape those groups, so while this backend still owns its X server, sweep the exact
+        sandbox display and the exact sandbox profile paths too. The sweeps exclude this server,
+        its ancestors, and its direct child handles, so a recorder or the user's editor is never a
+        target. ``close`` uses this same path.
+        """
+        live = [proc for proc in self._procs if proc.poll() is None]
         for proc in live:
             self._kill_tree(proc)
+
+        owned = self._owns_display()
+        swept = set(orphans.sweep_if_owned(self.display, owned=owned))
+        if owned:
+            # launch imports desktop.orphans, while desktop.__init__ imports NestedBackend: this
+            # genuine cycle requires resolving the profile helper only after package import.
+            from interact.launch import sandbox_profiles
+
+            for profile in sandbox_profiles(self.display):
+                swept.update(orphans.kill_profile_clients(str(profile)))
+
         self._reap()
-        return len(live)
+        survivors = {
+            proc.pid: KillReport.executable_name(self._commands[proc.pid][0])
+            for proc in self._procs
+        }
+        if owned:
+            survivors.update(
+                (pid, KillReport.executable_name(command))
+                for pid in orphans.display_clients(self.display)
+                if (command := orphans.cmdline_of(pid))
+            )
+        return KillReport(
+            killed=len(live) - len(self._procs), swept=len(swept), survivors=survivors
+        )
 
     def last_app_output(self, limit: int = 800) -> str:
         """Tail of the most recently launched app's own stdout/stderr — the cause line ("Segmentation
@@ -851,29 +919,8 @@ class NestedBackend(DesktopBackend):
             subprocess.run(["pactl", "unload-module", self._audio_module],
                            capture_output=True, timeout=5, check=False)
             self._audio_module = self._audio_sink = None
-        for proc in self._procs:
-            self._kill_tree(proc)  # by GROUP: a launcher's children must go too (#92)
-        # A group kill misses anything that started its OWN session — Chromium does exactly that
-        # for its helper processes, so an Electron app (VS Code) left `--type=renderer/gpu-process`
-        # children running under systemd after every teardown, holding the profile lock. Sweeping
-        # by DISPLAY catches them whatever the app, and cannot touch the user's real session.
-        #
-        # Gated on our X server still RUNNING: a display number is reclaimed the moment its lock
-        # drops, and several interact servers at once is normal, so if ours already died another
-        # server may own this number — and its apps are not ours to kill.
-        owned = self._xserver.poll() is None
-        orphans.sweep_if_owned(self.display, owned=owned)
-        # Sweeping by DISPLAY misses an app that ended up on the REAL display while still holding
-        # a sandbox PROFILE — where a display sweep must never follow it. Left running it keeps
-        # the profile's singleton, so the next launch is handed to that stale instance rather than
-        # starting fresh: a rebuilt app appears not to change, or opens nothing at all.
-        if owned:
-            # Imported here, not at module level: `launch` imports `orphans`, and importing that
-            # submodule runs this package's __init__, which imports THIS module — a genuine cycle.
-            from interact.launch import sandbox_profiles
-
-            for profile in sandbox_profiles(self.display):
-                orphans.kill_profile_clients(str(profile))
+        self.kill_apps()  # one kill path: groups, then display + profile sweeps (#92/#118)
+        owned = self._owns_display()
         if owned:
             self._xserver.terminate()
             try:
@@ -887,4 +934,5 @@ class NestedBackend(DesktopBackend):
                 except OSError:
                     pass
         self._logs.clear()
-
+        self._procs.clear()
+        self._commands.clear()

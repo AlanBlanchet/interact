@@ -51,10 +51,12 @@ const TITLE_MAX = 60;
  *  a last resort.
  */
 export function conversationTitle(run: Run): string {
-  const task = (run.task ?? "").replace(/\s+/g, " ").trim();
+  const role = (run.agent ?? "").trim();
+  const rawTask = (run.task ?? "").replace(/\s+/g, " ").trim();
+  const routing = rawTask.match(/^AGENT_ROLE:\s*([a-z][a-z0-9_-]*)[.\s]+(.*)$/i);
+  const task = routing?.[1] === role ? routing[2].trim() : rawTask;
   if (task) return task.length > TITLE_MAX ? task.slice(0, TITLE_MAX - 1).trimEnd() + "…" : task;
   const named = (run.name ?? "").trim();
-  const role = (run.agent ?? "").trim();
   // A name that merely repeats the CLI identifies nothing when twenty rows share it.
   if (named && named !== run.provider) return named;
   if (role) return role;

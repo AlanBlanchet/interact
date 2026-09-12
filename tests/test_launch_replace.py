@@ -156,7 +156,7 @@ def test_kill_apps_reaches_the_whole_app_tree(owned_backend, tmp_path, own_sessi
 def test_kill_apps_reports_survivors_instead_of_counting_them_replaced(owned_backend, tmp_path):
     """The other half of #118: ``launch_app(replace=True)`` said "Replaced N app(s)" from the
     PRE-kill count, so a survivor was reported as replaced. What a kill did NOT achieve is reported
-    — the launched app by its command, an escaped helper by its pid and command line — so the
+    — the launched app by its executable, an escaped helper by its pid and executable — so the
     caller can say so instead of handing the agent a window that was never there."""
     marker = tmp_path / "child.pid"
     leader = owned_backend.spawn(_app_with_child(marker, own_session=True))
@@ -168,7 +168,7 @@ def test_kill_apps_reports_survivors_instead_of_counting_them_replaced(owned_bac
         report = owned_backend.kill_apps()
     assert report.killed == 0
     assert set(report.survivors) == {leader.pid, helper}
-    assert all("sleep(30)" in command for command in report.survivors.values())
+    assert all(command == os.path.basename(sys.executable) for command in report.survivors.values())
     assert _pid_alive(leader.pid) and _pid_alive(helper)
 
 
@@ -186,6 +186,44 @@ def test_the_sweep_spares_the_servers_own_helpers(owned_backend):
     finally:
         recorder.kill()
         recorder.wait()
+
+
+def test_kill_apps_sweeps_a_detached_helper_after_its_leader_expires(owned_backend, tmp_path):
+    """An app can exit after leaving a detached helper. Cleanup must still sweep the helper before
+    the next launch, even though the tracked leader is no longer live."""
+    marker = tmp_path / "expired-child.pid"
+    leader = owned_backend.spawn([sys.executable, "-c", (
+        "import subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "start_new_session=True)\n"
+        f"open({str(marker)!r}, 'w').write(str(child.pid))\n"
+    )])
+    helper = _pid_from(marker)
+    leader.wait(timeout=5)
+    report = owned_backend.kill_apps()
+    assert _gone(helper)
+    assert (report.killed, report.swept, report.survivors) == (0, 1, {})
+
+
+def test_kill_apps_does_not_touch_a_process_on_a_foreign_display(owned_backend):
+    """The sweep is bound to this backend's display, not a global process hunt."""
+    base = int(owned_backend.display.lstrip(":")) + 1
+    foreign_display = next(
+        f":{number}" for number in NestedBackend._free_displays(base)
+        if f":{number}" != owned_backend.display
+    )
+    foreign = subprocess.Popen(
+        SLEEPER,
+        env={**os.environ, "DISPLAY": foreign_display},
+        start_new_session=True,
+    )
+    try:
+        report = owned_backend.kill_apps()
+        assert report.survivors == {}
+        assert foreign.poll() is None
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=5)
 
 
 def test_running_command_finds_an_identical_live_launch(backend):

@@ -128,9 +128,9 @@ def test_a_failed_exec_is_a_guided_error_naming_the_real_command(fake_backend, e
         (KillReport(killed=0), [], ["Replaced", "SURVIVED"]),
         (
             KillReport(killed=1, survivors={4242: "code --user-data-dir=/x --type=renderer"}),
-            ["Replaced 1 app(s)", "SURVIVED", "4242", "code --user-data-dir=/x --type=renderer",
+            ["ERROR:", "stopped 1", "successor was not launched", "SURVIVED", "4242", "code",
              "reset_sandbox"],
-            ["Replaced 2"],
+            ["Replaced 2", "user-data-dir"],
         ),
     ],
     ids=["all_died", "nothing_to_replace", "one_survived"],
@@ -142,9 +142,19 @@ def test_the_replaced_note_counts_kills_and_names_survivors(fake_backend, report
     assert not any(text in out for text in absent), out
 
 
-def test_a_survivor_is_named_when_no_window_appears(fake_backend):
-    """The very symptom of #118 — the launch opens nothing — is where the survivor explains it."""
+def test_a_survivor_is_named_and_blocks_the_successor(fake_backend):
+    """The old process explains the failed replacement and prevents an ambiguous second window."""
     fake_backend.kill_report = KillReport(killed=0, survivors={4242: "code --type=renderer"})
     fake_backend.windows = []
     out = asyncio.run(srv.launch_app("app", wait=0.5))
-    assert "no window appeared" in out and "4242" in out and "code --type=renderer" in out, out
+    assert out.startswith("ERROR:") and "successor was not launched" in out
+    assert "4242" in out and "code" in out and "type=renderer" not in out, out
+
+
+def test_a_survivor_aborts_the_successor_launch(fake_backend):
+    """`replace=True` is a gate: a leftover old process makes launching a second ambiguous
+    window unsafe, so the successor must not be spawned."""
+    fake_backend.kill_report = KillReport(killed=0, survivors={4242: "code"})
+    out = asyncio.run(srv.launch_app("app", wait=1))
+    assert out.startswith("ERROR:") and "successor was not launched" in out, out
+    assert fake_backend.spawned == []

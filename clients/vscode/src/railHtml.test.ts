@@ -172,7 +172,7 @@ test("the wide rail shows the row's facts and actions at rest", () => {
   assert.match(css, /\.runs \.row, \.columnHead\s*{[^}]*display:\s*grid/, "wide rows use the full rail");
   assert.match(css, /\.acts\s*{[^}]*opacity:\s*1/, "actions are visible at rest");
   assert.match(css, /\.actText/, "actions explain themselves without hover");
-  assert.match(css, /@container \(max-width: 1160px\)/, "narrow rails have a responsive fallback");
+  assert.match(css, /@container \(max-width: 1380px\)/, "narrow rails have a responsive fallback");
 });
 
 test("a row surfaces status, provider, model and effort only from its run", () => {
@@ -235,8 +235,8 @@ test("a roster repaint keeps what the reader had opened, typed and scrolled", ()
   const swap = script.indexOf("host.innerHTML = html");
   assert.ok(swap > 0, "the roster swap must exist");
   const before = script.slice(0, swap), after = script.slice(swap);
-  assert.match(before, /open\[d\.className\] = d\.open/, "snapshot each details' open state BEFORE the swap");
-  assert.match(after, /d\.open = open\[d\.className\]/, "reapply it AFTER the swap");
+  assert.match(before, /open\[d\.dataset\.foldKey \|\| d\.className\] = d\.open/, "snapshot each task or section independently BEFORE the swap");
+  assert.match(after, /d\.open = open\[key\]/, "reapply it AFTER the swap");
   assert.match(after, /host\.scrollTop = top/, "and the scroll position");
 });
 
