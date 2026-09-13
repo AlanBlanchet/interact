@@ -536,6 +536,7 @@ async def run_agent(
     ``image_paths`` is an optional tuple of existing absolute PNG, JPEG, or WebP paths. The
     provider and resolved model are checked before any child process is created.
     """
+    provider.validate_permission_mode(permission_mode)
     validated_images = validate_image_paths(image_paths)
     if not provider.available():
         raise RuntimeError(
@@ -570,6 +571,14 @@ async def run_agent(
     # Policy speaks for an agent with no own model: a profile is written once, worn by many —
     # the reason it exists.
     required_model = policy.criterion_for(agent)
+    if profile:
+        known = profiles_from(dict(os.environ))
+        if profile not in known:
+            raise RuntimeError(
+                f"no such profile {profile!r}. Define it in ~/.interact/config.env as "
+                f"INTERACT_PROFILE_{profile.upper()}=<provider>/<model>; "
+                f"known: {', '.join(sorted(known)) or 'none'}"
+            )
     if not required_model:
         raise ModelUnavailable(f"No model criterion for {agent!r}; configure it in the agent policy UI")
     if required_model and profile:
@@ -584,25 +593,10 @@ async def run_agent(
     # Child inherits our environment MINUS any parent tag, set explicitly below — else a
     # grandchild would inherit its grandparent's id and the tree would be wrong.
     env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
-    # What this agent runs on, decided BEFORE the call. Overlay is allow-listed by construction
-    # (see profiles.ALLOWED_ENV) — an unknown profile name is refused rather than silently
-    # ignored, because "it quietly ran on the wrong model" is the failure nobody notices.
-    if profile:
-        known = profiles_from(dict(os.environ))
-        if profile not in known:
-            raise RuntimeError(
-                f"no such profile {profile!r}. Define it in ~/.interact/config.env as "
-                f"INTERACT_PROFILE_{profile.upper()}=<provider>/<model>; "
-                f"known: {', '.join(sorted(known)) or 'none'}"
-            )
-        overlay = overlay_for(known[profile], dict(os.environ))
-        env.update(overlay)
-        model = model or overlay.get("ANTHROPIC_MODEL")
-    else:
-        # No named profile, but the model id may still carry its own routing — a company file or
-        # the panel can declare `ollama/deepseek-v4-pro:cloud` directly.
-        routed, model = resolve_model(model, dict(os.environ), provider=provider, weights=policy.weights_for(agent))
-        env.update(routed)
+    # The agent's policy is authoritative; caller profiles were rejected above. Its model id
+    # can still carry a provider prefix resolved through the operator's allowed routing.
+    routed, model = resolve_model(model, dict(os.environ), provider=provider, weights=policy.weights_for(agent))
+    env.update(routed)
     if validated_images:
         _require_vlm_model(model)
     effort = policy.reasoning_for(agent)

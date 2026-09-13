@@ -140,7 +140,10 @@ class CoordFormat(BaseModel):
         """Parse VLM response into elements in pixel coords of the VLM image."""
         raw_list = CoordFormat.extract_json_list(response)
         if raw_list is None:
-            return DesktopElement.parse_vlm(response)
+            fallback = DesktopElement.parse_vlm(response)
+            if not fallback:
+                return None
+            raw_list = [element.model_dump() for element in fallback]
 
         raw_entries: list[tuple[int, int, int, int, str, str]] = []
         for entry in raw_list:
@@ -167,13 +170,14 @@ class CoordFormat(BaseModel):
                     raw_entries.append(
                         (xmin, ymin, xmax - xmin, ymax - ymin, role, name)
                     )
-                elif "x" in entry and "y" in entry and "w" in entry and "h" in entry:
+                else:
+                    element = DesktopElement.from_vlm_dict(entry, 0)
                     raw_entries.append(
                         (
-                            int(float(entry["x"])),
-                            int(float(entry["y"])),
-                            int(float(entry["w"])),
-                            int(float(entry["h"])),
+                            element.x,
+                            element.y,
+                            element.w,
+                            element.h,
                             role,
                             name,
                         )

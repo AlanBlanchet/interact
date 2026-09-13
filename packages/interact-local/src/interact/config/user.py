@@ -1,14 +1,7 @@
-"""Persisted, front-end-agnostic user settings at ``~/.interact/config.env``.
+"""Settings shared by local clients. Connected portable preferences belong to the server.
 
-The VS Code extension stores model choices and API keys in its settings UI and
-secret store, then injects them as ``INTERACT_*`` / ``*_API_KEY`` env vars when it
-spawns the server. Clients without such a UI (Claude Code, Cursor, Codex, Zed, …)
-have no equivalent — so ``interact config`` writes here, and ``interact mcp``
-applies it to the environment before the server starts. Configure once, and every
-client that launches ``interact mcp`` picks it up.
-
-Format is a plain ``KEY=VALUE`` env file (no external dependency to parse it). The
-file is chmod ``600`` because it may hold ``*_API_KEY`` secrets.
+The chmod-600 config.env file retains machine settings, credentials and portable recovery
+evidence. Standalone clients also use its portable values; connected clients never do.
 """
 
 import os
@@ -49,7 +42,7 @@ def _unquote(value: str) -> str:
 
 
 class UserConfig:
-    """The ``~/.interact/config.env`` store: read / set / unset / apply."""
+    """Effective server/local settings, with separate raw local reads and mutations."""
 
     PATH = Path.home() / ".interact" / "config.env"
     _process_interact_env: dict[str, str] | None = None
@@ -88,7 +81,7 @@ class UserConfig:
         return f"INTERACT_{env}"
 
     @classmethod
-    def read(cls) -> dict[str, str]:
+    def read_local(cls) -> dict[str, str]:
         if not cls.PATH.exists():
             return {}
         out: dict[str, str] = {}
@@ -101,31 +94,92 @@ class UserConfig:
         return out
 
     @classmethod
+    def server(cls):
+        # Circular dependency: the adapter validates Config, whose package exports UserConfig.
+        from interact.server_tool_settings import ServerToolSettings
+
+        return ServerToolSettings.configured()
+
+    @classmethod
+    def read(cls) -> dict[str, str]:
+        data = cls.read_local()
+        server = cls.server()
+        if server is not None:
+            from interact.server_tool_settings import PORTABLE_ENV  # circular Config/UserConfig wiring
+
+            data = {name: value for name, value in data.items() if name not in PORTABLE_ENV}
+            data.update(server.read().env)
+        return data
+
+    @classmethod
+    def update(cls, changes: dict[str, str | None], *, base=None):
+        """One server CAS for portable edits; local edits never serialize effective settings."""
+        from interact.server_tool_settings import PORTABLE_ENV, ToolSettingsConflict  # circular Config/UserConfig wiring
+
+        changes = {cls.normalize_key(key): value for key, value in changes.items()}
+        server = cls.server()
+        if base is not None and server is None:
+            raise ToolSettingsConflict("Server connection removed. Reload before saving; draft retained.")
+        portable = {key: value for key, value in changes.items() if key in PORTABLE_ENV} if server else {}
+        saved = server.update(portable, base=base or server.read(allow_stale=False)) if portable else base
+        local = {key: value for key, value in changes.items() if key not in portable}
+        if local:
+            cls._change_local(local)
+        return saved
+
+    @classmethod
+    def _change_local(cls, changes: dict[str, str | None]) -> None:
+        """Retain unrelated recovery entries, comments, ordering and quoting byte for byte."""
+        original = cls.PATH.read_bytes().decode("utf-8") if cls.PATH.exists() else ""
+        lines = [line for line in original.splitlines(keepends=True)
+                 if line.strip().partition("=")[0].strip() not in changes]
+        body = "".join(lines)
+        additions = "".join(f"{key}={_quote_if_needed(value)}\n" for key, value in changes.items() if value is not None)
+        if additions:
+            body += ("\n" if body and not body.endswith("\n") else "") + additions
+        if body != original:
+            cls.PATH.parent.mkdir(parents=True, exist_ok=True)
+            cls.PATH.write_bytes(body.encode("utf-8"))
+            cls.PATH.chmod(0o600)
+
+    @classmethod
     def get(cls, key: str) -> str | None:
-        return cls.read().get(cls.normalize_key(key))
+        from interact.server_tool_settings import PORTABLE_ENV  # circular Config/UserConfig wiring
+
+        env = cls.normalize_key(key)
+        return (cls.read() if env in PORTABLE_ENV else cls.read_local()).get(env)
 
     @classmethod
     def set(cls, key: str, value: str) -> str:
-        data = cls.read()
         env = cls.normalize_key(key)
-        data[env] = value
-        cls._write(data)
+        cls.update({env: value})
         return env
 
     @classmethod
     def unset(cls, key: str) -> bool:
-        data = cls.read()
         env = cls.normalize_key(key)
-        existed = data.pop(env, None) is not None
-        if existed:
-            cls._write(data)
+        # A local key can be removed even while portable settings are unavailable.
+        from interact.server_tool_settings import PORTABLE_ENV  # circular Config/UserConfig wiring
+
+        data = cls.read() if env in PORTABLE_ENV and cls.server() else cls.read_local()
+        existed = env in data
+        cls.update({env: None})
         return existed
 
     @classmethod
-    def apply(cls) -> None:
+    def apply(cls, *, portable: bool = True) -> None:
         """Load persisted settings into ``os.environ`` without overriding live vars."""
         cls.process_interact_env()
-        for name, value in cls.read().items():
+        from interact.server_tool_settings import PORTABLE_ENV  # circular Config/UserConfig wiring
+
+        connected = cls.server() is not None
+        if connected:
+            for name in PORTABLE_ENV:
+                os.environ.pop(name, None)
+        data = cls.read() if portable else cls.read_local()
+        for name, value in data.items():
+            if connected and not portable and name in PORTABLE_ENV:
+                continue
             os.environ.setdefault(name, value)
 
     @classmethod

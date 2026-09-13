@@ -6,7 +6,7 @@
 
 ## Repository boundaries
 
-interact is two repositories. This one is public:
+Interact has a public client, a shared public contracts package, and a private server:
 
 - `packages/interact-local` — the `interact` Python import, CLI, MCP server, automation, local
   sessions, and explicit API routes.
@@ -14,8 +14,7 @@ interact is two repositories. This one is public:
   shared by every surface; `clients/vscode` consumes the generated TypeScript form. In the private
   parent workspace, its development checkout sits beside this repository under `worktrees/`.
 - `clients/vscode` owns the VS Code extension, and `site` owns the static public website.
-- `prompts/` contains distributable product defaults and their manifest. Personal prompt source
-  lives in the user's own Interact-managed Git worktree and never enters this repository.
+- `prompts/` contains distributable product defaults and their manifest. Personal prompts live in the configured account's server catalog and never enter this repository.
 
 `AlanBlanchet/interact-server` is private and holds the server half — tenants, authentication,
 billing, secrets, queues, retention, deployment, and the web gateway. It consumes a released public
@@ -31,10 +30,12 @@ charge boundary, and a vendor subscription is not described as universally free.
 
 ### Prompt distribution
 
-Personal prompts are authored and versioned through `interact prompts` in the local Git worktree at
-`${XDG_DATA_HOME:-~/.local/share}/interact/prompts`; a clean committed revision is compiled and
-installed into provider consumers as derived, read-only output. `prompts/manifest.json` here instead
-defines shipped product defaults, digest-validated before publication.
+With a configured server, `interact prompts` reads and saves immutable personal prompt revisions
+through that server. Installed provider instructions and local catalogs are rebuildable caches.
+The older worktree at `${XDG_DATA_HOME:-~/.local/share}/interact/prompts` remains recovery evidence;
+server-connected writes do not overwrite it. Standalone local authoring remains available when no
+server is configured. `prompts/manifest.json` here defines shipped product defaults, digest-validated
+before publication.
 `interact.prompt_client._PromptClient.sync(account, cache)` downloads the authenticated typed catalog
 and exact immutable revisions into an account-scoped `_PromptCache`. A conversation start may carry a
 `PromptSelection` beside the ordinary `prompt`: the console resolves it, sends the verified content as
@@ -212,6 +213,18 @@ uv run pytest -m "not integration"      # fast, cross-platform suite
 uv tool install --force --editable .    # put your checkout's `interact` on PATH
 ```
 
+When an MCP process is already serving your editor, preserve its environment. Build the public
+and core wheels, then install a separate runtime and switch future CLI/MCP launches:
+
+```sh
+python scripts/install_runtime.py --public-wheel /absolute/path/interact.whl --core-wheel /absolute/path/interact_core.whl
+```
+
+The installer verifies package metadata and import location, retains the previous environment,
+and records its former launcher target. Activation briefly removes the launcher link before
+creating its replacement; a concurrent replacement is preserved. Running MCP connections keep their loaded code until
+you reconnect them; the installer does not reload the editor.
+
 CI runs the suite on Linux/macOS/Windows plus a sandboxed Linux desktop job; on push to `main` it tags
 and publishes the release from `pyproject.toml`'s version (see [RELEASING.md](RELEASING.md)).
 
@@ -250,3 +263,16 @@ and digest, and never substitutes a newer head for a missing pin. Continuations 
 original selected revision. Server-side edits appear on the next sync or launch.
 
 Without a configured server catalog, existing local role policy and definitions remain available.
+
+## Portable tool preferences
+
+Signed-in clients share account preferences through the server. `interact config status` reports
+the source and revision; `interact config sync` refreshes the verified cache. The web Account page,
+TUI and VS Code settings use the same values. Connected writes require the revision the editor
+loaded, so another device's update produces a conflict instead of being overwritten.
+
+Portable fields cover model selection, capture dimensions, media limits and action waiting.
+Provider credentials, billing consent and device paths retain their existing local setup.
+An existing local override is not silently imported: review `interact config import-preview`
+before explicitly applying its selected values. Authentication refusal invalidates cached access;
+a transport failure can expose a verified same-account snapshot marked stale.

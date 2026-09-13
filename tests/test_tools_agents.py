@@ -60,7 +60,7 @@ async def test_an_uninstalled_provider_says_what_is_installed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_an_empty_team_still_says_what_is_possible():
-    out = await srv.agent_list()
+    out = await srv.agent_list(session_id="fixture-conversation")
     assert "No agent runs" in out and "Providers available" in out
 
 
@@ -73,7 +73,7 @@ async def test_the_listing_shows_status_cost_and_the_tree(monkeypatch):
     monkeypatch.setattr(reg, "_alive", lambda pid: True)
     monkeypatch.setattr(reg, "_discover_foreign", lambda: [])
 
-    out = await srv.agent_list()
+    out = await srv.agent_list(all_sessions=True)
     assert "lead" in out and "helper" in out
     assert "0.1250" in out          # per-agent cost is real, not a placeholder
     assert "Team tree" in out and "spawned by" in out
@@ -97,7 +97,7 @@ async def test_foreign_sessions_are_marked_as_not_ours(monkeypatch):
     monkeypatch.setattr(reg, "_discover_foreign",
                         lambda: [{"sessionId": "abcd1234", "name": "their-window",
                                   "cwd": "/x", "kind": "interactive"}])
-    out = await srv.agent_list(include_foreign=True)
+    out = await srv.agent_list(all_sessions=True, include_foreign=True)
     assert "their-window" in out and "not started by interact" in out
 
 

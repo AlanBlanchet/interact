@@ -144,7 +144,7 @@ async def test_record_mcp_returns_frames_as_direct_image_content(monkeypatch) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("cap", "truncated"), [(2, True), (20, False)])
-async def test_real_ffmpeg_record_mcp_reports_derived_cadence_without_measured_fps(
+async def test_real_ffmpeg_record_mcp_separates_sample_cadence_from_encoded_fps(
     monkeypatch, tmp_path: Path, cap: int, truncated: bool,
 ) -> None:
     ffmpeg = shutil.which("ffmpeg")
@@ -170,7 +170,9 @@ async def test_real_ffmpeg_record_mcp_reports_derived_cadence_without_measured_f
     capture = result.structuredContent["capture"]
     images = [content for content in result.content if content.type == "image"]
     assert capture["timestamp_basis"] == "derived_cadence"
-    assert capture["measured_fps"] is None
+    assert capture["requested_fps"] == 5
+    assert capture["measured_fps"] == 10
+    assert capture["duration"] == pytest.approx(1)
     assert capture["frames_truncated"] is truncated
     assert len(images) == len(capture["frame_timestamps"])
     assert len(images) <= cap

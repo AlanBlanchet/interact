@@ -5,6 +5,7 @@
     "jsx": "react-jsx",
     "jsxImportSource": ".",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM"],
     "strict": true,
     "skipLibCheck": true,

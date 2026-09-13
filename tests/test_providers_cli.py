@@ -291,6 +291,7 @@ def test_an_unknown_mode_at_the_CLI_reads_like_every_other_error(monkeypatch, ca
 
     cli = importlib.import_module("interact.cli.app")
     monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
+    monkeypatch.setattr("interact.agents.run.load_policy", lambda: pytest.fail("invalid mode must be rejected before policy loading"))
 
     with pytest.raises(SystemExit) as exit_info:
         cli.agents_spawn("t", agent="tester", permission_mode="definitely-not-a-mode")
@@ -311,6 +312,7 @@ def test_agents_run_reports_a_bad_mode_too(monkeypatch, capsys):
 
     cli = importlib.import_module("interact.cli.app")
     monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
+    monkeypatch.setattr("interact.agents.run.load_policy", lambda: pytest.fail("invalid mode must be rejected before policy loading"))
 
     with pytest.raises(SystemExit) as exit_info:
         cli.agents_run("t", agent="tester", permission_mode="definitely-not-a-mode")

@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode
+from interact_core.tool_settings import VLM_MIN_DIM_DEFAULT, VLM_MAX_DIM_DEFAULT
 
 from interact.agents.providers import MEDIA_PROVIDERS
 from interact.data import PackageData
@@ -156,7 +157,7 @@ class Config(BaseSettings):
     # Base dir for local output: usage log (debug_dir/usage.jsonl), per-session dumps
     # (debug_dir/sessions/…). Default ~/.interact/out, kept under out/ so root stays clean.
     # Override: INTERACT_DEBUG_DIR. screenshot_dump_dir wins if set.
-    debug_dir: Path = Path.home() / ".interact" / "out"
+    debug_dir: Path = Field(default_factory=lambda: Path.home() / ".interact" / "out")
     video_fps: int = 5
     video_duration: float = 3.0
     # Cost cap: recording sampled to at most this many evenly-spaced frames before the VLM, so
@@ -178,8 +179,8 @@ class Config(BaseSettings):
     # never reach those APIs; panels serve last cache and say how old. Override:
     # INTERACT_REFRESH_LIVE_DATA.
     refresh_live_data: bool = True
-    vlm_max_dim: int = 1280
-    vlm_min_dim: int = 768
+    vlm_max_dim: int = VLM_MAX_DIM_DEFAULT
+    vlm_min_dim: int = VLM_MIN_DIM_DEFAULT
     detection_max_retries: int = 3  # judge-driven re-detection passes to recover missed elements
     # "local": drives the real session (uinput, system-wide). "nested": isolated Xephyr display
     # (xdotool) — sandbox that never touches the user's real windows or cursor.

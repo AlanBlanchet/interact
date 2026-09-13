@@ -2,13 +2,8 @@
  *
  *  "find a way that we could easily chose what models are ran for what."
  *
- *  An agent's model is declared in the company file (org.json) — but that file is GENERATED from
- *  the prompt repo, so a choice written there is erased by the next sync. A preference made in
- *  the editor lives in the agents POLICY (~/.interact/agents.json), the one file the spawn reads:
- *  this module edits its agents map and nothing else, beside profiles, toolsets and provider
- *  switches written by hand or the CLI. One fact, one file — the choice the panel writes IS the
- *  choice the spawn uses, and a hand-typed rule (a @profile, a criterion) shows in the panel
- *  exactly as written.
+ *  Connected workspaces read agent choices from server revisions and fence local policy writes.
+ *  Standalone installs keep choices in ~/.interact/agents.json, the policy their launcher reads.
  *
  *  Deliberately plain readable JSON: he edits his own config by hand, and a file he can't read is
  *  a file he can't fix — also why a file that won't parse is never overwritten from here.
@@ -16,6 +11,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { serverWorkspaceConfigured, workspaceView } from "./workspaceState.ts";
 
 /** The agents policy — profiles, per-agent model rules, toolsets, provider switches — beside
  *  config.env and NEVER under the debug dir: Python's policy_path() is anchored the same way,
@@ -76,6 +72,10 @@ function stringMap(value: unknown, valueOk: RegExp): Record<string, string> {
 /** Every agent's rule in the policy. A missing or malformed file reads as "no choices" rather than
  *  throwing: a panel that will not render is worse than a preference that does not show. */
 export function chosenModels(file: string = agentsPolicyPath()): Record<string, string> {
+  if (file === agentsPolicyPath() && serverWorkspaceConfigured()) {
+    return Object.fromEntries((workspaceView()?.graph.agents ?? []).filter(agent => agent.role_key && agent.criteria)
+      .map(agent => [agent.role_key!, agent.criteria!]));
+  }
   return stringMap(readPolicy(file).raw.agents, RULE);
 }
 
@@ -178,6 +178,7 @@ export function clearChoice(agent: string, file: string = agentsPolicyPath()): b
 export function adoptLegacyChoices(
   legacy: string = legacyChoicesPath(), file: string = agentsPolicyPath(),
 ): number {
+  if (file === agentsPolicyPath() && serverWorkspaceConfigured()) return 0;
   if (!fs.existsSync(legacy)) return 0;
   const have = chosenModels(file);
   const carry = Object.entries(stringMap(readPolicy(legacy).raw, MODEL)).filter(([agent]) => !(agent in have));
@@ -190,6 +191,7 @@ export function adoptLegacyChoices(
 /** Edit ONLY the agents map, leaving every other key as written — including entries in that map
  *  we wouldn't have written ourselves (a hand-typed rule is theirs, not ours to drop). */
 function editAgents(file: string, edit: (agents: Record<string, string>) => void): boolean {
+  if (file === agentsPolicyPath() && serverWorkspaceConfigured()) return false;
   const { raw, parsable } = readPolicy(file);
   if (!parsable) return false;  // a broken file is theirs to fix, never ours to erase
   const current = raw.agents;

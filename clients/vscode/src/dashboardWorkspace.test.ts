@@ -5,6 +5,38 @@ import { test } from "node:test";
 
 const require_ = createRequire(import.meta.url);
 
+test("disconnected dashboard save retains server draft without local writes or refresh", async () => {
+  const updates: unknown[] = [], errors: string[] = [];
+  const DashboardPanel = freshDashboard({
+    ConfigurationTarget: { Global: 1 },
+    workspace: { getConfiguration: () => ({ get: () => undefined, update: async (...args: unknown[]) => { updates.push(args); } }) },
+    window: { showErrorMessage: (message: string) => { errors.push(message); } },
+  });
+  const state = require_(path.resolve("out/workspaceState.js"));
+  state.acceptWorkspace(null, false);
+  const fs = require_("node:fs");
+  const exists = fs.existsSync;
+  fs.existsSync = () => false;
+  const panel = Object.create(DashboardPanel.prototype);
+  panel.settingsSnapshot = { configured: true, revision: 3, account_id: "00000000-0000-0000-0000-000000000001",
+    stale: false, portable_keys: ["INTERACT_VIDEO_FPS"], values: { INTERACT_VIDEO_FPS: "12" } };
+  let refreshes = 0;
+  panel.refreshRevision = 7;
+  panel.refresh = () => { refreshes++; };
+  try {
+    await panel.handleMessage({ type: "saveSetting", setting: "video.fps", value: "17" });
+    assert.deepEqual(updates, []);
+    assert.equal(refreshes, 0);
+    assert.equal(panel.refreshRevision, 8, "an in-flight refresh must not overwrite the retained draft");
+    assert.match(errors[0], /Reload.*draft retained/i);
+    assert.equal(panel.settingsSnapshot.revision, 3);
+  } finally {
+    fs.existsSync = exists;
+    delete require_.cache[require_.resolve(path.resolve("out/dashboard.js"))];
+    delete require_.cache[require_.resolve(path.resolve("out/shared.js"))];
+  }
+});
+
 function freshDashboard(vscode: unknown): any {
   const Module = require_("node:module") as { _load(request: string, parent: unknown, main: boolean): unknown };
   const original = Module._load;

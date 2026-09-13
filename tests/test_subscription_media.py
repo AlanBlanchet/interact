@@ -48,11 +48,6 @@ from interact.vision.core import analyze_media, transcribe_audio
 from interact.vision.core import VLMResult
 
 
-@pytest.fixture
-def media_output_root(tmp_path: Path) -> Path:
-    return Path.cwd() / "out" / "tests" / "subscription-media" / tmp_path.name
-
-
 @pytest.fixture(autouse=True)
 def _workspace_owned_media_output(media_output_root: Path, monkeypatch):
     """Keep sensitive session stages under the owned workspace, never pytest's global /tmp."""
@@ -66,8 +61,6 @@ def _workspace_owned_media_output(media_output_root: Path, monkeypatch):
     monkeypatch.setattr(
         Config, "usage_log", property(lambda config: media_output_root / "usage.jsonl")
     )
-    yield
-    shutil.rmtree(media_output_root, ignore_errors=True)
 
 
 def _png() -> bytes:

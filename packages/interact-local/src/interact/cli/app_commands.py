@@ -46,6 +46,8 @@ from interact.model_catalog import bare_model_name as _bare_model_name
 from interact.models import Model, ModelCapability, _ordinal
 from interact.runtime import _LiveConfig, config
 from interact.server_registry import kill_stale_servers, latest_version, stale_servers
+from interact.server_tool_settings import PORTABLE_ENV, ServerToolSettings, ToolSettingsConflict
+from interact.cli.workspace import WorkspaceCLI
 
 
 def _print_media_transport(config: Config | _LiveConfig, indent: str = "  ") -> None:
@@ -618,7 +620,40 @@ def doctor(*, fix: bool = False) -> None:
     _print_resolved_models(indent="    ")
 
 
-config_app = App(name="config", help="Persist model/key settings to ~/.interact/config.env.")
+config_app = App(name="config", help="Personal portable settings on the server; credentials and machine settings stay local.")
+
+
+def _settings_status(*, allow_stale: bool = True) -> dict:
+    server = ServerToolSettings.configured()
+    if server is None:
+        return {"configured": False, "source": "local", "stale": False, "revision": None,
+                "values": {key: value for key, value in UserConfig.read_local().items() if key in PORTABLE_ENV},
+                "portable_keys": list(PORTABLE_ENV)}
+    return server.read(allow_stale=allow_stale).status()
+
+
+@config_app.command(name="status")
+def config_status(*, json_out: bool = False) -> None:
+    """Report portable settings source, account, revision and explicit cache staleness."""
+    WorkspaceCLI.emit(_settings_status)
+
+
+@config_app.command(name="sync")
+def config_sync(*, json_out: bool = False) -> None:
+    """Refresh the replaceable personal settings cache online; never upload local entries."""
+    WorkspaceCLI.emit(lambda: _settings_status(allow_stale=False))
+
+
+@config_app.command(name="import-preview")
+def config_import_preview(*, json_out: bool = False) -> None:
+    """Show only allowlisted local portable overrides for review; never save or print secrets."""
+    def preview():
+        status = _settings_status(allow_stale=False)
+        local = {key: value for key, value in UserConfig.read_local().items() if key in PORTABLE_ENV}
+        return {**status, "changes": {key: {"current": status["values"].get(key), "proposed": value}
+                for key, value in local.items() if status["values"].get(key) != value}}
+
+    WorkspaceCLI.emit(preview)
 
 
 def _mask(name: str, value: str) -> str:
@@ -628,7 +663,12 @@ def _mask(name: str, value: str) -> str:
 @config_app.command(name="list")
 def config_list() -> None:
     """Show persisted settings (secrets masked)."""
-    data = UserConfig.read()
+    server = UserConfig.server()
+    data = UserConfig.read_local()
+    if server:
+        snapshot = server.read()
+        data = {key: value for key, value in data.items() if key not in PORTABLE_ENV} | snapshot.env
+        print(f"Personal server settings · revision {snapshot.settings.revision} · {'STALE cache' if snapshot.stale else 'current'}; other settings local")
     if not data:
         print(f"No settings yet. Set one with: interact config set image.model <id>\n({UserConfig.PATH})")
         return
@@ -639,21 +679,32 @@ def config_list() -> None:
 @config_app.command(name="get")
 def config_get(key: str) -> None:
     """Print one persisted value."""
-    value = UserConfig.get(key)
+    env = UserConfig.normalize_key(key)
+    server = UserConfig.server() if env in PORTABLE_ENV else None
+    if server:
+        snapshot = server.read()
+        value = snapshot.env.get(env)
+        print(f"Personal server settings · revision {snapshot.settings.revision} · {'STALE cache' if snapshot.stale else 'current'}")
+    else:
+        value = UserConfig.get(key)
     print(value if value is not None else f"{UserConfig.normalize_key(key)} is unset")
 
 
 @config_app.command(name="set")
-def config_set(key: str, value: str) -> None:
+def config_set(key: str, value: str, *, expected_revision: int | None = None, account_id: UUID | None = None, json_out: bool = False) -> None:
     """Persist a setting. e.g. `interact config set image.model gpt-4o` or `... OPENAI_API_KEY sk-...`.
 
-    When the setting is a model key or a model pin, a one-second probe follows:
-    a tiny image is analysed through exactly what was just saved and the CLI
-    prints whether it WORKS — a bad key is caught here, not at the first
-    real screenshot.
+    Connected portable preferences save on the server without a model call.
+    Local API keys and standalone model pins use the existing configuration probe.
     """
+    if json_out:
+        WorkspaceCLI.emit(lambda: _settings_change(key, value, expected_revision, account_id))
+        return
     env = UserConfig.set(key, value)
-    print(f"✓ {env} = {_mask(env, value)}  →  {UserConfig.PATH}")
+    source = "personal server settings" if env in PORTABLE_ENV and UserConfig.server() else str(UserConfig.PATH)
+    print(f"✓ {env} = {_mask(env, value)}  →  {source}")
+    if env in PORTABLE_ENV and UserConfig.server():
+        return
     _maybe_probe(env, key, value)
 
 
@@ -677,10 +728,29 @@ def _maybe_probe(env: str, key: str, value: str) -> None:
 
 
 @config_app.command(name="unset")
-def config_unset(key: str) -> None:
+def config_unset(key: str, *, expected_revision: int | None = None, account_id: UUID | None = None, json_out: bool = False) -> None:
     """Remove a persisted setting."""
+    if json_out:
+        WorkspaceCLI.emit(lambda: _settings_change(key, None, expected_revision, account_id))
+        return
     env = UserConfig.normalize_key(key)
     print(f"✓ removed {env}" if UserConfig.unset(key) else f"{env} was not set")
+
+
+def _settings_change(key: str, value: str | None, revision: int | None, account_id: UUID | None) -> dict:
+    env = UserConfig.normalize_key(key)
+    if env not in PORTABLE_ENV:
+        raise ValueError("JSON settings bridge accepts portable settings only")
+    server = ServerToolSettings.configured()
+    if server is None:
+        if revision is not None or account_id is not None:
+            raise ToolSettingsConflict("Server connection removed. Reload before saving; draft retained.")
+        UserConfig.update({env: value})
+        return _settings_status()
+    base = server.read(allow_stale=False)
+    if revision is None or account_id is None or base.settings.revision != revision or base.account_id != account_id:
+        raise ToolSettingsConflict("Settings account or revision changed. Reload; draft retained.")
+    return server.update({env: value}, base=base).status()
 
 
 @config_app.command(name="path")
@@ -751,16 +821,27 @@ def agents_console(workspace_root: Path) -> None:
 
 
 @agents_app.command(name="list")
-def agents_list(foreign: bool = True) -> None:
-    """Show agent runs: status, what each is doing, and API-equivalent cost.
+def agents_list(foreign: bool = False, session_id: str | None = None, all_sessions: bool = False) -> None:
+    """Show launched runs belonging to this conversation, including nested children.
 
     Parameters
     ----------
     foreign
-        Also show agent sessions interact did not start (your own editor windows).
+        Include discovered editor sessions only with --all-sessions.
+    session_id
+        Caller conversation used at spawn; defaults to recorded parent, INTERACT_SESSION_ID,
+        or the current CLI harness CODEX_THREAD_ID. Never inferred from cwd or PID.
+    all_sessions
+        Explicitly show machine-wide history, including runs with unknown owners.
     """
 
-    runs = reg.list_runs(include_foreign=foreign)
+    try:
+        identity = session_id if all_sessions else reg.resolve_session_id(session_id, cli_harness=True)
+        runs = reg.session_runs(session_id=identity, all_sessions=all_sessions, include_foreign=foreign)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    print("All sessions (including unknown owners)" if all_sessions else f"Session: {identity}")
     if not runs:
 
         names = ", ".join(p.name for p in available_providers()) or "none installed"
@@ -1305,7 +1386,8 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
                  cwd: str | None = None, permission_mode: str | None = None,
                  image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None,
                  agent_id: UUID | None = None, agent_revision: UUID | None = None,
-                 delegate: str | None = None, parent_run_id: str | None = None) -> None:
+                 delegate: str | None = None, parent_run_id: str | None = None,
+                 session_id: str | None = None) -> None:
     """Start an agent and return its id immediately, without waiting for it to finish.
 
     `agents run` streams until the agent is done — right at a terminal, useless to a UI — the
@@ -1315,6 +1397,8 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
     --delegate selects the parent run's named capability and its pinned revision.
     --agent-id plus --agent-revision selects an exact server revision directly.
     --parent-run-id defaults to the calling agent's recorded run from its environment.
+    --session-id records the owning conversation, otherwise inherited from the parent,
+    INTERACT_SESSION_ID, or the CLI harness CODEX_THREAD_ID. Unknown ownership stays unknown.
     """
 
 
@@ -1332,7 +1416,10 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
         return handle.run_id
 
     try:
-        print(asyncio.run(_go()))
+        with reg.session_context(session_id, parent_run_id=parent_run_id, cli_harness=True) as owner:
+            if owner is None:
+                print("Session unknown: pass --session-id for conversation-scoped listings.", file=sys.stderr)
+            print(asyncio.run(_go()))
     except (ValueError, RuntimeError) as e:
         # argv builder validates permission mode, four frames down; a criterion nothing clears, a
         # nonexistent profile, and a provider switched off all refuse the same way. Without this
@@ -1348,7 +1435,8 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
                permission_mode: str | None = None,
                image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None,
                agent_id: UUID | None = None, agent_revision: UUID | None = None,
-               delegate: str | None = None, parent_run_id: str | None = None) -> None:
+               delegate: str | None = None, parent_run_id: str | None = None,
+               session_id: str | None = None) -> None:
     """Spawn an agent and stream its events until it finishes.
 
     ``--agent`` selects a server role when a catalog is configured, otherwise an installed
@@ -1356,6 +1444,7 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
 
     --delegate selects the parent run's pinned capability. --agent-id together with
     --agent-revision selects an exact server revision; --parent-run-id selects its parent run.
+    --session-id records the owning caller conversation, shared with `agents list`.
     """
 
 
@@ -1380,7 +1469,10 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
         return await handle.wait()
 
     try:
-        raise SystemExit(asyncio.run(_go()))
+        with reg.session_context(session_id, parent_run_id=parent_run_id, cli_harness=True) as owner:
+            if owner is None:
+                print("Session unknown: pass --session-id for conversation-scoped listings.", file=sys.stderr)
+            raise SystemExit(asyncio.run(_go()))
     except (ValueError, RuntimeError) as e:
         # argv builder validates the mode; without this the CLI printed a traceback while every
         # other interact failure prints one actionable line.

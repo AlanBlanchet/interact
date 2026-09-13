@@ -58,7 +58,7 @@ class Debug:
         d = cls.dump_dir(debug_dir)
         if not d:
             return None
-        if d.resolve() == Path("out").resolve():
+        if d.resolve() in {Path("out").resolve(), resolve_output_path("out").resolve()}:
             raise ValueError(
                 "debug_dir must be a subdirectory of out/, not out/ itself; "
                 "use 'out/vscode' or 'out/tests'"

@@ -3,6 +3,7 @@
 
 import json
 import logging
+import math
 import re
 from typing import Self
 
@@ -21,6 +22,28 @@ _MERGE_CENTER_DIST = 50
 _MIN_DIM = 10
 _MIN_DIM_BOTH = 15
 _TITLEBAR_Y = 40
+_COORD_KEYS = {
+    "x": ("left",), "y": ("top",),
+    "w": ("width", "widht", "ww"), "h": ("height",),
+}
+
+
+def _coordinate(entry: dict, coordinate: str) -> int:
+    """Resolve documented spellings; conflicting values never become actionable coordinates."""
+    def number(value: object) -> float:
+        if not isinstance(value, (str, int, float)):
+            raise ValueError("Coordinate must be numeric")
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("Coordinate must be finite")
+        return result
+
+    values = {
+        number(entry[key]) for key in (coordinate, *_COORD_KEYS[coordinate]) if key in entry
+    }
+    if len(values) != 1:
+        raise ValueError(f"Missing or ambiguous {coordinate} coordinate")
+    return int(next(iter(values)))
 
 
 class Box(Element):
@@ -226,10 +249,10 @@ class DesktopElement(Box):
     def from_vlm_dict(cls, entry: dict, index: int) -> Self:
         return cls(
             index=index,
-            x=int(entry["x"]),
-            y=int(entry["y"]),
-            w=int(entry["w"]),
-            h=int(entry["h"]),
+            x=_coordinate(entry, "x"),
+            y=_coordinate(entry, "y"),
+            w=_coordinate(entry, "w"),
+            h=_coordinate(entry, "h"),
             role=str(entry.get("role", "element")),
             name=str(entry.get("name", "")),
         )
@@ -425,5 +448,3 @@ _JUNK_NAME_RE = re.compile(
     r"^(Ctrl|Alt|Shift|Cmd|Meta|Tab|Enter|Esc|Space|Backspace|Delete|Home|End|PageUp|PageDown|F\d+|[A-Z])$"
 )
 _NUMERIC_NAME_RE = re.compile(r"^[+-]?\d+$")
-
-

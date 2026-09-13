@@ -242,6 +242,13 @@ class AgentProvider(ABC):
         """
         return []
 
+    def validate_permission_mode(self, mode: str | None) -> None:
+        """Validate caller input before policy resolution or command construction."""
+        if mode is not None and mode not in {m.id for m in self.permission_modes()}:
+            known = ", ".join(m.id for m in self.permission_modes()) or "none"
+            raise ValueError(
+                f"{mode!r} is not a permission mode {self.name!r} accepts (known: {known})")
+
     def _permission_flag(self, mode: str | None) -> list[str]:
         """``--permission-mode <mode>`` when one was chosen, after checking it is one of ours.
 
@@ -250,13 +257,8 @@ class AgentProvider(ABC):
         flag in through this field. No mode means no flag at all — the person's own CLI default
         must stay reachable, and overriding it silently would be its own defect.
         """
-        if mode is None:
-            return []
-        if mode not in {m.id for m in self.permission_modes()}:
-            known = ", ".join(m.id for m in self.permission_modes()) or "none"
-            raise ValueError(
-                f"{mode!r} is not a permission mode {self.name!r} accepts (known: {known})")
-        return [self.permission_option, mode]
+        self.validate_permission_mode(mode)
+        return [self.permission_option, mode] if mode is not None else []
 
     def image_attachment_support(self) -> bool:
         """Whether this installed provider can receive image paths on its initial prompt."""

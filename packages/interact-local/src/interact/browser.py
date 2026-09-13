@@ -79,6 +79,7 @@ class BrowserManager:
         self._network_log: deque[dict] = deque(maxlen=LOG_MAXLEN)
         self._console_log: deque[dict] = deque(maxlen=LOG_MAXLEN)
         self._recording_dir: tempfile.TemporaryDirectory | None = None
+        self.recording_requested_fps: int | None = None
         # Active device-emulation profile (set by emulate_device); None → configured default
         # viewport at DPR 1. Folded into every new context via _context_kwargs.
         self._device_override: dict | None = None
@@ -315,13 +316,16 @@ class BrowserManager:
         pages = self._context.pages if self._context else []
         return pages[self._active_index(pages)] if pages else None
 
-    async def start_recording(self) -> tuple[str, str | None]:
+    async def start_recording(self, *, fps: int | None = None) -> tuple[str, str | None]:
         if self._recording_dir:
             raise RuntimeError("Already recording — call stop_recording first")
+        if fps is not None and fps <= 0:
+            raise ValueError("Recording fps must be positive")
         await self.ensure_ready()
         # Playwright records only a context created with record_video_dir, so recording is a
         # context swap — _rebuild_context carries the session (state + URL) across it (#123).
         self._recording_dir = tempfile.TemporaryDirectory()
+        self.recording_requested_fps = fps
         try:
             return await self._rebuild_context(record_video_dir=self._recording_dir.name)
         except Exception:
@@ -330,12 +334,14 @@ class BrowserManager:
             # slow page ended recording permanently in a real run.
             self._recording_dir.cleanup()
             self._recording_dir = None
+            self.recording_requested_fps = None
             raise
 
     async def stop_recording(self) -> bytes:
         if not self._recording_dir:
             raise RuntimeError("Not recording — call start_recording first")
         recording_dir, self._recording_dir = self._recording_dir, None
+        self.recording_requested_fps = None
         try:
             # Closing the recording context is what finalizes the video; the swap back to a plain
             # context carries the session's state + URL across, same as the start (#123).

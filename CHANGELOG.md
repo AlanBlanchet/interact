@@ -4,6 +4,16 @@ Notable changes to **interact**. Follows [Semantic Versioning](https://semver.or
 [Keep a Changelog](https://keepachangelog.com). Releases are cut from `main` (and `release/X.Y`
 maintenance branches) — see [RELEASING.md](RELEASING.md).
 
+## 0.42.0 — 2026-09-13
+
+- Share portable tool preferences through the signed-in account, with revision checks and verified caches across CLI, TUI and VS Code.
+- Restore server-owned prompts and agent configuration into disposable local projections.
+- Scope launched-agent listings to the current conversation and report missing ownership explicitly.
+- Validate provider permission modes before model policy resolution; preserve actionable CLI errors.
+- Report recording artifact paths, requested and measured frame rates, and browser reload effects through typed results.
+- Correct shared extension field colors and spacing; preserve unsaved settings on conflicts or disconnects.
+- Install reviewed local wheels into separate runtime directories without restarting existing sessions.
+
 ## [Unreleased]
 
 ### Added

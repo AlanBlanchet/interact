@@ -188,7 +188,7 @@ async def run_actions(
     dispatch_query = None if record else query
     if win:
         result = await _run_actions_desktop(
-            win, actions, dispatch_query, invocation_id=inv, record_frames=frames
+            win, actions, dispatch_query, invocation_id=inv, record_frames=frames, wait=wait
         )
     else:
         result = await _run_actions_browser(

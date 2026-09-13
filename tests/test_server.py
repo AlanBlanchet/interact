@@ -908,6 +908,7 @@ def test_record_sampling_caveat_reports_the_actual_largest_frame_gap(srv):
 @pytest.mark.asyncio
 async def test_browser_record_caveat_uses_the_actual_native_api_result(srv, monkeypatch):
     mgr = MagicMock()
+    mgr.recording_requested_fps = None
     mgr.stop_recording = AsyncMock(return_value=b"WEBM")
     srv.config.media_backend = "session"
 

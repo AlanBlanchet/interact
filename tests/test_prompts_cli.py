@@ -18,6 +18,7 @@ def _environment(data_home: Path) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "PATH": os.environ["PATH"],
         "XDG_DATA_HOME": str(data_home),
+        "HOME": str(data_home / "isolated-home"),
     }
 
 

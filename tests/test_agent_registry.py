@@ -25,6 +25,7 @@ import pytest
 
 from interact.agents import registry as reg
 from interact.agents.events import AgentEvent
+from interact.config import UserConfig
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +33,17 @@ def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() reads this on Windows
     monkeypatch.setenv("INTERACT_DEBUG_DIR", str(tmp_path / "somewhere-else"))
+    monkeypatch.setattr(UserConfig, "PATH", tmp_path / ".interact/config.env")
     yield
+
+
+@pytest.fixture
+def unversioned_tmp_path(tmp_path):
+    """These two cases require an actually unversioned filesystem, not a nested checkout."""
+    if any((parent / marker).exists() for parent in (tmp_path, *tmp_path.parents)
+           for marker in (".git", ".hg", ".svn")):
+        pytest.skip("unversioned temporary-directory fixture unavailable inside an enclosing repository")
+    return tmp_path
 
 
 def _record(**kw):
@@ -893,8 +904,8 @@ def test_the_project_is_the_repo_root_not_the_working_subfolder(tmp_path):
     assert reg.project_for(str(sub)) == "my-repo"
 
 
-def test_a_directory_outside_any_repo_falls_back_to_its_own_name(tmp_path):
-    plain = tmp_path / "scratch"
+def test_a_directory_outside_any_repo_falls_back_to_its_own_name(unversioned_tmp_path):
+    plain = unversioned_tmp_path / "scratch"
     plain.mkdir()
     assert reg.project_for(str(plain)) == "scratch"
 
@@ -936,9 +947,9 @@ def test_a_nested_manifest_several_levels_down_still_resolves_to_the_repo(tmp_pa
     assert reg.project_for(str(deep)) == "myrepo"
 
 
-def test_a_package_with_no_repo_around_it_is_still_its_own_project(tmp_path):
+def test_a_package_with_no_repo_around_it_is_still_its_own_project(unversioned_tmp_path):
     """Not everything is version controlled — a bare package must not fall back to a home dir."""
-    pkg = tmp_path / "loose-tool"
+    pkg = unversioned_tmp_path / "loose-tool"
     pkg.mkdir()
     (pkg / "pyproject.toml").write_text("")
     assert reg.project_for(str(pkg)) == "loose-tool"

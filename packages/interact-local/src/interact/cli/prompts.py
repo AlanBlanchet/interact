@@ -1,4 +1,4 @@
-"""Local-first prompt authoring commands backed by Git."""
+"""Server prompt editing when configured, local Git authoring otherwise."""
 
 import os
 import hashlib
@@ -10,13 +10,70 @@ import sys
 from typing import Annotated
 
 from cyclopts import App, Parameter
+import httpx
 
+from interact import prompt_projection
+from interact.agents.catalog_connection import CatalogConnection, CatalogConnectionError
 from interact.prompt_projection import compile_prompt_projection, install_prompt_projection
 from interact.prompt_publisher import publish_projection
 from interact.prompt_secret import read_prompt_token
+from interact.server_prompts import MAX_EDITOR_BYTES, PromptConflictError, ServerPrompts
 
-prompts_app = App(name="prompts", help="Author and synchronize prompts through local Git.")
-_MAX_EDITOR_BYTES = 1 << 20
+prompts_app = App(name="prompts", help="Edit server prompts when configured, or author through local Git.")
+_MAX_EDITOR_BYTES = MAX_EDITOR_BYTES
+
+
+class PromptMode:
+    """Choose the configured authority before touching any local authoring path."""
+
+    @staticmethod
+    def server() -> ServerPrompts | None:
+        try:
+            connection = CatalogConnection.load()
+        except (OSError, ValueError) as error:
+            _editor_error(str(error))
+        return None if connection is None else ServerPrompts(connection=connection)
+
+    @staticmethod
+    def require_local() -> None:
+        if PromptMode.server() is not None:
+            _editor_error(
+                "Server prompts are authoritative; saves are already server-versioned. "
+                "Use prompts catalog, prompts read namespace/slug.md, then prompts write "
+                "namespace/slug.md DIGEST with content on stdin, or the signed-in server prompt editor. "
+                "Use prompts sync to refresh installed caches. The local recovery worktree is untouched.",
+                "server_managed",
+            )
+
+    @staticmethod
+    def revisions(server: ServerPrompts) -> None:
+        try:
+            revisions = server.catalog()
+        except (OSError, ValueError, httpx.HTTPError):
+            _editor_error("Cannot read current server revisions; local recovery worktree is untouched.")
+        print(json.dumps({
+            "ok": True, "source": "server", "history": "current heads only",
+            "message": "Saves are server-versioned. Use prompts read PATH for current content; Git diff/history is not exposed by this API.",
+            "revisions": [{"path": server.path(item.key), "digest": item.digest,
+                           "revision": str(item.revision), "parent_digest": item.parent_digest,
+                           "source_commit": item.source_commit, "created_at": item.created_at.isoformat()}
+                          for item in revisions],
+        }, separators=(",", ":")))
+
+    @staticmethod
+    def project(server: ServerPrompts, *, install: bool) -> Path:
+        try:
+            if not install:
+                return prompt_projection.compile_server_prompt_projection(server.connection, _consumer_home())
+            vscode_root = Path(os.environ.get(
+                "INTERACT_PROMPT_VSCODE_ROOT", Path.home() / ".config" / "Code" / "User" / "prompts"
+            ))
+            state = _state_home() / "interact" / "prompts" / "installed.json"
+            return prompt_projection.install_server_prompt_projection(
+                server.connection, _consumer_home(), vscode_root, state, state.parent / "bootstrap-adoption.json",
+            )
+        except (OSError, ValueError, httpx.HTTPError):
+            _editor_error("Server prompt projection failed; local recovery worktree is untouched.")
 
 
 def _data_home() -> Path:
@@ -154,6 +211,14 @@ def _editor_error(message: str, code: str = "invalid") -> None:
 @prompts_app.command
 def catalog() -> None:
     """Return the finite editable prompt-source catalog as JSON."""
+    server = PromptMode.server()
+    if server is not None:
+        try:
+            files = [server.path(item.key) for item in server.catalog()]
+        except (OSError, ValueError, httpx.HTTPError):
+            _editor_error("Cannot read server prompt catalog; no local fallback.")
+        print(json.dumps({"ok": True, "files": files}, separators=(",", ":")))
+        return
     repository = _repository().resolve(strict=True)
     files: list[str] = []
     for target in sorted(repository.rglob("*")):
@@ -170,12 +235,41 @@ def catalog() -> None:
 @prompts_app.command
 def read(path: str) -> None:
     """Read one allowlisted UTF-8 prompt source with its CAS digest as JSON."""
+    server = PromptMode.server()
     try:
-        _, content = _source_file(path)
-    except (OSError, UnicodeError, ValueError) as error:
-        _editor_error(str(error))
+        if server is not None:
+            content = server.read(path).content
+        else:
+            _, content = _source_file(path)
+    except (OSError, UnicodeError, ValueError, httpx.HTTPError) as error:
+        _editor_error(str(error) if server is None else "Cannot read server prompt; check path, access and connection. No local fallback.")
     digest = hashlib.sha256(content.encode()).hexdigest()
     print(json.dumps({"ok": True, "path": path, "content": content, "digest": digest}, separators=(",", ":")))
+
+
+@prompts_app.command
+def create(path: str, *, name: str | None = None) -> None:
+    """Create a new prompt on the configured server; bounded UTF-8 content comes from stdin.
+
+    PATH is namespace/slug.md, not a local file. --name defaults to the slug.
+    Existing keys conflict; this command never creates or edits a local Git prompt source.
+    """
+    server = PromptMode.server()
+    if server is None:
+        _editor_error("Prompt creation requires a configured server; preserve the editor buffer. No local write was made.", "server_required")
+    data = sys.stdin.buffer.read(_MAX_EDITOR_BYTES + 1)
+    if len(data) > _MAX_EDITOR_BYTES:
+        _editor_error("prompt source is too large; preserve the editor buffer")
+    try:
+        saved = server.create(path, data.decode("utf-8"), name=name)
+    except PromptConflictError:
+        _editor_error("server prompt already exists; preserve the editor buffer and read the current prompt before editing", "conflict")
+    except CatalogConnectionError as error:
+        _editor_error(f"{error}; preserve the editor buffer. Read the server prompt before retrying. No local write was made.")
+    except (OSError, UnicodeError, ValueError, httpx.HTTPError):
+        _editor_error("Cannot confirm server creation; preserve the editor buffer. Check UTF-8 content, path, name, access and connection; read the server prompt before retrying. No local write was made.")
+    print(json.dumps({"ok": True, "source": "server", "path": path, "digest": saved.digest,
+                      "revision": str(saved.revision)}, separators=(",", ":")))
 
 
 @prompts_app.command
@@ -184,6 +278,18 @@ def write(path: str, digest: str) -> None:
     data = sys.stdin.buffer.read(_MAX_EDITOR_BYTES + 1)
     if len(data) > _MAX_EDITOR_BYTES:
         _editor_error("prompt source is too large")
+    server = PromptMode.server()
+    if server is not None:
+        try:
+            saved = server.write(path, digest, data.decode("utf-8"))
+        except PromptConflictError:
+            _editor_error("server prompt changed; preserve the editor buffer and reload", "conflict")
+        except CatalogConnectionError as error:
+            _editor_error(f"{error}; preserve the editor buffer. No local write was made.")
+        except (OSError, UnicodeError, ValueError, httpx.HTTPError):
+            _editor_error("Server save failed; preserve the editor buffer. Check access and connection, or save in the signed-in server prompt editor. No local write was made.")
+        print(json.dumps({"ok": True, "path": path, "digest": saved.digest}, separators=(",", ":")))
+        return
     parent: int | None = None
     descriptor: int | None = None
     temporary: str | None = None
@@ -233,6 +339,7 @@ def write(path: str, digest: str) -> None:
 @prompts_app.command
 def clone(remote: str) -> None:
     """Clone REMOTE into the local prompt authoring worktree."""
+    PromptMode.require_local()
     repository = _repository()
     if repository.exists():
         print(f"ERROR: prompt worktree already exists: {repository}", file=sys.stderr)
@@ -243,19 +350,32 @@ def clone(remote: str) -> None:
 
 @prompts_app.command
 def status() -> None:
-    """Show the exact Git state of the local prompt worktree."""
+    """Show server sync state when configured, otherwise local Git state."""
+    server = PromptMode.server()
+    if server is not None:
+        try:
+            result = server.status()
+        except (OSError, ValueError, httpx.HTTPError):
+            _editor_error("Cannot read server prompt sync status; no local fallback.")
+        print(json.dumps({"ok": True, "source": "server", "sync": result.model_dump(mode="json")}, separators=(",", ":")))
+        return
     _run("status", "--short", "--branch", repository=_repository())
 
 
 @prompts_app.command
 def diff() -> None:
-    """Show staged and unstaged prompt changes."""
+    """Show current server revisions when configured, otherwise local Git changes."""
+    server = PromptMode.server()
+    if server is not None:
+        PromptMode.revisions(server)
+        return
     _run("diff", "--no-ext-diff", "HEAD", "--", repository=_repository())
 
 
 @prompts_app.command
 def commit(message: Annotated[str, Parameter(name=["--message", "-m"])]) -> None:
     """Commit all authored prompt changes with MESSAGE."""
+    PromptMode.require_local()
     repository = _repository()
     conflicts = _run("diff", "--name-only", "--diff-filter=U", repository=repository).stdout
     if conflicts:
@@ -273,7 +393,11 @@ def commit(message: Annotated[str, Parameter(name=["--message", "-m"])]) -> None
 
 @prompts_app.command
 def log() -> None:
-    """Show immutable prompt revisions with author dates and ancestry."""
+    """Show current server revision metadata, or local Git history when unconfigured."""
+    server = PromptMode.server()
+    if server is not None:
+        PromptMode.revisions(server)
+        return
     _run(
         "log", "--date=iso-strict", "--decorate", "--graph",
         "--pretty=format:%H%x09%aI%x09%P%x09%s", repository=_repository(),
@@ -283,6 +407,7 @@ def log() -> None:
 @prompts_app.command
 def pull() -> None:
     """Merge from the configured remote without discarding local work."""
+    PromptMode.require_local()
     repository = _repository()
     _require_clean(repository)
     _run("pull", "--no-rebase", "--no-edit", repository=repository)
@@ -291,6 +416,7 @@ def pull() -> None:
 @prompts_app.command
 def push() -> None:
     """Push local prompt commits using ordinary Git conflict protection."""
+    PromptMode.require_local()
     repository = _repository()
     upstream = _run(
         "rev-parse", "--abbrev-ref", "@{upstream}", repository=repository,
@@ -305,6 +431,7 @@ def push() -> None:
 @prompts_app.command
 def resolve(*paths: str) -> None:
     """Stage only named conflicted prompt source PATHS after manual resolution."""
+    PromptMode.require_local()
     repository = _repository()
     if not paths:
         print("ERROR: name at least one conflicted source path", file=sys.stderr)
@@ -329,14 +456,16 @@ def resolve(*paths: str) -> None:
 
 @prompts_app.command
 def compile() -> None:
-    """Compile the clean exact HEAD into the local projection cache."""
-    print(_compile(_repository()))
+    """Compile server prompts when configured, otherwise the clean local Git HEAD."""
+    server = PromptMode.server()
+    print(_compile(_repository()) if server is None else PromptMode.project(server, install=False))
 
 
 @prompts_app.command
 def install() -> None:
     """Atomically install the exact compiled projection into managed consumers."""
-    print(_install(_repository()))
+    server = PromptMode.server()
+    print(_install(_repository()) if server is None else PromptMode.project(server, install=True))
 
 
 @prompts_app.command
@@ -365,6 +494,7 @@ def scope(name: str, project: Path = Path(".")) -> None:
 @prompts_app.command
 def publish(endpoint: str, token_file: Path) -> None:
     """Publish the clean, pushed exact HEAD to an authenticated prompt service."""
+    PromptMode.require_local()
     repository = _repository()
     _require_clean(repository)
     head = _run("rev-parse", "HEAD", repository=repository, output=False).stdout.strip()
@@ -381,7 +511,11 @@ def publish(endpoint: str, token_file: Path) -> None:
 
 @prompts_app.command
 def sync() -> None:
-    """Pull, compile, and install locally without external publication."""
+    """Refresh installed server caches when configured, otherwise pull and install local Git."""
+    server = PromptMode.server()
+    if server is not None:
+        print(PromptMode.project(server, install=True))
+        return
     repository = _repository()
     _require_clean(repository)
     _run("pull", "--no-rebase", "--no-edit", repository=repository)

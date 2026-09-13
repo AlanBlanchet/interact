@@ -57,7 +57,7 @@ app.command(
 )
 app.command(
     "interact.cli.app_commands:config_app", name="config",
-    help="Persist model and key settings.",
+    help="Manage personal server preferences and local machine settings.",
 )
 app.command(
     "interact.cli.app_commands:agents_app", name="agents",
@@ -66,6 +66,10 @@ app.command(
 app.command(
     "interact.cli.prompts:prompts_app", name="prompts",
     help="Author and synchronize prompts through a local Git worktree.",
+)
+app.command(
+    "interact.cli.workspace:workspace_app", name="workspace",
+    help="Inspect and edit the connected server workspace.",
 )
 app.command(
     "interact.cli.tui_command:tui", name="_tui", show=False,

@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import interact.desktop as dt
 import interact.server as srv
 from interact.browser import BrowserManager
 from interact.desktop import DesktopWindow
@@ -83,34 +82,46 @@ def rec_win():
     return win
 
 
+@pytest.fixture
+def recording_metadata(monkeypatch):
+    monkeypatch.setattr(srv.tools_desktop, "_record_metadata", AsyncMock(return_value=(5.0, 2.0)))
+    monkeypatch.setattr(srv.tools_desktop, "sample_video_frames", AsyncMock(return_value=[]))
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("moving, query", [(False, None), (True, "what animates?")])
+@pytest.mark.parametrize("query", [None, "what animates?"])
 async def test_record_desktop_names_the_absolute_file_it_wrote(
-    sandbox, rec_win, monkeypatch, moving, query
+    sandbox, rec_win, recording_metadata, monkeypatch, query
 ):
-    """Both exits of a desktop recording — 'no motion detected' and the analysed clip."""
-    monkeypatch.setattr(dt.Motion, "is_blank", staticmethod(lambda b: False))
-    monkeypatch.setattr(dt.Motion, "detect", staticmethod(lambda b: moving))
+    """Capture-only and analyzed recordings retain their typed artifact path."""
     monkeypatch.setattr(srv.vlm, "_vlm", _vlm_returning("a token slides in"))
     out = await srv.tools_desktop._record_desktop(
         rec_win, query=query, start=True, duration=2.0, fps=None, path="clip.mp4"
     )
     dest = sandbox["out"] / "clip.mp4"
-    assert _note(dest, _DATA) in out and dest.read_bytes() == _DATA
+    assert out.capture.status == "captured"
+    assert out.capture.artifact == str(dest) and dest.is_absolute()
+    assert dest.read_bytes() == _DATA
+    assert out.analysis.text == ("a token slides in" if query else None)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query", [None, "what animates?"])
-async def test_record_browser_names_the_absolute_file_it_wrote(sandbox, monkeypatch, query):
-    """With and without a query — the save rides through vlm._media_response either way."""
+async def test_record_browser_names_the_absolute_file_it_wrote(sandbox, recording_metadata, monkeypatch, query):
+    """With and without a query, the typed result points to the saved bytes."""
     mgr = MagicMock(spec=BrowserManager)
+    mgr.recording_requested_fps = None
     mgr.stop_recording.return_value = b"WEBM"
     monkeypatch.setattr(srv.vlm, "_vlm", _vlm_returning("a token slides in"))
     out = await srv.tools_desktop._record_browser(
         mgr, start=False, query=query, path="clip.webm", session="default"
     )
     dest = sandbox["out"] / "clip.webm"
-    assert _note(dest, b"WEBM") in out and dest.read_bytes() == b"WEBM"
+    assert out.capture.status == "captured"
+    assert out.capture.artifact == str(dest) and dest.is_absolute()
+    assert dest.read_bytes() == b"WEBM"
+    assert "Reacquire refs" in out.analysis.text
+    assert ("a token slides in" in out.analysis.text) == bool(query)
 
 
 @pytest.mark.asyncio

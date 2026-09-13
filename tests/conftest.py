@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -23,21 +24,52 @@ os.environ.setdefault("OLLAMA_DISCOVERY", "0")
 # a real fetch would give the suite different scores from CI — and did. Empty means "no board"; a
 # test that wants one passes its own path to `live_scores`.
 os.environ.setdefault("BENCHMARK_SCORES", "")
+# Avoid LiteLLM fetching its price table at import; explicit HTTP fixtures may opt back in.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 # Unit tests retain the historical mocked-LiteLLM default.  Production Config defaults to the
 # subscription session path; the explicit test override prevents an old test that patches only
 # `_vision_completion` from launching the user's real Claude/Codex login by accident.
 os.environ.setdefault("INTERACT_MEDIA_BACKEND", "api")
 os.environ.setdefault("INTERACT_MEDIA_BILLING", "api_allowed")
 
+from interact.config import UserConfig, load_dotenv_for_cli
 from interact.agents.providers import AgentProvider, ClaudeCodeProvider
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _load_repo_dotenv() -> None:
-    """Load nearest `.env` via the shared CLI loader (override=False)."""
-    from interact.config import load_dotenv_for_cli
+@pytest.fixture
+def media_output_root() -> Path:
+    """Unique private media output outside global /tmp, including repeated/concurrent runs."""
+    parent = Path(__file__).resolve().parents[1] / "out" / "tests" / "media"
+    parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=parent, prefix="case-") as directory:
+        yield Path(directory)
 
-    load_dotenv_for_cli()
+
+@pytest.fixture(autouse=True)
+def _isolate_unit_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """Default unit authority is temporary; explicit test fixtures may override it afterward.
+
+    HOME alone cannot relocate UserConfig.PATH, which was captured at module import.
+    Integration tests explicitly retain their configured environment and dotenv behaviour.
+    """
+    if "integration" in request.keywords:
+        load_dotenv_for_cli()
+        return
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    for key, directory in (
+        ("XDG_DATA_HOME", ".local/share"),
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_CACHE_HOME", ".cache"),
+        ("XDG_STATE_HOME", ".local/state"),
+    ):
+        monkeypatch.setenv(key, str(tmp_path / directory))
+    for key in ("INTERACT_PARENT_RUN_ID", "INTERACT_RUN_ID", "INTERACT_SESSION_ID", "CODEX_THREAD_ID"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(UserConfig, "PATH", tmp_path / ".interact" / "config.env")
+    monkeypatch.setattr(UserConfig, "_process_interact_env", None)
 
 
 @pytest.fixture(autouse=True)

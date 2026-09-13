@@ -12,6 +12,8 @@ So a profile is a NAME the operator defines, and it resolves to a fixed, allow-l
 variables. There is no arrangement of inputs that turns a profile into an arbitrary environment.
 """
 
+import json
+
 import pytest
 
 from interact.agents.profiles import (
@@ -72,8 +74,23 @@ def test_a_malformed_profile_value_yields_nothing(value):
     assert overlay_for(value, env={}) == {}
 
 
+@pytest.fixture
+def named_profile_role(tmp_path):
+    """Satisfy real role-definition and model-policy prerequisites before profile validation."""
+    from interact.config import UserConfig
+
+    role = "profile-test-role"
+    definition = tmp_path / ".claude" / "agents" / f"{role}.md"
+    definition.parent.mkdir(parents=True)
+    definition.write_text("---\nname: profile-test-role\n---\nFixture role.\n", encoding="utf-8")
+    policy = UserConfig.PATH.parent / "agents.json"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text(json.dumps({"agents": {role: "cap.vlm"}}), encoding="utf-8")
+    return role
+
+
 @pytest.mark.asyncio
-async def test_the_spawn_tool_refuses_a_profile_nobody_defined(monkeypatch):
+async def test_the_spawn_tool_refuses_a_profile_nobody_defined(monkeypatch, named_profile_role):
     """Silently ignoring an unknown profile is the dangerous version: the agent runs, looks fine,
     and quietly used the wrong model. Refuse, and say which profiles exist."""
     import interact.server as srv
@@ -81,9 +98,20 @@ async def test_the_spawn_tool_refuses_a_profile_nobody_defined(monkeypatch):
     monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
 
     monkeypatch.delenv("INTERACT_PROFILE_CHEAP", raising=False)
-    out = await srv.agent_spawn("do a thing", profile="does-not-exist")
+    out = await srv.agent_spawn("do a thing", agent=named_profile_role, profile="does-not-exist")
     assert out.startswith("ERROR:"), out
     assert "does-not-exist" in out
+
+
+@pytest.mark.asyncio
+async def test_a_known_profile_cannot_override_a_named_roles_policy(monkeypatch, named_profile_role):
+    import interact.server as srv
+
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+    monkeypatch.setenv("INTERACT_PROFILE_CHEAP", "ollama/fixture-model")
+    out = await srv.agent_spawn("do a thing", agent=named_profile_role, profile="cheap")
+    assert out.startswith("ERROR:"), out
+    assert "cannot be bypassed with a provider profile" in out
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,13 @@ from pydantic import TypeAdapter
 from interact_core import (
     Account,
     AccountUpdate,
+    PortableToolSettings, PortableToolSettingsUpdate, PortableToolSettingsValues,
     Bootstrap,
+    CompanyProfile,
+    CompanyProfileUpdate,
+    CompanyLogoUpload,
+    CompanyLookupResult,
+    ReleaseInfo,
     LoginRequest,
     PasswordResetRequest,
     PlatformError,
@@ -28,6 +34,9 @@ from interact_core import (
 
 def main() -> None:
     contract = Union[
+        PortableToolSettings, PortableToolSettingsUpdate, PortableToolSettingsValues,
+        CompanyProfile, CompanyProfileUpdate, CompanyLogoUpload, CompanyLookupResult,
+        ReleaseInfo,
         Account, AccountUpdate, Bootstrap, SignupRequest, LoginRequest, TokenRequest,
         RecoveryRequest, PasswordResetRequest, PlatformError, Workspace, WorkspaceCreate, WorkspaceInvitation,
         WorkspaceInvite, WorkspaceMember, WorkspaceMembership, WorkspaceMemberRoleUpdate, WorkspaceUpdate,

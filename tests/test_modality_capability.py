@@ -120,7 +120,8 @@ def test_video_role_still_resolves_a_model_without_a_native_video_key(monkeypatc
 
 @pytest.mark.parametrize(
     "bid, category, has_scores",
-    [("video_mme", "video", True), ("mvbench", "video", False),
+    # Video-MME's unreceipted offline scores were removed; registration does not imply evidence.
+    [("video_mme", "video", False), ("mvbench", "video", False),
      ("mlvu", "video", False), ("mmau", "audio", True)],
 )
 def test_benchmarks_registered_with_categories(bid, category, has_scores):
@@ -128,6 +129,8 @@ def test_benchmarks_registered_with_categories(bid, category, has_scores):
     assert b is not None and b.category == category
     if has_scores:
         assert b.published is not None and b.published.entries
+    else:
+        assert b.published is None
 
 
 def test_audio_is_its_own_benchmark_category():

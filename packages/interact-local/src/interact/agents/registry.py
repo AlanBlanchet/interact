@@ -18,6 +18,7 @@ import stat
 import sys
 import time
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import BinaryIO, Literal
 
@@ -27,6 +28,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from interact_core import AgentRevisionRef, PromptExecutionRef
 
 from interact.agents.events import AgentEvent
+from interact.agents.catalog_connection import CatalogConnection
 from interact.agents.providers import PROVIDERS
 from interact.server_registry import (
     _alive,  # generic pid liveness (Windows-safe, no signal sent)
@@ -47,6 +49,7 @@ ConversationCapability = Literal[
     "streaming", "resume", "cancel", "approvals", "collaboration"
 ]
 _RUN_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,160}$")
+_SESSION_ID: ContextVar[str | None] = ContextVar("agent_session_id", default=None)
 
 
 class AgentRun(BaseModel):
@@ -87,6 +90,8 @@ class AgentRun(BaseModel):
     permission_mode: str | None = None
     parent_run_id: str | None = None
     root_run_id: str | None = None
+    #: Owning caller conversation, independent of run genealogy and the child's vendor session.
+    session_id: str | None = Field(default=None, min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._:@+-]+$")
     spawned_by_event_id: str | None = None
     provider_session_id: str | None = None
     provider_turn_id: str | None = None
@@ -501,19 +506,70 @@ def _terminate(pid: int) -> bool:
         return False
 
 
+def resolve_session_id(session_id: str | None = None, *, parent_run_id: str | None = None, cli_harness: bool = False):
+    """Resolve only explicit caller context or a recorded parent's owner, never cwd or PID.
+
+    Vendor thread environment is read only for an explicit CLI caller: an MCP server may
+    be shared. This is a listing scope, not a new authorization boundary.
+    """
+    parent_id = parent_run_id or os.environ.get("INTERACT_PARENT_RUN_ID")
+    parent = _read_record(parent_id) if parent_id else None
+    supplied = session_id if session_id is not None else _SESSION_ID.get()
+    if supplied is not None:
+        supplied = _safe_run_id(supplied)
+    if parent is not None and parent.session_id is not None:
+        if supplied is not None and supplied != parent.session_id:
+            raise ValueError("Session identity conflicts with the recorded parent conversation")
+        return parent.session_id
+    if supplied is None:
+        inherited = os.environ.get("INTERACT_SESSION_ID")
+        supplied = _safe_run_id(inherited) if inherited is not None else None
+    # A child's vendor thread cannot establish its unknown parent's owning conversation.
+    if supplied is None and cli_harness and parent_id is None:
+        supplied = os.environ.get("CODEX_THREAD_ID")
+        if supplied is not None:
+            supplied = _safe_run_id(supplied)
+    return supplied
+
+
+@contextmanager
+def session_context(session_id: str | None = None, *, parent_run_id: str | None = None, cli_harness: bool = False):
+    """Bind one asynchronous spawn to its caller without mutating process-global environment."""
+    identity = resolve_session_id(session_id, parent_run_id=parent_run_id, cli_harness=cli_harness)
+    token = _SESSION_ID.set(identity)
+    try:
+        yield identity
+    finally:
+        _SESSION_ID.reset(token)
+
+
+def session_runs(*, session_id: str | None = None, all_sessions: bool = False, include_foreign: bool = False):
+    """Launched runs in one conversation; machine-wide inventory requires explicit opt-in."""
+    if all_sessions:
+        if session_id is not None:
+            raise ValueError("Choose session_id or all_sessions, not both")
+        return list_runs(include_foreign=include_foreign)
+    identity = resolve_session_id(session_id)
+    if identity is None:
+        raise ValueError("Session identity required: pass session_id / --session-id or set INTERACT_SESSION_ID; use all_sessions / --all-sessions explicitly for all runs")
+    # Filter before deriving status: viewing one session must not refresh unrelated histories.
+    return list_runs(session_id=identity)
+
+
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
              agent: str | None = None, permission_mode: str | None = None,
              requested_criterion: str | None = None, reasoning: str | None = None,
              provider_session_id: str | None = None,
              agent_ref: AgentRevisionRef | None = None,
-             definition_path: Path | None = None) -> AgentRun:
+             definition_path: Path | None = None, session_id: str | None = None) -> AgentRun:
     provider_impl = PROVIDERS.get(provider)
     definition = definition_path
     if definition is None and agent_ref is None:
         definition = provider_impl.definition_path(agent) if (provider_impl and agent) else None
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
+                   session_id=resolve_session_id(session_id, parent_run_id=parent_run_id),
                    agent=agent, agent_ref=agent_ref, definition_path=str(definition) if definition else None,
                    permission_mode=permission_mode, requested_criterion=requested_criterion,
                    reasoning=reasoning,
@@ -610,14 +666,12 @@ def _read_record(run_id: str) -> AgentRun | None:
 
 
 def _backfill_definition(run: AgentRun) -> AgentRun:
-    """Repair a record written before ``definition_path`` was tracked.
-
-    Every reader of these files — the VS Code panel above all — reads them straight off disk and
-    cannot ask a provider where its definitions live. Without this, each client keeps its own copy
-    of one vendor's directory layout, which is the hard-coding the field exists to remove. Repaired
-    on disk rather than re-resolved on every read, so it costs one write per stale record, once.
-    """
+    """Offer legacy local links without consulting today's server roster for historical runs."""
     if run.definition_path is not None or not run.agent or run.agent_ref is not None:
+        return run
+    # A retired role may be absent from today's catalog. Listing history is a local
+    # read, and must neither fetch current instructions nor substitute them for history.
+    if CatalogConnection.path().exists():
         return run
     provider = PROVIDERS.get(run.provider)
     resolved = provider.definition_path(run.agent) if provider is not None else None
@@ -888,6 +942,8 @@ def upsert_provider_child(
             raise ValueError("provider child identity collision")
         if run is None:
             observed_at = time.time()
+            parent = _read_record(parent_run_id)
+            root = _read_record(root_run_id)
             run = AgentRun(
                 run_id=run_id,
                 kind="provider_child",
@@ -900,6 +956,7 @@ def upsert_provider_child(
                 model=requested_model,
                 parent_run_id=parent_run_id,
                 root_run_id=root_run_id,
+                session_id=parent.session_id if parent is not None and parent.session_id is not None else root.session_id if root is not None else None,
                 spawned_by_event_id=spawned_by_event_id,
                 provider_session_id=run_id,
                 connection="local_session",
@@ -1270,23 +1327,27 @@ def _discover_foreign() -> list[dict]:
     return found
 
 
-def list_runs(*, include_foreign: bool = False) -> list[AgentRun]:
-    """Every known run, newest last. With ``include_foreign``, also the sessions a provider can
+def list_runs(*, include_foreign: bool = False, session_id: str | None = None) -> list[AgentRun]:
+    """Low-level lifecycle/history inventory; interactive lists use ``session_runs``.
+
+    Every known run, newest last. With ``include_foreign``, also the sessions a provider can
     see that interact did not start — deduped against our own by id, since we deliberately reuse
     the vendor's session id as our run id."""
+    if session_id is not None:
+        _safe_run_id(session_id)
     d = agents_dir()
     runs: list[AgentRun] = []
     known: set[str] = set()
     if d.exists():
         for path in sorted(d.glob("*.json")):
             run = _read_record(path.stem)
-            if run is None or run.run_id in known:
+            if run is None or run.run_id in known or (session_id is not None and run.session_id != session_id):
                 continue  # a corrupt or aliased record must not hide every other run
             known.add(run.run_id)
             runs.append(run)
     runs = [_derive(r) for r in runs]
 
-    if include_foreign:
+    if include_foreign and session_id is None:
         known = {r.run_id for r in runs}
         for raw in _discover_foreign():
             found = AgentRun.from_foreign(raw)
@@ -1335,6 +1396,8 @@ def resolve_run_id(prefix: str) -> str | None:
     """
     if not prefix:
         return None
+    if _RUN_ID.fullmatch(prefix) and _read_record(prefix) is not None:
+        return prefix
     ids = [r.run_id for r in list_runs(include_foreign=True)]
     if prefix in ids:
         return prefix  # an exact id is never ambiguous, even if it prefixes another

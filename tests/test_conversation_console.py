@@ -1995,7 +1995,16 @@ def test_codex_schema_capture_drives_complete_request_policy_without_handwritten
     assert "SUPPORTED_REQUEST_HANDLERS" in source and "REJECTED_REQUEST_POLICIES" in source
 
 
-def test_codex_schema_capture_imports_from_an_offline_wheel() -> None:
+@pytest.fixture(scope="session")
+def wheel_build_cache() -> Path:
+    """Resolve the build tool's cache before per-test HOME/XDG isolation relocates it."""
+    result = subprocess.run(
+        ["uv", "cache", "dir"], capture_output=True, text=True, check=True, timeout=10,
+    )
+    return Path(result.stdout.strip())
+
+
+def test_codex_schema_capture_imports_from_an_offline_wheel(wheel_build_cache: Path) -> None:
     """Runtime validation must be package-owned rather than reaching back into tests."""
     root = Path("out/tests/codex-schema-wheel") / str(uuid.uuid4())
     wheelhouse = root / "wheelhouse"
@@ -2008,6 +2017,8 @@ def test_codex_schema_capture_imports_from_an_offline_wheel() -> None:
                 "uv",
                 "build",
                 "--offline",
+                "--cache-dir",
+                str(wheel_build_cache),
                 "--wheel",
                 "--out-dir",
                 str(wheelhouse.resolve()),

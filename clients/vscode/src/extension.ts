@@ -4,6 +4,9 @@ import { ACTIVITY_SCHEME, activityPath, formatActivity, runIdFromPath } from "./
 import { IO_INLINE, IO_SCHEME, ioFromPath } from "./ioDocument";
 import { ChatViewProvider } from "./chatView";
 import { interactCli } from "./interactCli";
+import { ServerWorkspaceControls } from "./serverWorkspaceControls";
+import { serverWorkspaceConfigured } from "./workspaceState.ts";
+import { refreshToolSettings, saveToolSetting, stripPortableEnvironment, toolSettingsView } from "./toolSettings.ts";
 import { REVEAL_COMMAND, REVEALED_KEY, shouldRevealOnce } from "./panelReveal";
 import { AgentsProvider, type GroupBy } from "./agentsView";
 import { DashboardPanel } from "./dashboard";
@@ -156,6 +159,7 @@ function buildEnv(
   //
   // A pin the PERSON chose still arrives here through keyManager/settings and still wins.
 
+  stripPortableEnvironment(env, toolSettingsView());
   return env;
 }
 
@@ -229,7 +233,9 @@ async function selectModel(
 
   const items: vscode.QuickPickItem[] = [];
 
-  const currentModel = cfg().get<string>(settingKey) || "";
+  const settingsSnapshot = await refreshToolSettings();
+  const currentModel = settingsSnapshot?.configured
+    ? settingsSnapshot.values[SETTING_ENV_MAP[settingKey]] || "" : cfg().get<string>(settingKey) || "";
   if (currentModel) {
     items.push({
       label: "Current",
@@ -312,7 +318,7 @@ async function selectModel(
 
   if (!picked) return;
 
-  await cfg().update(
+  if (!await saveToolSetting(SETTING_ENV_MAP[settingKey], picked.label, settingsSnapshot)) await cfg().update(
     settingKey,
     picked.label,
     vscode.ConfigurationTarget.Global,
@@ -453,6 +459,9 @@ export async function activate(
   // The chat surface, under the agent list in the same side-bar container: the list says what is
   // running, this is where you talk to it.
   const chatProvider = new ChatViewProvider(log);
+  const workspaceControls = new ServerWorkspaceControls(() => { agentsProvider.refresh(); refreshWorkplace(); });
+  context.subscriptions.push(workspaceControls, vscode.commands.registerCommand("interact.workspace", () => workspaceControls.open()));
+  void workspaceControls.refresh().catch(() => {});
   // Clicking somebody in the rail aims the chat at them, exactly as clicking a tree row does —
   // one behaviour, so the two surfaces cannot teach different things.
 
@@ -462,8 +471,9 @@ export async function activate(
   context.subscriptions.push(
     // "See their instructions" opened the TRANSCRIPT — a label that lied, caught by the sweep.
     // This opens the definition file itself, resolved against the prompt repo's real location.
-    vscode.commands.registerCommand("interact.agents.definition", (arg?: { run?: { agent?: string | null; definition_path?: string | null } }) => {
+    vscode.commands.registerCommand("interact.agents.definition", async (arg?: { run?: { agent?: string | null; definition_path?: string | null } }) => {
       const run = arg?.run;
+      if (serverWorkspaceConfigured()) { await workspaceControls.open(run?.agent ?? undefined); return; }
       const path = run?.definition_path
         ?? (run?.agent ? definitionFile(run.agent, readOrg()) : null);
       if (path) void vscode.window.showTextDocument(vscode.Uri.file(path));
@@ -489,10 +499,9 @@ export async function activate(
       }
       if (agent) chatProvider.showAgent(agent);
     }),
-    // Choosing what runs on what. The company file DECLARES a model per agent, but it is generated
-    // from the prompt repo — so a choice made here is stored beside interact's own state, where no
-    // generator owns it, and shown as overriding rather than replacing the declaration.
+    // Connected choices edit immutable server revisions. Standalone choices use local policy.
     vscode.commands.registerCommand("interact.agents.model", async (arg?: string | { run?: { agent?: string } }) => {
+      if (serverWorkspaceConfigured()) { await workspaceControls.open(typeof arg === "string" ? arg : arg?.run?.agent); return; }
       const org = readOrg();
       const named = typeof arg === "string" ? arg : arg?.run?.agent ?? undefined;
       const agent = named ?? (await vscode.window.showQuickPick(
@@ -988,7 +997,8 @@ export async function activate(
     const serverDef = (vscode.lm as any).registerMcpServerDefinitionProvider(
       "interact",
       {
-        provideMcpServerDefinitions() {
+        async provideMcpServerDefinitions() {
+          await refreshToolSettings();
           const [cmd, args] = resolveCommand(log);
           const env = buildEnv(keyManager, allEnvKeys, modelsData);
           log.appendLine(`Starting: ${cmd} ${args.join(" ")}`);

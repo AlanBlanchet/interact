@@ -7,6 +7,7 @@ import litellm
 import pytest
 
 import interact.vision.core as v
+from interact.config import Config
 from interact.vision.core import VisionError
 
 _MSGS = [{"role": "user", "content": [{"type": "text", "text": "what is this"}]}]
@@ -80,7 +81,7 @@ async def test_a_non_provider_exception_is_not_dressed_up(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_transcription_shares_the_translation(monkeypatch):
+async def test_transcription_shares_the_translation(monkeypatch, media_output_root):
     """``transcribe_audio`` is the OTHER litellm call; the same 429 must read the same way there."""
     monkeypatch.setattr(v.litellm, "validate_environment", lambda model: {"keys_in_environment": True})
     monkeypatch.setattr(
@@ -89,6 +90,9 @@ async def test_transcription_shares_the_translation(monkeypatch):
         _raising(litellm.exceptions.RateLimitError(message=_RAW, llm_provider="openai", model="whisper-1")),
     )
     with pytest.raises(VisionError) as info:
-        await v.transcribe_audio(b"RIFF....WAVE", model="whisper-1", mime_type="audio/wav")
+        await v.transcribe_audio(
+            b"RIFF....WAVE", model="whisper-1", mime_type="audio/wav",
+            config=Config(debug_dir=media_output_root, media_backend="api", media_billing="api_allowed"),
+        )
     text = str(info.value)
     assert "whisper-1" in text and "out of credits" in text and _SAID in text, text

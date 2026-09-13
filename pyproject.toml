@@ -1,6 +1,6 @@
 [project]
 name = "interact"
-version = "0.39.0"
+version = "0.42.0"
 description = "MCP server for browser + desktop automation with vision analysis"
 readme = "README.md"
 authors = [{ name = "Alan Blanchet", email = "alan@alan-blanchet.fr" }]
@@ -9,7 +9,7 @@ license-files = ["LICENSE"]
 keywords = ["mcp", "automation", "browser", "desktop", "playwright", "vision", "agent", "llm"]
 requires-python = ">=3.11"
 dependencies = [
-    "interact-core @ git+https://github.com/AlanBlanchet/interact-core.git@2896e7bf0d3f9669651128a3037edb54354d79f6",
+    "interact-core @ git+https://github.com/AlanBlanchet/interact-core.git@714a71157daa671fbbeb7468f15a5f6807a7438c",
     "cyclopts>=3.0",
     "rich>=13.0",
     "evdev>=1.9; sys_platform == 'linux'", # /dev/uinput absolute input (X11 + Wayland)
@@ -80,6 +80,7 @@ interact-fetch-upstream = "interact.benchmarks.upstream:_main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
 norecursedirs = ["tests/fixtures", "tests/e2e"]
 # Per-test timeout so a test that hangs (e.g. on Windows) FAILS with a traceback instead of
 # blocking the whole job forever. "thread" method works on Windows (signal/SIGALRM is Unix-only).

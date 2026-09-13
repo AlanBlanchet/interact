@@ -1,21 +1,258 @@
 """Compile exact committed prompt sources into verified provider projections."""
 
-from __future__ import annotations
-
 import hashlib
+import fcntl
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
 import subprocess
 import sys
+from uuid import UUID, uuid4
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+import yaml
+from interact_core import PromptExecutionRef, PromptKey
+
+from interact.agents.catalog import AgentCatalog, AgentInstructionSet
+from interact.agents.catalog_connection import CatalogConnection
 
 
 MANIFEST_NAME = "projection-manifest.json"
-_OUTPUT_ROOTS = ("agents", "skills", "rules", "scopes")
+_OUTPUT_ROOTS = ("agents", "skills", "rules", "scopes", "references")
 _OUTPUT_FILES = ("AGENTS.md", "instructions.md", "org.json")
 _PASSTHROUGH_ROOTS = ("hooks",)
+
+
+def compile_server_prompt_projection(connection: CatalogConnection, installed_root: Path) -> Path:
+    """Compile one verified server snapshot without executing downloaded source code."""
+    catalog = AgentCatalog.refresh(connection, allow_stale=False)
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    consumer_key = hashlib.sha256(str(installed_root.resolve()).encode()).hexdigest()[:16]
+    root = cache_home / "interact" / "prompts" / "server" / str(connection.workspace_id)
+    destination = root / f"{catalog.snapshot.cursor}-{consumer_key}-{catalog.access_generation}"
+    _safe_directory(root, create=True)
+    outputs = _server_outputs(catalog, installed_root, destination)
+    if destination.exists():
+        with connection.access_guard(catalog.access_generation):
+            _verified_server_cache(destination, outputs)
+            return destination
+    staging = root / f".compile-{uuid4().hex}"
+    with _directory_handle(root) as parent:
+        os.mkdir(staging.name, mode=0o700, dir_fd=parent)
+    try:
+        for relative, content in outputs.items():
+            path = staging / _safe_path(relative)
+            _safe_directory(path.parent, create=True)
+            _write_prompt(path, content.encode("utf-8"), 0o600)
+        records = _compiled_outputs(staging)
+        manifest = {
+            "version": 1, "source_kind": "server-catalog", "source_commit": None,
+            "workspace_id": str(catalog.connection.workspace_id),
+            "catalog_cursor": catalog.snapshot.cursor,
+            "access_generation": str(catalog.access_generation),
+            "fetched_at": catalog.fetched_at.isoformat(),
+            "outputs": [{"path": name, "mode": f"{mode:04o}", "size": len(content),
+                         "sha256": hashlib.sha256(content).hexdigest(),
+                         "consumers": _consumer_kinds(name)}
+                        for name, (mode, content) in sorted(records.items())],
+        }
+        _write_prompt(staging / MANIFEST_NAME, (json.dumps(manifest, indent=2) + "\n").encode(), 0o600)
+        with connection.access_guard(catalog.access_generation):
+            if destination.exists():
+                _verified_server_cache(destination, outputs)
+            else:
+                _move_prompt_backup(staging, destination)
+        return destination
+    finally:
+        if staging.exists():
+            with _directory_handle(root) as parent:
+                shutil.rmtree(staging.name, dir_fd=parent)
+
+
+def _verified_server_cache(destination: Path, outputs: dict[str, str]) -> None:
+    actual = _validated_manifest_outputs(destination)
+    if {name: path.read_bytes() for name, path in actual.items()} != {
+        name: content.encode("utf-8") for name, content in outputs.items()
+    }:
+        raise ValueError("cached projection differs from verified server records")
+
+
+def install_server_prompt_projection(
+    connection: CatalogConnection, home: Path, vscode_root: Path, state_path: Path,
+    adoption_path: Path | None = None,
+) -> Path:
+    """Install server-derived prompt files while leaving runtime hooks and settings intact."""
+    projection = compile_server_prompt_projection(connection, home)
+    manifest = json.loads((projection / MANIFEST_NAME).read_text())
+    generation = UUID(manifest["access_generation"])
+    with connection.access_guard(generation):
+        install_prompt_projection(projection, home, vscode_root, state_path, adoption_path)
+    return projection
+
+
+def _server_outputs(catalog: AgentCatalog, home: Path, projection: Path) -> dict[str, str]:
+    snapshot = catalog.snapshot
+    roles = sorted(snapshot.agents, key=lambda agent: agent.role_key or str(agent.id))
+    identifiers = {agent.id: agent.role_key or f"agent-{agent.id}" for agent in roles}
+    if snapshot.root_agent is None:
+        raise ValueError("choose the workspace's main agent before installing its instructions")
+    main = snapshot.revision(snapshot.root_agent)
+    if not snapshot.prompt_heads:
+        raise ValueError("server catalog lacks authoritative prompt heads; upgrade the server first")
+    heads = {reference.key: snapshot.prompt(reference) for reference in snapshot.prompt_heads}
+    outputs: dict[str, str] = {}
+    skill_paths = {}
+    skill_discovery = {}
+    for agent in roles:
+        for reference in agent.skill_paradigms:
+            prompt = snapshot.prompt(reference)
+            metadata = _projection_metadata(prompt.content)
+            if not isinstance(metadata.get("description"), str) or not metadata["description"].strip():
+                raise ValueError(f"server skill {prompt.key.namespace}/{prompt.key.slug} lacks routing metadata")
+            ProjectionMetadata.from_content(prompt.content)
+            relative = f"references/{prompt.key.namespace}/{prompt.key.slug}/{prompt.digest}/SKILL.md"
+            outputs[relative] = prompt.content
+            skill_paths[reference] = projection / relative
+            head = heads.get(prompt.key)
+            if head is None:
+                raise ValueError("server skill has no authoritative head")
+            skill_discovery[prompt.key] = head
+    for prompt in skill_discovery.values():
+        metadata = ProjectionMetadata.from_content(prompt.content)
+        routing = metadata.interact
+        if routing is None or routing.projection != "skill":
+            raise ValueError("server skill head is missing its skill routing")
+        relative = _projection_relative("skills", f"{prompt.key.slug}/SKILL.md", routing.scope)
+        if relative in outputs:
+            raise ValueError("server skills have colliding consumer names")
+        outputs[relative] = prompt.content
+    for agent in roles:
+        if agent.id == main.id:
+            continue
+        key = identifiers[agent.id]
+        header = {"name": key, "description": agent.description or agent.name,
+                  "tools": list(agent.harness_tools)}
+        body = snapshot.definition(key, skill_paths, instructions=AgentInstructionSet(agent=agent, prompts=snapshot.paradigms))
+        outputs[_projection_relative("agents", f"{key}.md", agent.scope)] = (
+            "---\n" + yaml.safe_dump(header, sort_keys=False, allow_unicode=True) + "---\n\n" + body + "\n"
+        )
+    rule_references = []
+    for prompt in snapshot.paradigms:
+        metadata = _projection_metadata(prompt.content)
+        if metadata.get("interact", {}).get("projection") == "rule":
+            ProjectionMetadata.from_content(prompt.content)
+            outputs[f"references/{prompt.key.namespace}/{prompt.key.slug}/{prompt.digest}/RULE.md"] = prompt.content
+    for prompt in heads.values():
+        metadata = _projection_metadata(prompt.content)
+        if metadata.get("interact", {}).get("projection") != "rule":
+            continue
+        routing = ProjectionMetadata.from_content(prompt.content).interact
+        relative = _projection_relative("rules", f"{prompt.key.slug}.md", routing.scope)
+        if relative in outputs:
+            raise ValueError("server rules have colliding consumer names")
+        header = {key: value for key, value in metadata.items() if key != "interact"}
+        if routing.paths:
+            header["paths"] = list(routing.paths)
+        outputs[relative] = "---\n" + yaml.safe_dump(header, sort_keys=False, allow_unicode=True) + "---\n\n" + AgentInstructionSet.instruction_body(prompt) + "\n"
+        if routing.scope == "core":
+            reference = projection / f"references/{prompt.key.namespace}/{prompt.key.slug}/{prompt.digest}/RULE.md"
+            condition = f"Read when working on files matching {', '.join(routing.paths)}" if routing.paths else "Read when relevant to the current task"
+            rule_references.append(f"- {condition}: {reference}")
+    for filename, provider, consumer in (("AGENTS.md", "openai", ".codex"),
+                                         ("instructions.md", "anthropic", ".claude")):
+        provider_prompt = heads.get(PromptKey(namespace="paradigms", slug=f"provider-{provider}"))
+        if provider_prompt is None:
+            raise ValueError(f"server catalog lacks provider-{provider} instructions")
+        provider_ref = PromptExecutionRef(key=provider_prompt.key, channel="stable",
+                                         digest=provider_prompt.digest, revision=provider_prompt.revision)
+        paradigms = tuple(ref for ref in main.paradigms if not (
+            ref.key.namespace == "paradigms" and ref.key.slug.startswith("provider-")
+        )) + (provider_ref,)
+        source = AgentInstructionSet(agent=main.model_copy(update={"paradigms": paradigms}),
+                                     prompts=snapshot.paradigms)
+        body = snapshot.definition(identifiers[main.id], skill_paths, instructions=source)
+        if rule_references:
+            body += "\n\nRule reference files (respect each path condition):\n" + "\n".join(sorted(rule_references))
+        outputs[filename] = "<!-- Derived from server agent revisions; edit through Interact. -->\n\n" + body + "\n"
+    providers = {name: {"label": label, "binary": name, "env": shutil.which(name) is not None}
+                 for name, label in (("claude", "Claude Code"), ("codex", "Codex"))}
+    outputs["org.json"] = json.dumps({
+        "coordinator": {"id": identifiers[main.id], "title": main.name}, "providers": providers,
+        "departments": [{"id": name} for name in sorted({agent.department for agent in roles if agent.department})],
+        "agents": [{"name": identifiers[agent.id], "title": agent.name, "description": agent.description,
+                    "department": agent.department, "scope": agent.scope,
+                    "reports_to": identifiers.get(agent.reports_to),
+                    "providers": list(providers), "def": str(home / ".claude" / _projection_relative(
+                        "agents", f"{identifiers[agent.id]}.md", agent.scope))}
+                   for agent in roles if agent.id != main.id],
+        "catalog_cursor": snapshot.cursor,
+    }, indent=2, ensure_ascii=False) + "\n"
+    return outputs
+
+
+class ProjectionRouting(BaseModel):
+    """Server-owned discovery scope and path conditions, shared by skills and rules."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    projection: Literal["skill", "rule"]
+    scope: str = "core"
+    paths: tuple[str, ...] = Field(default=(), max_length=128)
+
+    @model_validator(mode="after")
+    def valid_paths(self):
+        PromptKey(namespace="scope", slug=self.scope)
+        if any(not path or len(path) > 1024 or any(char in path for char in "\r\n\x00") for path in self.paths):
+            raise ValueError("rule path conditions must be bounded single-line globs")
+        return self
+
+
+class ProjectionMetadata(BaseModel):
+    """Descriptive prompt headers cannot grant tools or configure runtime execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None, min_length=1)
+    interact: ProjectionRouting | None = None
+    paths: tuple[str, ...] = ()
+
+    @classmethod
+    def from_content(cls, content: str):
+        try:
+            return cls.model_validate(_projection_metadata(content))
+        except ValueError as error:
+            raise ValueError("server projection metadata permits only name, description and typed routing") from error
+
+    @model_validator(mode="after")
+    def valid_paths(self):
+        # Consumer rules lift the same path conditions out of interact routing.
+        ProjectionRouting(projection="rule", paths=self.paths)
+        return self
+
+
+def _projection_metadata(content: str) -> dict:
+    content = content.removeprefix("\ufeff").replace("\r\n", "\n")
+    if not content.startswith("---\n"):
+        return {}
+    pieces = content.split("\n---\n", 1)
+    if len(pieces) != 2:
+        raise ValueError("invalid server prompt frontmatter")
+    try:
+        metadata = yaml.safe_load(pieces[0][4:])
+    except yaml.YAMLError as error:
+        raise ValueError("invalid server prompt frontmatter") from error
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("interact", {}), dict):
+        raise ValueError("invalid server prompt metadata")
+    return metadata
+
+
+def _projection_relative(kind: str, filename: str, scope: str) -> str:
+    PromptKey(namespace="scope", slug=scope)
+    return f"{kind}/{filename}" if scope == "core" else f"scopes/{scope}/{kind}/{filename}"
 
 
 def compile_prompt_projection(
@@ -105,91 +342,273 @@ def install_prompt_projection(
     adoption_path: Path | None = None,
 ) -> None:
     """Transactionally switch only manifest-owned provider consumer files."""
+    # Access guards serialize one connection; this lock serializes the shared
+    # consumer state even when two different connections install into it.
+    _safe_directory(state_path.parent, create=True)
+    lock = state_path.with_name(f".{state_path.name}.lock")
+    with _directory_handle(lock.parent) as parent:
+        descriptor = os.open(lock.name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        _install_prompt_projection(projection_root, home, vscode_root, state_path, adoption_path)
+    finally:
+        os.close(descriptor)
+
+
+def _install_prompt_projection(
+    projection_root: Path, home: Path, vscode_root: Path, state_path: Path,
+    adoption_path: Path | None,
+) -> None:
+    transaction = state_path.parent / ".prompt-install-transaction"
+    if transaction.exists() or transaction.is_symlink():
+        raise ValueError(f"prompt install requires recovery of preserved transaction: {transaction}")
     outputs = _validated_manifest_outputs(projection_root)
+    manifest = json.loads((projection_root / MANIFEST_NAME).read_text(encoding="utf-8"))
+    server_owned = manifest.get("source_kind") == "server-catalog"
     state = _installed_document(state_path)
+    adoption = _adoption_manifest(adoption_path)
+    settings = (home / ".claude" / "settings.json", home / ".codex" / "hooks.json",
+                home / ".cursor" / "hooks.json")
+    settings_before = {path: _entry_identity(path, symlink_target=adoption.get(path, (None, None))[0])
+                       for path in settings} if not server_owned else {}
     targets, mergeable, hook_groups = _consumer_payloads(
-        outputs, home, vscode_root, state.get("hook_groups", {})
+        outputs, home, vscode_root, state.get("hook_groups", {}), prompt_only=server_owned,
     )
     previous = {Path(target): digest for target, digest in state.get("managed", {}).items()}
-    adoption = _adoption_manifest(adoption_path)
+    # Hooks are installed runtime code. A prompt-only snapshot cannot remove or rewrite them.
+    retained = {}
+    if server_owned:
+        runtime_roots = (home / ".claude" / "hooks",)
+        runtime_files = {home / ".claude" / "settings.json", home / ".codex" / "hooks.json",
+                         home / ".cursor" / "hooks.json"}
+        retained = {target: digest for target, digest in previous.items()
+                    if target in runtime_files or any(root in target.parents for root in runtime_roots)}
+        previous = {target: digest for target, digest in previous.items() if target not in retained}
     adopted_directories = _adopted_directories(targets, adoption, home, vscode_root)
+    observed = {directory: _entry_identity(directory, symlink_target=adoption[directory][0])
+                for directory in adopted_directories}
+    if any((identity[3], identity[4]) != adoption[directory]
+           for directory, identity in observed.items()):
+        raise ValueError("legacy directory symlink does not match adoption manifest")
     for target in set(targets) | set(previous):
         if any(directory in target.parents for directory in adopted_directories):
+            observed[target] = None
             continue
-        if not target.exists():
+        _require_safe_parent(target, home, vscode_root)
+        observed[target] = _entry_identity(target, symlink_target=adoption.get(target, (None, None))[0])
+        if target in mergeable and observed[target] != settings_before[target]:
+            raise ValueError("prompt settings changed while preparing install")
+        if observed[target] is None:
             continue
         if target.is_symlink():
             declared = adoption.get(target)
-            if declared is None or os.readlink(target) != declared[0] or hashlib.sha256(
-                target.read_bytes()
-            ).hexdigest() != declared[1]:
+            if declared is None or (observed[target][3], observed[target][4]) != declared:
                 raise ValueError("legacy symlink does not match adoption manifest")
             continue
         if not target.is_file():
             raise ValueError("managed prompt target is not a regular file")
-        current = hashlib.sha256(target.read_bytes()).hexdigest()
+        current = observed[target][-1]
         expected = previous.get(target)
         if expected is None and target not in mergeable:
             raise ValueError("unmanaged prompt target collision")
         if expected is not None and current != expected and target not in mergeable:
             raise ValueError("managed prompt target changed locally")
-    transaction = state_path.parent / ".prompt-install-transaction"
-    if transaction.exists():
-        raise ValueError("prompt install transaction already exists")
-    transaction.mkdir(mode=0o700, parents=True)
+    with _directory_handle(transaction.parent) as parent:
+        os.mkdir(transaction.name, mode=0o700, dir_fd=parent)
     backups: dict[Path, Path] = {}
-    installed: list[Path] = []
+    installed = {}
+    created_directories = []
+    # Retain the target/backup mapping even if the process is interrupted. This
+    # is a recovery inventory, not a claim of power-loss atomicity.
+    ordered = sorted(set(targets) | set(previous), key=str)
+    directories = sorted(adopted_directories, key=lambda path: len(path.parts))
+    recovery = {
+        "state": str(state_path),
+        "backups": {**{str(path): f"adopted-{index}" for index, path in enumerate(directories)},
+                    **{str(path): f"backup-{index}" for index, path in enumerate(ordered)}},
+    }
+    _write_prompt(transaction / "recovery.json", (json.dumps(recovery, indent=2) + "\n").encode(), 0o600)
+    preserve = False
     try:
-        for index, directory in enumerate(sorted(adopted_directories, key=lambda path: len(path.parts))):
+        for index, directory in enumerate(directories):
             backup = transaction / f"adopted-{index}"
-            os.replace(directory, backup)
+            _move_prompt_backup(directory, backup)
             backups[directory] = backup
-            directory.mkdir(mode=0o700)
-        for index, target in enumerate(sorted(set(targets) | set(previous), key=str)):
+            if _entry_identity(backup, symlink_parent=directory.parent,
+                               symlink_target=adoption[directory][0]) != observed[directory]:
+                raise ValueError("adopted prompt directory changed during install")
+            with _directory_handle(directory.parent) as parent:
+                os.mkdir(directory.name, mode=0o700, dir_fd=parent)
+            created_directories.append(directory)
+        for index, target in enumerate(ordered):
             _require_safe_parent(target, home, vscode_root)
-            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if target.exists():
+            created_directories.extend(_safe_directory(target.parent, create=True))
+            if observed[target] is not None:
                 backup = transaction / f"backup-{index}"
-                os.replace(target, backup)
+                _move_prompt_backup(target, backup)
                 backups[target] = backup
+                if _entry_identity(backup, symlink_parent=target.parent,
+                                   symlink_target=adoption.get(target, (None, None))[0]) != observed[target]:
+                    raise ValueError("managed prompt target changed during install")
             payload = targets.get(target)
             if payload is not None:
                 staged = transaction / f"new-{index}"
-                staged.write_bytes(payload[0])
-                staged.chmod(payload[1])
-                os.replace(staged, target)
-                installed.append(target)
-        state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                _write_prompt(staged, *payload)
+                # Hard-link publication fails if another writer filled the gap;
+                # replace() would silently destroy that writer's new file.
+                identity = _entry_identity(staged)
+                _publish_prompt(staged, target)
+                installed[target] = identity
+        if any(_entry_identity(path) != identity for path, identity in installed.items()):
+            raise ValueError("managed prompt target changed during install")
+        if any(_entry_identity(backup, symlink_parent=path.parent,
+                               symlink_target=adoption.get(path, (None, None))[0]) != observed[path]
+               for path, backup in backups.items()):
+            raise ValueError("managed prompt backup changed during install")
         state_staged = transaction / "state"
-        state_staged.write_text(json.dumps({
-            "managed": {
-                str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        _write_prompt(state_staged, (json.dumps({
+            "managed": {**{str(path): digest for path, digest in retained.items()}, **{
+                str(path): hashlib.sha256(targets[path][0]).hexdigest()
                 for path in sorted(targets, key=str)
-            },
-            "source_commit": json.loads(
-                (projection_root / MANIFEST_NAME).read_text(encoding="utf-8")
-            )["source_commit"],
+            }},
+            "source_commit": manifest["source_commit"],
+            "source_kind": manifest.get("source_kind", "git"),
+            "catalog_cursor": manifest.get("catalog_cursor"),
             "hook_groups": hook_groups,
             "version": 1,
-        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        state_staged.chmod(0o600)
-        os.replace(state_staged, state_path)
-    except Exception:
-        for target in installed:
-            if target.exists():
-                target.unlink()
-        for target, backup in backups.items():
-            if backup.exists():
-                if target.is_dir() and not target.is_symlink():
-                    shutil.rmtree(target)
-                os.replace(backup, target)
+        }, indent=2, sort_keys=True) + "\n").encode(), 0o600)
+        _move_prompt_backup(state_staged, state_path)
+    except BaseException as error:
+        # A failure in recovery itself must never enable cleanup of the backups.
+        preserve = True
+        recovery["rollback"] = {str(path): f"rollback-{index}"
+                                for index, path in enumerate(reversed(installed))}
+        recovery_staged = transaction / "recovery-next.json"
+        _write_prompt(recovery_staged, (json.dumps(recovery, indent=2) + "\n").encode(), 0o600)
+        _move_prompt_backup(recovery_staged, transaction / "recovery.json")
+        preserve = False
+        # Move first, then check identity: a check followed by unlink still
+        # deletes a replacement made between those two operations.
+        for index, (target, identity) in enumerate(reversed(installed.items())):
+            removed = transaction / f"rollback-{index}"
+            try:
+                if _entry_identity(target) != identity:
+                    preserve = True
+                    continue
+                _move_prompt_backup(target, removed)
+                if _entry_identity(removed) != identity:
+                    _restore_prompt_backup(removed, target)
+                    preserve = True
+                else:
+                    with _directory_handle(removed.parent) as parent:
+                        os.unlink(removed.name, dir_fd=parent)
+            except (OSError, ValueError):
+                preserve = True
+        for directory in reversed(created_directories):
+            try:
+                with _directory_handle(directory.parent) as parent:
+                    os.rmdir(directory.name, dir_fd=parent)  # Never remove concurrent children.
+            except (OSError, ValueError):
+                preserve = True
+        for target, backup in reversed(backups.items()):
+            try:
+                _restore_prompt_backup(backup, target)
+            except (OSError, ValueError):
+                preserve = True
+        if preserve:
+            raise ValueError(
+                f"prompt install stopped; operator content and backups preserved for recovery: {transaction}"
+            ) from error
         raise
     finally:
-        if transaction.exists():
-            shutil.rmtree(transaction)
+        if transaction.exists() and not preserve:
+            with _directory_handle(transaction.parent) as parent:
+                shutil.rmtree(transaction.name, dir_fd=parent)
+
+
+def _restore_prompt_backup(backup: Path, target: Path) -> None:
+    _publish_prompt(backup, target)
+    with _directory_handle(backup.parent) as parent:
+        os.unlink(backup.name, dir_fd=parent)
+
+
+def _publish_prompt(source: Path, target: Path) -> None:
+    with _directory_handle(source.parent) as source_parent, _directory_handle(target.parent) as target_parent:
+        os.link(source.name, target.name, src_dir_fd=source_parent,
+                dst_dir_fd=target_parent, follow_symlinks=False)
+
+
+def _write_prompt(path: Path, content: bytes, mode: int) -> None:
+    with _directory_handle(path.parent) as parent:
+        descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             mode, dir_fd=parent)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            os.fchmod(stream.fileno(), mode)
+
+
+def _move_prompt_backup(source: Path, backup: Path) -> None:
+    with _directory_handle(source.parent) as source_parent, _directory_handle(backup.parent) as backup_parent:
+        os.replace(source.name, backup.name, src_dir_fd=source_parent, dst_dir_fd=backup_parent)
+
+
+@contextmanager
+def _directory_handle(path: Path):
+    """Pin each directory component so a swapped parent cannot redirect writes."""
+    descriptor = os.open(path.absolute().anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.absolute().parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _entry_identity(path: Path, *, symlink_parent: Path | None = None, symlink_target: str | None = None):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        link = os.readlink(path)
+        if link != symlink_target:
+            raise ValueError("legacy symlink does not match adoption manifest")
+        referent = (symlink_parent or path.parent) / link
+        content = _directory_digest(referent) if referent.is_dir() else hashlib.sha256(referent.read_bytes()).hexdigest()
+        return (info.st_dev, info.st_ino, info.st_mode, link, content)
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("managed prompt target is not a regular file")
+    with _directory_handle(path.parent) as parent:
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            content = stream.read()
+    return (info.st_dev, info.st_ino, info.st_mode, hashlib.sha256(content).hexdigest())
+
+
+def _safe_directory(path: Path, *, create: bool = False) -> list[Path]:
+    created = []
+    for directory in reversed((path.absolute(), *path.absolute().parents)):
+        if create:
+            try:
+                if directory == directory.parent:
+                    continue
+                with _directory_handle(directory.parent) as parent:
+                    os.mkdir(directory.name, mode=0o700, dir_fd=parent)
+                created.append(directory)
+            except FileExistsError:
+                pass
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            raise ValueError(f"prompt path is not a safe directory: {directory}")
+    return created
 
 
 def _validated_manifest_outputs(projection_root: Path) -> dict[str, Path]:
+    _safe_directory(projection_root)
+    if (projection_root / MANIFEST_NAME).is_symlink():
+        raise ValueError("projection manifest is not a regular file")
     manifest = json.loads((projection_root / MANIFEST_NAME).read_text(encoding="utf-8"))
     declared: dict[str, tuple[str, int, str]] = {}
     for output in manifest.get("outputs", []):
@@ -206,12 +625,18 @@ def _validated_manifest_outputs(projection_root: Path) -> dict[str, Path]:
             digest, size, declared_mode
         ):
             raise ValueError("projection manifest output identity changed")
+        if manifest.get("source_kind") == "server-catalog":
+            path = PurePosixPath(relative)
+            if (path.parts[0] in {"skills", "rules"}
+                    or (_scoped_output(path) is not None and path.parts[2] in {"skills", "rules"})
+                    or (path.parts[0] == "references" and path.name in {"SKILL.md", "RULE.md"})):
+                ProjectionMetadata.from_content(content.decode("utf-8"))
     return {relative: projection_root / relative for relative in actual}
 
 
 def _consumer_payloads(
     outputs: dict[str, Path], home: Path, vscode_root: Path,
-    prior_hook_groups: dict[str, list[object]],
+    prior_hook_groups: dict[str, list[object]], *, prompt_only: bool = False,
 ) -> tuple[dict[Path, tuple[bytes, int]], set[Path], dict[str, list[object]]]:
     targets: dict[Path, tuple[bytes, int]] = {}
     hook_scripts = {
@@ -252,6 +677,11 @@ def _consumer_payloads(
                 home / ".claude" / "rules" / path.name,
                 vscode_root / f"{path.stem}.instructions.md",
             )
+            if prompt_only:
+                destinations += (home / ".codex" / "rules" / path.name,)
+        elif path.parts[0] == "references":
+            # Immutable skill references are already in the verified projection cache.
+            continue
         elif _scoped_output(path) is not None:
             # Domain-scoped agents / skills are HELD outside every consumer's
             # auto-load roots; `interact prompts scope <name>` links a set into
@@ -266,7 +696,17 @@ def _consumer_payloads(
         for destination in destinations:
             if destination in targets:
                 raise ValueError("prompt consumer target collision")
-            targets[destination] = (source.read_bytes(), 0o700 if path.suffix == ".sh" else 0o600)
+            content = source.read_bytes()
+            if prompt_only and len(path.parts) == 2 and path.parts[0] == "rules" and destination.parent == vscode_root:
+                metadata = _projection_metadata(content.decode())
+                paths = metadata.pop("paths", ())
+                if paths:
+                    metadata["applyTo"] = ",".join(paths)
+                body = content.decode().split("\n---\n", 1)[1]
+                content = ("---\n" + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True) + "---\n" + body).encode()
+            targets[destination] = (content, 0o700 if path.suffix == ".sh" else 0o600)
+    if prompt_only:
+        return targets, set(), prior_hook_groups
     settings = home / ".claude" / "settings.json"
     settings_bytes, hook_groups = _merged_hook_settings(
         outputs, settings, hook_scripts, prior_hook_groups
@@ -381,6 +821,9 @@ def _directory_digest(directory: Path) -> str:
 
 
 def _require_safe_parent(target: Path, home: Path, vscode_root: Path) -> None:
+    if not target.is_absolute() or ".." in target.parts:
+        raise ValueError("prompt consumer target escapes its root")
+    _safe_directory(target.parent)
     roots = tuple(root.resolve() for root in (home, vscode_root))
     resolved_parent = target.parent.resolve()
     if not any(resolved_parent == root or root in resolved_parent.parents for root in roots):
@@ -432,6 +875,8 @@ def _compiled_outputs(root: Path) -> dict[str, tuple[int, bytes]]:
     candidates = [root / name for name in _OUTPUT_FILES]
     for directory in (*_OUTPUT_ROOTS, *_PASSTHROUGH_ROOTS):
         location = root / directory
+        if location.is_symlink():
+            raise ValueError("compiled projection contains a non-regular output")
         if location.exists():
             candidates.extend(location.rglob("*"))
     outputs: dict[str, tuple[int, bytes]] = {}
@@ -522,6 +967,8 @@ def _write_manifest(
 
 def _consumer_kinds(relative: str) -> tuple[str, ...]:
     path = PurePosixPath(relative)
+    if path.parts[0] == "references":
+        return ("immutable-cache-reference",)
     if relative == "hooks/codex-hooks.json":
         return ("codex-settings-merge",)
     if relative == "hooks/cursor-hooks.json":
@@ -550,7 +997,7 @@ def _consumer_kinds(relative: str) -> tuple[str, ...]:
 def _scoped_output(path: PurePosixPath) -> str | None:
     """Return the scope name of a `scopes/<scope>/{agents/<a>.md,skills/<s>/SKILL.md}` output."""
     parts = path.parts
-    if len(parts) == 4 and parts[0] == "scopes" and parts[2] == "agents" and path.suffix == ".md":
+    if len(parts) == 4 and parts[0] == "scopes" and parts[2] in {"agents", "rules"} and path.suffix == ".md":
         return parts[1]
     if len(parts) == 5 and parts[0] == "scopes" and parts[2] == "skills" and path.name == "SKILL.md":
         return parts[1]

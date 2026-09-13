@@ -222,3 +222,37 @@ async def test_desktop_compare_missing_step(desktop_mocks):
     action = CompareAction(steps=[1, 2], query="diff?")
     result = await _run_actions_desktop(win, [action], None)
     assert "has no snapshot" in result
+
+
+@pytest.mark.asyncio
+async def test_browser_screenshot_wait_precedes_its_capture(browser_mocks, monkeypatch):
+    import interact.server as srv
+
+    events = []
+    state = _page_state()
+    async def capture(*args, **kwargs):
+        events.append('capture')
+        return state
+    async def wait(page, condition):
+        events.append(condition)
+    monkeypatch.setattr(srv, '_capture', capture)
+    monkeypatch.setattr(srv, '_wait', wait)
+    await srv._run_actions_browser(
+        browser_mocks['mgr'], [ScreenshotAction(wait='2s')], None, None, None, 'fixture'
+    )
+    assert events[0:2] == ['2s', 'capture']
+    assert events.count('2s') == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_mutation_wait_is_not_applied_twice(browser_mocks, monkeypatch):
+    import interact.server as srv
+
+    waits = []
+    async def wait(page, condition):
+        waits.append(condition)
+    monkeypatch.setattr(srv, '_wait', wait)
+    await srv._run_actions_browser(
+        browser_mocks['mgr'], [ScrollAction(wait='2s')], None, None, None, 'fixture'
+    )
+    assert waits == ['2s']

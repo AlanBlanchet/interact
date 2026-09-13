@@ -4,9 +4,14 @@ surfaces that own the sandbox."""
 
 import asyncio
 import json
+import math
+import os
 import shlex
+import tempfile
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal, cast
+from pydantic import BaseModel, Field
 
 from mcp.types import CallToolResult, ContentBlock, TextContent
 from mcp.server.fastmcp.utilities.types import Image
@@ -19,6 +24,7 @@ from interact.launch import (
     _resolve_nested_size, apply_launch_rewrites, needs_shell, split_env_assignments,
 )
 from interact.models import supports_native_video_inline
+from interact.processes import run_isolated_process
 from interact.server import core, sandbox, targets, vlm
 from interact.server.core import _AUTO_SESSION, _NO_WINDOWS_MSG, _session_response, config, mcp
 from interact.vision import MediaAnalysis, MediaItem, RecordingCapture, RecordingResult
@@ -26,10 +32,55 @@ from interact.vision.types import VLMResult
 from interact.vision.session import sample_video_frames
 
 
+class _VideoStream(BaseModel):
+    avg_frame_rate: str = "0/0"
+
+
+class _VideoFormat(BaseModel):
+    duration: str | None = None
+
+
+class _VideoProbe(BaseModel):
+    streams: list[_VideoStream] = Field(default_factory=list)
+    format: _VideoFormat = Field(default_factory=_VideoFormat)
+
+
+async def _record_metadata(video: bytes) -> tuple[float | None, float | None]:
+    """Read encoded cadence independently of requested/resampled cadence; absent stays unknown."""
+    try:
+        with tempfile.TemporaryDirectory(prefix="interact-record-probe-") as directory:
+            source = Path(directory) / "capture"
+            source.write_bytes(video)
+            code, output, _ = await run_isolated_process(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream=avg_frame_rate:format=duration", "-of", "json", str(source)],
+                cwd=Path(directory), env={"PATH": os.environ.get("PATH", "")},
+                timeout=min(10, config.media_timeout), output_limit=65536,
+            )
+            if code:
+                return None, None
+            probe = _VideoProbe.model_validate_json(output)
+            try:
+                duration = float(probe.format.duration) if probe.format.duration else None
+            except ValueError:
+                duration = None
+            try:
+                rate = float(Fraction(probe.streams[0].avg_frame_rate)) if probe.streams else None
+            except (ValueError, ZeroDivisionError):
+                rate = None
+            return (
+                rate if rate is not None and math.isfinite(rate) and rate > 0 else None,
+                duration if duration is not None and math.isfinite(duration) and duration > 0 else None,
+            )
+    except (OSError, ValueError, OverflowError, TimeoutError):
+        return None, None
+
+
 async def _record_response(
     video: bytes, *, fps: int, mime: str, path: str | None, context: str, query: str | None
 ) -> RecordingResult:
     dest = core._save_to_path(path, video) if path else None
+    measured_fps, duration = await _record_metadata(video)
     truncation: list[bool] = []
     timestamp_basis: list[Literal["source_pts", "derived_cadence"]] = []
     sampled: list[tuple[bytes, float]] = []
@@ -56,6 +107,8 @@ async def _record_response(
             status="captured", artifact=str(dest) if dest else None, requested_fps=fps,
             timestamp_basis="derived_cadence", observation="indeterminate",
         )
+    capture.measured_fps = measured_fps
+    capture.duration = duration
     if not query:
         response = RecordingResult(capture=capture, analysis=MediaAnalysis(
             status="not_requested", eligible=None, attempted=False, input_kind="none",
@@ -396,6 +449,9 @@ async def record(
     """Record actions as video and optionally analyze with vision.
 
     Browser (target unset): Two-step — record(start=True), perform actions, then record(start=False).
+    Starting AND stopping browser recording reload the page. Cookies and localStorage carry over,
+    but in-memory state and sessionStorage can reset. Seed the state under test after starting;
+    reacquire refs after either transition. The result repeats this warning.
     Desktop (target=<window title> / nested): same two-step by default — record(start=True) begins a
     NON-blocking session and returns at once (so you can drive actions, e.g. tap a control to trigger
     an animation, while it captures), then record(start=False) stops and analyzes. Pass duration= for
@@ -410,7 +466,10 @@ async def record(
     start: True to begin recording, False to stop and export.
     query: question for VLM visual analysis of the recording.
     duration: fixed clip length in seconds (desktop one-shot mode); omit for a start/stop session.
-    fps: frames per second (desktop target, default from config).
+    fps: requested frames per second, default from config. Desktop capture uses this rate.
+        Browser capture uses the recorder's own encoded rate; requested_fps preserves your
+        request and measured_fps reports the saved clip's rate when probeable. Sample timestamps
+        describe sampled frames, not distinct source observations.
     path: save the video here. A relative path lands under ~/.interact/out (interact's output dir),
         never the server's cwd; "~" expands. The reply names the absolute file written.
 
@@ -425,6 +484,8 @@ async def record(
     (delay/duration) and its keyframes. That is deterministic, free, and exact. Use record for WHAT
     HAPPENED over time at human speed; use getAnimations for sub-second timing.
     """
+    if fps is not None and fps <= 0:
+        raise ValueError("Recording fps must be positive")
     win, mgr, err = targets._resolve_target(target, session)
     if err:
         return _record_tool_result(RecordingResult(
@@ -439,7 +500,7 @@ async def record(
     if win:
         result = await _record_desktop(win, query, start, duration, fps, path)
     else:
-        result = await _record_browser(mgr, start, query, path, session)
+        result = await _record_browser(mgr, start, query, path, session, fps=fps)
     return _record_tool_result(result)
 
 
@@ -500,32 +561,41 @@ async def _record_browser(
     query: str | None,
     path: str | None,
     session: str,
+    fps: int | None = None,
 ) -> RecordingResult:
+    actual_fps = fps if fps is not None else mgr.recording_requested_fps or config.video_fps
+    if actual_fps <= 0:
+        raise ValueError("Recording fps must be positive")
     if start:
-        url, trouble = await mgr.start_recording()
+        url, trouble = await mgr.start_recording(fps=actual_fps)
         return RecordingResult(
             capture=RecordingCapture(
-                status="started", requested_fps=config.video_fps,
+                status="started", requested_fps=actual_fps,
                 timestamp_basis="derived_cadence", observation="indeterminate",
             ),
             analysis=MediaAnalysis(
-                status="not_requested", eligible=None, attempted=False, input_kind="none", text=trouble,
+                status="not_requested", eligible=None, attempted=False, input_kind="none",
+                text="Browser recording started by reloading the page; in-memory state and sessionStorage may reset. Seed test state and reacquire refs now."
+                     + (f" {trouble}" if trouble else ""),
             ),
         )
     video_bytes = await mgr.stop_recording()
     if not video_bytes:
         return RecordingResult(
             capture=RecordingCapture(
-                status="unavailable", requested_fps=config.video_fps,
+                status="unavailable", requested_fps=actual_fps,
                 timestamp_basis="derived_cadence", observation="indeterminate",
             ),
             analysis=MediaAnalysis(
                 status="unavailable", eligible=False, attempted=False,
                 input_kind="none",
-                text="No video data captured",
+                text="No video data captured. Browser recording stopped by reloading the page; in-memory state and sessionStorage may reset. Reacquire refs before continuing.",
             ),
         )
-    return await _record_response(
-        video_bytes, fps=config.video_fps, mime="video/webm", path=path,
+    response = await _record_response(
+        video_bytes, fps=actual_fps, mime="video/webm", path=path,
         context="Browser recording", query=query,
     )
+    warning = "Browser recording stopped by reloading the page; in-memory state and sessionStorage may reset. Reacquire refs before continuing."
+    response.analysis.text = warning + (f"\n{response.analysis.text}" if response.analysis.text else "")
+    return response

@@ -66,17 +66,18 @@ def test_dump_dir_precedence(monkeypatch, tmp_path):
     monkeypatch.setattr(debug_utils.config, "screenshot_dump_dir", None)
     monkeypatch.setattr(debug_utils.config, "debug_dir", tmp_path)
     assert debug_utils.Debug.dump_dir(None) == tmp_path
-    assert debug_utils.Debug.dump_dir("out/claude") == Path("out/claude")
+    assert debug_utils.Debug.dump_dir("out/claude") == tmp_path / "out" / "claude"
 
     monkeypatch.setattr(debug_utils.config, "screenshot_dump_dir", tmp_path / "shots")
     assert debug_utils.Debug.dump_dir(None) == tmp_path / "shots"
 
 
-def test_dump_dir_expands_tilde():
+def test_dump_dir_expands_tilde(monkeypatch, tmp_path):
     """The per-call `debug_dir` tool arg is the same boundary as the env var — an agent passing
     `~/shots` must not get a literal `./~/shots` next to the server's cwd."""
+    monkeypatch.setattr(debug_utils.config, "debug_dir", tmp_path / "artifacts")
     assert debug_utils.Debug.dump_dir("~/shots") == Path.home() / "shots"
-    assert debug_utils.Debug.dump_dir("out/claude") == Path("out/claude")  # relative unchanged
+    assert debug_utils.Debug.dump_dir("out/claude") == tmp_path / "artifacts/out/claude"
 
 
 def test_usage_default_log_follows_debug_dir(monkeypatch, tmp_path):

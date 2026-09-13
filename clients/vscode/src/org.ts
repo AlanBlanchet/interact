@@ -1,19 +1,19 @@
 /** The company: who exists, which department, where they can actually run.
  *
- *  Written by the prompt repo (paradigms.yaml -> org.json, symlinked to ~/.claude/org.json), read
- *  here. Two things it carries that a directory listing of agent files cannot:
+ *  Connected workspaces use the current typed CLI graph held in memory. Standalone installs
+ *  read the prompt repo's generated org.json. Two things a directory listing cannot carry:
  *
  *  - a HIERARCHY — departments, reporting lines, who pairs with whom — so the panel shows an org,
  *    not a bag of names;
  *  - PROVIDER availability: whether each provider is actually wired (env) or only designed for.
  *    An agent can be part of the company on paper and have nowhere to run today.
  *
- *  Absent for most installs (interact runs with no prompt repo) — every path here degrades to
- *  "no company known" rather than failing.
+ *  Unavailable server records never fall back to a local generated organization.
  */
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { serverWorkspaceConfigured, workspaceView } from "./workspaceState.ts";
 
 export interface OrgProvider {
   label: string;
@@ -50,6 +50,7 @@ export interface OrgAgent {
 }
 
 export interface Org {
+  source?: "server";
   coordinator: { id: string; title?: string | null };
   providers: Record<string, OrgProvider>;
   departments: OrgDepartment[];
@@ -62,6 +63,16 @@ export function orgPath(): string {
 }
 
 export function readOrg(file: string = orgPath()): Org | null {
+  if (file === orgPath() && serverWorkspaceConfigured()) {
+    const view = workspaceView();
+    if (!view) return null;
+    const agents = view.graph.agents;
+    const key = (id: string) => { const agent = agents.find(item => item.id === id); return agent?.role_key ?? agent?.id ?? id; };
+    return { source: "server", coordinator: { id: view.graph.root_agent ? key(view.graph.root_agent.id) : "", title: "Server Assistant root" },
+      providers: {}, departments: [...new Set(agents.flatMap(agent => agent.department ? [agent.department] : []))].map(id => ({ id })),
+      agents: agents.map(agent => ({ name: agent.role_key ?? agent.id, title: agent.name, department: agent.department,
+        reports_to: agent.reports_to ? key(agent.reports_to) : null, model: agent.criteria ?? agent.model?.id ?? null })) };
+  }
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Org>;
     if (!parsed || !Array.isArray(parsed.agents)) return null;
@@ -212,7 +223,7 @@ export function spawnChoices(
       return {
         label: name,
         description: a.title ?? undefined,
-        detail: [d.id, a.seniority, where.length ? where.join("+") : "not wired anywhere"]
+        detail: [d.id, a.seniority, where.length ? where.join("+") : org.source === "server" ? "provider checked at launch" : "not wired anywhere"]
           .filter(Boolean).join(" · "),
       };
     }),

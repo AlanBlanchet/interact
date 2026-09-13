@@ -14,11 +14,15 @@ from pathlib import Path
 import pytest
 
 from interact.agents import registry
+from interact.config import UserConfig
 
 
 @pytest.fixture(autouse=True)
 def _isolated_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "agents_dir", lambda: tmp_path / "agents")
+    monkeypatch.setattr(UserConfig, "PATH", tmp_path / "config.env")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
 
 def test_a_run_that_IS_an_agent_records_where_its_system_prompt_lives(monkeypatch, tmp_path):
@@ -61,7 +65,21 @@ def test_a_record_written_before_the_field_existed_is_backfilled(monkeypatch, tm
     stored.write_text(run.model_dump_json(exclude={"definition_path"}))
 
     assert registry._read_record("old").definition_path == str(definition)
-    assert "definition_path" in stored.read_text(), "and repaired on disk, not re-resolved forever"
+    assert "definition_path" not in stored.read_text(), "reading history does not rewrite its provenance"
+
+
+def test_server_mode_preserves_retired_history_without_catalog_lookup(monkeypatch, tmp_path):
+    registry.CatalogConnection.path().write_text('{}')
+    def unexpected_lookup(agent):
+        raise AssertionError('history must not resolve roles against a live catalog')
+    monkeypatch.setattr(registry.PROVIDERS['claude'], 'definition_path', unexpected_lookup)
+    run = registry.AgentRun(run_id='old-retired', provider='claude', name='retired', agent='retired')
+    directory = registry.agents_dir()
+    directory.mkdir()
+    (directory / 'old-retired.json').write_text(run.model_dump_json(exclude={'definition_path'}))
+    (directory / 'old-retired.json').chmod(0o600)
+    assert registry._read_record('old-retired').definition_path is None
+    assert registry.resolve_run_id('old-retired') == 'old-retired'
 
 
 def test_backfill_does_not_touch_a_plain_run(monkeypatch, tmp_path):

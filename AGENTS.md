@@ -29,6 +29,9 @@ Ownership (short names map to the standalone `../interact-core` checkout and `pa
 - `interact-core` — provider-independent contracts and generated API models shared by every surface.
   Source of truth for tool APIs, schemas and payloads; the tool docstrings carry the behaviour. An
   old parameter or tool name survives only if `interact-core` still declares it.
+Tool target routing is defined by `_instructions()` in
+`packages/interact-local/src/interact/server/core.py` and individual tool docstrings.
+
 - `interact-local` — the local implementation: `server` (service lifecycle, target resolution,
   capture, analysis dispatch, tool surfaces), `desktop` (isolated displays, input, windows,
   coordinates, recording, accessibility), `cli`, and `config` (typed settings plus the schema every
@@ -39,10 +42,10 @@ Ownership (short names map to the standalone `../interact-core` checkout and `pa
 
 ## Prompts
 
-Prompt source is the git worktree at `${XDG_DATA_HOME:-~/.local/share}/interact/prompts`: edit it,
-then `interact prompts commit` and `push` to its git remote, then `publish <endpoint> <token-file>`
-to put it on the service (refused unless HEAD matches upstream). Clients only read. `prompts/` in
-this repository holds distributable defaults; indexes and mirror caches are derived — never edit them.
+The Raspberry server is the only source of truth for personal prompts and agent configuration.
+Clients read and write through its APIs; local catalogs and installed provider files are derived
+caches. Preserve `${XDG_DATA_HOME:-~/.local/share}/interact/prompts` and its Git history as recovery
+evidence only. `prompts/` in this repository holds distributable defaults. After server save, update affected agent bindings to returned revisions before syncing; follow librarian’s authenticated read/save/bind/sync workflow.
 
 ## Team
 

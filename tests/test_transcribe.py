@@ -67,9 +67,17 @@ async def test_session_only_audio_policy_precedes_file_read_and_model_resolution
 
     fake_config.resolve_model = forbidden
     monkeypatch.setattr(srv.tools_vision, "config", fake_config)
-    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    audio_path = tmp_path / "must-not-be-read.mp3"
+    read_bytes = Path.read_bytes
 
-    result = await srv.transcribe(str(tmp_path / "must-not-be-read.mp3"))
+    def guarded_read(path):
+        if path == audio_path:
+            forbidden()
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read)
+
+    result = await srv.transcribe(str(audio_path))
 
     assert "subscription sessions cannot transcribe audio" in result
 
@@ -82,7 +90,7 @@ def test_transcribe_public_copy_names_only_proven_session_media_provider() -> No
 
 # ── transcribe_audio (the litellm transcription endpoint) ───────────────────────────────────
 @pytest.mark.asyncio
-async def test_transcribe_audio_calls_the_transcription_endpoint(monkeypatch):
+async def test_transcribe_audio_calls_the_transcription_endpoint(monkeypatch, media_output_root):
     captured: dict = {}
 
     class _Resp:
@@ -96,7 +104,8 @@ async def test_transcribe_audio_calls_the_transcription_endpoint(monkeypatch):
     monkeypatch.setattr(vis.litellm, "validate_environment", lambda m: {"keys_in_environment": True})
     monkeypatch.setattr(vis.litellm, "atranscription", fake_at)
     r = await transcribe_audio(
-        b"RIFF\x08\x00\x00\x00WAVE", model="whisper-1", mime_type="audio/wav"
+        b"RIFF\x08\x00\x00\x00WAVE", model="whisper-1", mime_type="audio/wav",
+        config=Config(debug_dir=media_output_root, media_backend="api", media_billing="api_allowed"),
     )
     assert r.text == "the quick brown fox" and r.model == "whisper-1"
     assert captured["model"] == "whisper-1" and captured["read"] == b"RIFF\x08\x00\x00\x00WAVE"

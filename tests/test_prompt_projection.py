@@ -60,7 +60,8 @@ def _outputs(root: Path) -> dict[str, tuple[int, int, bytes]]:
 def test_exact_commit_compiler_matches_the_complete_legacy_generator(tmp_path: Path) -> None:
     if not (LEGACY / ".git").exists():
         pytest.skip("migration source checkout is unavailable")
-    assert _git(LEGACY, "rev-parse", "HEAD") == LEGACY_COMMIT
+    # The fixture is one immutable commit; the preserved source may have newer work.
+    _git(LEGACY, "cat-file", "-e", f"{LEGACY_COMMIT}^{{commit}}")
     old = tmp_path / "old"
     _extract(LEGACY, LEGACY_COMMIT, old)
     generated = subprocess.run(
@@ -80,6 +81,7 @@ def _fixture_repository(tmp_path: Path, generator: str = "") -> Path:
     repository = tmp_path / "source"
     repository.mkdir()
     _git(repository, "init", "--initial-branch=main")
+    _git(repository, "config", "commit.gpgsign", "false")
     (repository / "generate.py").write_text(generator or (
         "from pathlib import Path\n"
         "for name in ('agents/a.md','skills/s/SKILL.md','rules/r.md',"
@@ -320,9 +322,10 @@ def test_full_recorded_consumer_topology_switches_atomically(
     adoption_targets = {}
     source_hashes = {}
     entries = [*baseline["consumer_entries"], *hook_baseline["entries"]]
+    recorded_home = Path(hook_baseline["settings"]["path"]).parent.parent
     for index, entry in enumerate(entries):
         original = Path(entry["path"])
-        relative = original.relative_to(Path.home())
+        relative = original.relative_to(recorded_home)
         target = home / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if entry["kind"] == "directory":
@@ -352,12 +355,14 @@ def test_full_recorded_consumer_topology_switches_atomically(
     original_replace = os.replace
     failed = False
 
-    def fail_state_once(source, destination):
+    def fail_state_once(source, destination, **kwargs):
         nonlocal failed
-        if Path(destination) == state and not failed:
+        actual_destination = (Path(os.readlink(f"/proc/self/fd/{kwargs['dst_dir_fd']}")) / destination
+                              if "dst_dir_fd" in kwargs else Path(destination))
+        if actual_destination == state and not failed:
             failed = True
             raise OSError("injected state switch failure")
-        return original_replace(source, destination)
+        return original_replace(source, destination, **kwargs)
 
     monkeypatch.setattr("interact.prompt_projection.os.replace", fail_state_once)
     with pytest.raises(OSError, match="injected"):

@@ -11,6 +11,14 @@ import threading
 import pytest
 
 from interact.cli import prompts as prompt_commands
+from interact.config import UserConfig
+
+
+@pytest.fixture(autouse=True)
+def unconfigured_prompt_home(tmp_path, monkeypatch):
+    """Local-Git tests must not inherit the owner's configured server connection."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(UserConfig, "PATH", tmp_path / "home" / ".interact" / "config.env")
 
 
 def _prompt_cli(data_home: Path, *arguments: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
@@ -159,6 +167,8 @@ def test_visible_prompt_actions_cross_the_canonical_git_and_install_boundaries(t
         "INTERACT_PROMPT_CONSUMER_ROOT": str(tmp_path / "consumers"),
         "INTERACT_PROMPT_VSCODE_ROOT": str(tmp_path / "vscode"), "UV_OFFLINE": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
+        "GIT_AUTHOR_NAME": "Fixture Author", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Fixture Author", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
         "GIT_ASKPASS": str(tmp_path / "must-not-run-askpass"),
         "SSH_ASKPASS": str(tmp_path / "must-not-run-ssh-askpass"),
         "BROWSER": str(tmp_path / "must-not-run-browser"),

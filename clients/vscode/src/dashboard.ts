@@ -38,6 +38,8 @@ import { readOrg } from "./org";
 import { bareModelName, shortCompetence } from "./competence";
 import { CompetenceStore } from "./competenceStore";
 import { billingPresentation } from "./billingPresentation";
+import { refreshToolSettings, saveToolSetting, type ToolSettingsView } from "./toolSettings.ts";
+import { serverWorkspaceConfigured } from "./workspaceState.ts";
 import {
   readUsageLog,
   filterByRange,
@@ -151,6 +153,7 @@ export class DashboardPanel {
   private watchers: fs.FSWatcher[] = [];
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshRevision = 0;
+  private settingsSnapshot: ToolSettingsView | null = null;
   private promptState: PromptEditorState = { files: [] };
 
   private constructor(
@@ -294,10 +297,13 @@ export class DashboardPanel {
   async refresh(): Promise<void> {
     if (this.disposed) return;
     const revision = ++this.refreshRevision;
+    let settingsSnapshot: ToolSettingsView | null = null;
+    try { settingsSnapshot = await refreshToolSettings(); } catch { /* settingsCells shows unavailable, never local portable values */ }
     const promptState = !this.promptState.files.length ? await this.loadPromptCatalog() : undefined;
     const models = await this.modelsCell();
     const consumption = await this.consumptionCell();
     if (this.disposed || revision !== this.refreshRevision) return;
+    this.settingsSnapshot = settingsSnapshot;
     if (promptState) this.promptState = promptState;
     const cells: CellUpdate[] = [
       this.statusCell(),
@@ -435,7 +441,15 @@ export class DashboardPanel {
         } else if (msg.value && setting.pattern && !new RegExp(setting.pattern).test(msg.value)) {
           break;
         }
-        await cfg().update(setting.key, value, vscode.ConfigurationTarget.Global);
+        this.refreshRevision += 1;
+        try {
+          if (!await saveToolSetting(setting.env, value === undefined ? undefined : String(value), this.settingsSnapshot)) {
+            await cfg().update(setting.key, value, vscode.ConfigurationTarget.Global);
+          }
+        } catch (error) {
+          void vscode.window.showErrorMessage(error instanceof Error ? error.message : "Settings save failed; draft retained.");
+          break;
+        }
         this.refresh();
         break;
       }
@@ -602,7 +616,9 @@ export class DashboardPanel {
    *  also show cost and the fallback chain. */
   private settingRows(s: Setting): CellContent[] {
     const recs = this.modelsData.recommendations || {};
-    const raw = cfg().get<string | number | boolean>(s.key);
+    const personal = this.settingsSnapshot;
+    const raw = personal?.configured && personal.portable_keys.includes(s.env)
+      ? personal.values[s.env] : cfg().get<string | number | boolean>(s.key);
     const isSet = raw !== undefined && raw !== "";
     let value = isSet ? String(raw) : `auto · ${s.default || "default"}`;
     const action = "changeModel";
@@ -651,7 +667,14 @@ export class DashboardPanel {
     const byGroup = new Map<string, CellContent[]>();
     for (const s of SETTINGS) {
       const rows = byGroup.get(s.group) ?? [];
-      rows.push(...this.settingRows(s));
+      const personal = this.settingsSnapshot;
+      if (serverWorkspaceConfigured() && !personal) {
+        if (!rows.length) rows.push({ kind: "empty", message: "Personal settings unavailable. Sign in and refresh; local portable values are not used." });
+      } else {
+        if (!rows.length && personal?.configured) rows.push({ kind: "row", label: "Personal server settings",
+          value: `revision ${personal.revision} · ${personal.stale ? "STALE cache — refresh online before saving" : "current"}` });
+        rows.push(...this.settingRows(s));
+      }
       byGroup.set(s.group, rows);
     }
     return [...byGroup].map(([group, content]) => ({

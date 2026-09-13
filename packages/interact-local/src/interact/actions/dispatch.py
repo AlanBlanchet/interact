@@ -686,6 +686,7 @@ async def _run_actions_desktop(
     query: str | None,
     invocation_id: str | None = None,
     record_frames: list[bytes] | None = None,
+    wait: str | None = None,
 ) -> str:
     from interact.server import (  # noqa: PLC0415 — circular: server imports dispatch
         _annotate_desktop,
@@ -700,15 +701,40 @@ async def _run_actions_desktop(
     step_reports: list[str] = []
     snapshots: dict[int, bytes] = {}
 
+    from interact.server.capture import _parse_wait_seconds
+
+    def seconds_for(condition: str) -> float:
+        seconds = _parse_wait_seconds(condition)
+        if seconds is None:
+            raise ValueError("Desktop wait takes a duration like '2s'; selectors/load states need a browser")
+        return seconds
+
+    # Reject invalid batch waits before any input is sent.
+    try:
+        batch_seconds = seconds_for(wait) if wait else None
+    except ValueError as exc:
+        return f"{label}\nERROR: {exc}"
+
     for i, action in enumerate(actions):
         step_idx = i + 1
         _log.info("desktop action %d: %s", step_idx, action.type)
+
+        try:
+            step_seconds = seconds_for(action.wait) if action.wait else None
+        except ValueError as exc:
+            step_reports.append(_step(i, action.type, f"ERROR: {exc}"))
+            continue
+        capture_step = isinstance(action, (ScreenshotAction, AnnotateAction))
+        if capture_step and step_seconds is not None:
+            await asyncio.sleep(step_seconds)
 
         if isinstance(action, CompareAction):
             result = await _run_compare(
                 snapshots, action.steps, action.query, _desktop_context(win)
             )
             step_reports.append(_step(i, action.type, result))
+            if step_seconds is not None:
+                await asyncio.sleep(step_seconds)
             continue
 
         # A BARE `wait_for` (timeout only) is a plain pause, meaningful on any surface, so it is
@@ -736,6 +762,8 @@ async def _run_actions_desktop(
                 _DesktopCtx(win, wid, i, action, step_reports, snapshots, step_idx, invocation_id)
             )
 
+        if not capture_step and step_seconds is not None:
+            await asyncio.sleep(step_seconds)
         await asyncio.sleep(0.1)
 
         await _finalize_step(
@@ -743,6 +771,8 @@ async def _run_actions_desktop(
             capture_fn=win.capture, context=_desktop_context(win),
         )
 
+    if batch_seconds is not None:
+        await asyncio.sleep(batch_seconds)
     if query:
         _, final_summary = await _capture_desktop(win, query)
     else:
@@ -804,10 +834,17 @@ async def _run_actions_browser(
             )
             continue
 
+        capture_step = isinstance(action, (ScreenshotAction, AnnotateAction))
+        wait_consumed = capture_step
+        if capture_step and action.wait:
+            await _wait_fn(page, action.wait)
+
         if isinstance(action, CompareAction):
             ctx = f"Browser session comparison of steps {action.steps}"
             result = await _run_compare(snapshots, action.steps, action.query, ctx)
             step_reports.append(_step(i, action.type, result))
+            if action.wait:
+                await _wait_fn(page, action.wait)
             continue
 
         if isinstance(action, HandleDialogAction):
@@ -816,6 +853,8 @@ async def _run_actions_browser(
             step_reports.append(
                 _step(i, action.type, f"armed: the next dialog will be {action.action}ed{answer}")
             )
+            if action.wait:
+                await _wait_fn(page, action.wait)
             continue
 
         if isinstance(action, NewTabAction):
@@ -852,6 +891,7 @@ async def _run_actions_browser(
                 step_reports.append(_step(i, action.type, _element_miss(action.element)))
                 continue
             final, desc = await _settle_and_diff(mgr, page, action, current_tab, before)
+            wait_consumed = True
             step_reports.append(_step(i, action.type, desc))
 
         elif isinstance(action, ClickAction) and (
@@ -867,6 +907,7 @@ async def _run_actions_browser(
                 step_reports.append(_step(i, action.type, _element_miss(action.element)))
                 continue
             final, desc = await _settle_and_diff(mgr, page, action, current_tab, before)
+            wait_consumed = True
             step_reports.append(_step(i, action.type, _button_prefix(action) + desc))
 
         elif isinstance(action, HoverAction) and action.name:
@@ -884,6 +925,7 @@ async def _run_actions_browser(
             else:
                 await locator.type(action.text)
             final, desc = await _settle_and_diff(mgr, page, action, current_tab, before)
+            wait_consumed = True
             step_reports.append(_step(i, action.type, desc))
 
         elif isinstance(action, ScreenshotAction):
@@ -920,6 +962,7 @@ async def _run_actions_browser(
             result = await _execute_browser_action(action, page)
             if action.wait:
                 await _wait_fn(page, action.wait)
+            wait_consumed = True
             step_reports.append(_step(i, action.type, _render_js_result(result)))
 
         elif isinstance(action, EmulateDeviceAction):
@@ -929,6 +972,8 @@ async def _run_actions_browser(
                 media_desc = await mgr.apply_media(**action._media())
                 if not (action.device or action.width or action.reset):
                     step_reports.append(_step(i, action.type, media_desc))
+                    if action.wait:
+                        await _wait_fn(page, action.wait)
                     continue
                 desc = await mgr.emulate_device(
                     device=action.device,
@@ -957,10 +1002,14 @@ async def _run_actions_browser(
             before = await _capture(mgr, tab=current_tab)
             result = await _execute_browser_action(action, page)
             final, desc = await _settle_and_diff(mgr, page, action, current_tab, before)
+            wait_consumed = True
             entry = _step(i, action.type, _button_prefix(action) + desc)
             if result is not None:
                 entry += f"\n  result: {result}"
             step_reports.append(entry)
+
+        if action.wait and not wait_consumed:
+            await _wait_fn(page, action.wait)
 
         # Surface any native dialog this step triggered — an auto-dismissed confirm() used to
         # no-op a click with zero trace, the worst default for admin UIs (#77).

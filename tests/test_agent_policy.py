@@ -258,6 +258,8 @@ def test_the_cli_says_one_line_when_nothing_clears_a_criterion(monkeypatch, caps
     from interact.cli.app import agents_spawn
 
     monkeypatch.setattr(providers.ClaudeCodeProvider, "available", lambda self: True)
+    # This test isolates criterion failure, with the caller's conversation already known.
+    monkeypatch.setenv("INTERACT_SESSION_ID", "fixture-criterion-session")
 
     class _Vendor:
         name = "claude"

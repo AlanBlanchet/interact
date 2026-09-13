@@ -1,4 +1,9 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from interact.agents.events import AgentEvent
 from interact.agents.protocol import (
@@ -9,15 +14,37 @@ from interact.agents.protocol import (
 from interact.agents.registry import AgentRun
 
 
-def test_type_generation_disables_external_catalog_discovery() -> None:
+@pytest.mark.parametrize("sibling", [False, True], ids=["released-core", "editable-core"])
+def test_type_generation_disables_external_catalog_discovery(tmp_path, sibling) -> None:
     """Codegen imports catalog modules; its launcher must make that import deterministic."""
-    script = Path("clients/vscode/scripts/generate-types.sh").read_text()
-
-    assert 'export LITELLM_LOCAL_MODEL_COST_MAP="True"' in script
-    assert 'export OLLAMA_DISCOVERY="0"' in script
-    assert 'CORE_SOURCE_DIR="$REPO_DIR/../interact-core"' in script
-    assert 'UV_RUN+=(--no-sources)' in script
-    assert 'installed interact-core detected' in script
+    repo = tmp_path / "public"
+    script = repo / "clients/vscode/scripts/generate-types.sh"
+    script.parent.mkdir(parents=True)
+    shutil.copyfile("clients/vscode/scripts/generate-types.sh", script)
+    core = tmp_path / "interact-core"
+    if sibling:
+        core.mkdir()
+        (core / "pyproject.toml").touch()
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    capture = tmp_path / "invocation"
+    uv = binary_dir / "uv"
+    uv.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$LITELLM_LOCAL_MODEL_COST_MAP" "$OLLAMA_DISCOVERY" "$@" '
+        '> "$CODEGEN_CAPTURE"\nexit 1\n'
+    )
+    uv.chmod(0o700)
+    result = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True,
+        env=os.environ | {"PATH": f"{binary_dir}:{os.environ['PATH']}",
+                          "CODEGEN_CAPTURE": str(capture)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "pydantic-to-typescript not installed; skipping" in result.stderr
+    expected = ["True", "0", "run", "--directory", str(repo)]
+    if sibling:
+        expected += ["--with-editable", str(repo / ".." / "interact-core")]
+    assert capture.read_text().splitlines() == expected + ["python", "-c", "import pydantic2ts"]
 
 
 def test_generation_emits_exhaustive_runtime_decoders_from_python_wire_union() -> None:

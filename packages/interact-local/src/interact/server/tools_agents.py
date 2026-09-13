@@ -43,6 +43,7 @@ async def agent_spawn(
     image_paths: list[str] | None = None,
     agent_ref: AgentRevisionRef | None = None,
     delegate: str | None = None,
+    session_id: str | None = None,
 ) -> str:
     """Start another agent to work alongside you, and return its run id immediately.
 
@@ -59,6 +60,8 @@ async def agent_spawn(
         variables; you cannot pass an environment, and an unknown name is refused rather than
         silently ignored.
 
+    session_id: owning caller conversation, shared by spawn and list. Omit only when a
+        recorded parent or INTERACT_SESSION_ID provides it. No cwd or MCP transport inference.
     task: what the agent should do — write it as a complete brief; the agent cannot ask you.
     provider: which CLI to run ("claude", "codex"). Only installed ones can be used.
     agent: a definition the CLI resolves itself — Claude Code reads ~/.claude/agents/<name>.md —
@@ -114,19 +117,21 @@ async def agent_spawn(
         # Never let an unexercised adapter look as trustworthy as a tested one.
         pass
     try:
-        handle = await run_agent(
-            prov, task, name=name or agent, cwd=cwd or os.getcwd(),
-            agent=agent, model=model, permission_mode=permission_mode,
-            profile=profile,
-            agent_ref=agent_ref, delegate=delegate,
-            image_paths=tuple(Path(path) for path in (image_paths or ())),
-        )
+        with reg.session_context(session_id) as owner:
+            handle = await run_agent(
+                prov, task, name=name or agent, cwd=cwd or os.getcwd(),
+                agent=agent, model=model, permission_mode=permission_mode,
+                profile=profile,
+                agent_ref=agent_ref, delegate=delegate,
+                image_paths=tuple(Path(path) for path in (image_paths or ())),
+            )
     except ValueError as e:  # an unknown permission mode, refused before it reaches a shell
         return f"ERROR: {e}"
     except (OSError, RuntimeError) as e:
         return f"ERROR: could not start the {provider} agent — {e}"
     caveat = f"\nNOTE: the {provider} adapter is {prov.caveat}" if not prov.verified else ""
     return (f"Started [{name or agent or prov.name}] ({provider}) — run_id={handle.run_id}\n"
+            f"Session: {owner or 'unknown; pass session_id to make future launches discoverable in this conversation'}\n"
             f"Task: {' '.join(task.split())[:180]}\n"
             f"Launch policy: model={getattr(handle, 'model', None)}; "
             f"reasoning={getattr(handle, 'reasoning', None)}; "
@@ -136,25 +141,31 @@ async def agent_spawn(
 
 @mcp.tool()
 @instrumented
-async def agent_list(include_foreign: bool = True) -> str:
-    """The agent team: every run interact started, what it is doing now, and what it has cost.
+async def agent_list(include_foreign: bool = False, session_id: str | None = None, all_sessions: bool = False) -> str:
+    """Launched runs owned by this conversation, including nested children; not the agent roster.
 
-    With include_foreign (default), also lists agent sessions interact did NOT start — the user's
-    own editor windows — so this reflects the machine's real state rather than only our children.
+    Pass session_id used at spawn, or inherit the recorded parent / INTERACT_SESSION_ID.
+    Missing identity requires an explicit choice; it never lists unrelated sessions.
+    all_sessions=True opts into machine-wide history, including unassigned old records.
+    include_foreign=True only adds discovered editor sessions when all_sessions=True.
 
     API-equivalent cost is an estimate, not proof of billed spend. Charge path and account impact
     are unknown here: subscription usage may be included, limited, credited, or separately charged.
     """
-    runs = reg.list_runs(include_foreign=include_foreign)
+    try:
+        runs = reg.session_runs(session_id=session_id, all_sessions=all_sessions, include_foreign=include_foreign)
+    except ValueError as error:
+        return f"ERROR: {error}"
+    scope = "All sessions (including unknown owners)" if all_sessions else f"Session {reg.resolve_session_id(session_id)}"
     if not runs:
         installed = ", ".join(p.name for p in available_providers()) or "none installed"
-        return f"No agent runs. Providers available here: {installed}."
+        return f"{scope}: No agent runs. Providers available here: {installed}."
     lines = [_fmt(r) for r in runs]
     live = sum(1 for r in runs if r.status == "running")
     total = sum(r.cost_usd or 0 for r in runs)
     tree = [f"  {r.run_id[:8]} ← spawned by {r.parent_run_id[:8]}"
             for r in runs if r.parent_run_id]
-    out = [f"{len(runs)} agent run(s), {live} running, ~${total:.4f} API-equivalent:", *lines]
+    out = [f"{scope}: {len(runs)} agent run(s), {live} running, ~${total:.4f} API-equivalent:", *lines]
     if tree:
         out += ["", "Team tree:", *tree]
     return "\n".join(out)

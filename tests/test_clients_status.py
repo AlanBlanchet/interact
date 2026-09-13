@@ -216,7 +216,7 @@ async def test_codex_user_install_is_discoverable_from_a_fresh_process_and_real_
         "CODEX_HOME": str(codex_home),
         "HOME": str(user_home),
         "USERPROFILE": str(user_home),
-        "PATH": os.environ["PATH"],
+        "PATH": os.pathsep.join((str(Path(interact).parent), os.environ["PATH"])),
         "LANG": "C.UTF-8",
     }
 

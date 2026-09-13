@@ -165,7 +165,7 @@ export class AgentsProvider implements vscode.TreeDataProvider<Node>, vscode.Dis
       // providers but wired into none of them is part of the company with nowhere to work.
       const live = seat.providers.filter((p) => p.env).map((p) => p.id);
       const designed = seat.providers.filter((p) => !p.env).map((p) => p.id);
-      n.description = [seat.title, live.length ? live.join("+") : "not wired anywhere",
+      n.description = [seat.title, live.length ? live.join("+") : org.source === "server" ? "provider checked at launch" : "not wired anywhere",
                        designed.length ? `(${designed.join(",")} designed)` : ""]
         .filter(Boolean).join(" · ");
       n.tooltip = seat.description ?? seat.title ?? seat.name;

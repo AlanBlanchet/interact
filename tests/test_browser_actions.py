@@ -34,6 +34,7 @@ def test_select_text_validation(kwargs, ok):
             SelectTextAction(**kwargs)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_select_text_and_double_click_make_a_dom_selection_live():
     """End-to-end against real Chromium (self-skips in bare CI): both create a real DOM Selection in
