@@ -147,9 +147,11 @@ def test_the_allow_list_reaches_the_vendor_command():
 
     claude = provider_for("claude")
     argv = claude.command("t", cwd=".", model=None, mcp_config=None, run_id="r",
+                          agent="fixture", agent_prompt="Pinned fixture role",
                           allowed_tools=["mcp__interact__screenshot", "mcp__interact__navigate"])
-    assert "--allowedTools" in argv
-    assert argv[argv.index("--allowedTools") + 1] == "mcp__interact__screenshot,mcp__interact__navigate"
+    assert "--allowedTools" not in argv
+    assert json.loads(argv[argv.index("--agents") + 1])["fixture"]["tools"] == [
+        "mcp__interact__screenshot", "mcp__interact__navigate"]
     # No toolset configured: no flag at all, so an unrestricted agent stays unrestricted.
     assert "--allowedTools" not in claude.command(
         "t", cwd=".", model=None, mcp_config=None, run_id="r")
@@ -184,11 +186,10 @@ def test_policy_shows_what_each_agent_resolves_to(cli_policy, capsys):
     assert "visual-critic" in out and "@eyes" in out and "cap.vlm and price.in < 10" in out
     assert "vision" in out and "mcp__interact__screenshot" in out
     assert "codex" in out and "off" in out
-    # The resolution shown is the one the SPAWN will make — per switched-on vendor CLI, from the
-    # pool that CLI can run — not the catalog's cheapest, which the claude binary cannot run.
+    # Preview gives one criteria order; local availability is evaluated at launch.
     line = next(l for l in out.splitlines() if l.strip().startswith("visual-critic"))
-    assert "claude ⇒" in line and "gemini" not in line, line
-    assert "codex ⇒" not in line, "a switched-off provider is not consulted"
+    assert "ranked:" in line and " → " in line and "gemini" not in line, line
+    assert "availability checked at start" in line
 
 
 def test_providers_toggle_from_the_cli(cli_policy, capsys):
@@ -641,10 +642,10 @@ def test_the_policy_says_which_rule_governs_an_agent_and_what_it_means_today(
     monkeypatch.setattr("interact.agents.policy.policy_path", lambda: policy)
 
     with catalog_of(
-        Model(id="mid-one", provider="x", capabilities=set(), intelligence_score=40.0,
+        Model(id="mid-one", provider="anthropic", capabilities=set(), intelligence_score=40.0,
               input_cost_per_million=1.0),
     ):
-        Model._provider_keys["x"] = ["FIXTURE_KEY"]
+        Model._provider_keys["anthropic"] = ["FIXTURE_KEY"]
         agents_policy(json_out=True)
         seen = {a["name"]: a for a in json.loads(capsys.readouterr().out)["agents"]}
 

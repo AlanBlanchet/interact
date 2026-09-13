@@ -166,6 +166,14 @@ test("Start an Agent can omit the generic plain route while generic sessions omi
   ]);
 });
 
+test("ranked spawning omits provider while retaining each provider's workspace permissions", () => {
+  assert.deepEqual(spawnArgs({task: "review", agent: "tester", org: ORG,
+    providerModes: {codex: "read-only", claude: "plan"}}), [
+    "agents", "spawn", "review", "--agent", "tester",
+    "--provider-mode", "codex=read-only", "--provider-mode", "claude=plan",
+  ]);
+});
+
 // --- what model an agent should run on ---
 
 test("an agent's declared model is offered as its default", () => {

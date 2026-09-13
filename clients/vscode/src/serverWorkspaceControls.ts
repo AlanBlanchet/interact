@@ -1,5 +1,7 @@
 /** Native workspace controls; Python owns authentication, validation and graph CAS. */
 import * as vscode from "vscode";
+import { interactCli } from "./interactCli.ts";
+import { type PolicyRule } from "./agentModels.ts";
 import { workspaceCommand, refreshWorkspace } from "./serverWorkspace.ts";
 import { acceptWorkspace, parseWorkspace, parseWorkspaceModel, type WorkspaceAgent, type WorkspaceView, type WorkspaceModel } from "./workspaceState.ts";
 import { WorkflowExecution, type WorkflowSelection } from "./workflowExecution.ts";
@@ -115,6 +117,7 @@ export class ServerWorkspaceControls implements vscode.Disposable {
     this.drafts.set(agent.id, draft);
     for (;;) {
       const action = await vscode.window.showQuickPick([
+        { label: "Ranked models", key: "ranking", description: "Saved criteria · across desktop providers", detail: "Inspect the ordered candidates; availability is checked when the agent starts" },
         { label: "Configured server model", key: "model", description: (draft.edit.model !== undefined ? draft.edit.model : agent.model)?.id ?? "resolve from criteria" },
         { label: "Model criteria", key: "criteria", description: draft.edit.criteria ?? agent.criteria ?? "unset" },
         { label: "Criteria weights", key: "criteria_weights", description: draft.edit.criteria_weights ?? agent.criteria_weights },
@@ -127,6 +130,26 @@ export class ServerWorkspaceControls implements vscode.Disposable {
         { label: "Reload and discard this draft", key: "reload" },
       ], { title: `${agent.name} · revision ${agent.revision}`, placeHolder: `${view.origin} · changes persist only with Save` });
       if (!action) return; // draft survives reopening this control
+      if (action.key === "ranking") {
+        const items = (async () => {
+          const result = await interactCli(["agents", "policy", "--json-out"]);
+          if (result.error) throw new Error(result.error);
+          const value = JSON.parse(result.stdout);
+          if (!Array.isArray(value.agents)) throw new Error("Model ranking unavailable. Retry with the matching Interact runtime.");
+          const rule = (value.agents as PolicyRule[]).find(item => item.name === agent.role_key);
+          if (!rule) throw new Error("This agent has no named desktop role in the saved policy.");
+          if (!rule.ranked?.length) throw new Error(rule.why ?? "No ranked candidates for this saved model rule.");
+          return rule.ranked.map((candidate, index) => ({
+            label: `${index + 1}. ${candidate.model}`, description: candidate.provider,
+            detail: `${rule.rule} · availability checked at launch`,
+          }));
+        })();
+        try {
+          await vscode.window.showQuickPick(items, { title: `Saved model ranking · ${agent.name}`,
+            placeHolder: "Top candidates in criteria order; inspecting does not change the agent or its draft", matchOnDetail: true });
+        } catch (error) { await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Model ranking unavailable."); }
+        continue;
+      }
       if (action.key === "open") { await this.link(view, "agents", agent.id); continue; }
       if (action.key === "prompts") { await this.link(view, "prompts"); continue; }
       if (action.key === "reload") { this.drafts.delete(agent.id); await this.open(agent.id); return; }

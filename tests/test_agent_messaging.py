@@ -113,6 +113,9 @@ def test_delivery_accepts_the_id_the_list_printed(monkeypatch):
 
 
 class _DeliveryProvider:
+    def validate_tool_policy(self, allowed_tools, denied_tools):
+        assert not allowed_tools and not denied_tools
+
     name = "fake"
     can_resume = True
     can_queue = True

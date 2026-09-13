@@ -68,7 +68,7 @@ async function agentProviderStatuses(): Promise<AgentProviderStatus[] | null> {
   return providers.length ? providers : null;
 }
 
-async function chooseAgentProvider(title: string): Promise<AgentProviderStatus | undefined> {
+async function chooseAgentProvider(title: string, allowRanked = false): Promise<AgentProviderStatus | null | undefined> {
   const providers = await agentProviderStatuses();
   if (!providers) {
     void vscode.window.showErrorMessage(cliFailure("read installed agent providers"));
@@ -89,13 +89,14 @@ async function chooseAgentProvider(title: string): Promise<AgentProviderStatus |
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
-    available.map((provider) => ({
+    [...(allowRanked ? [{label: "Best available", description: "Rank across providers",
+      detail: "Uses the role criteria and keeps each provider’s workspace permissions", provider: null}] : []), ...available.map((provider) => ({
       label: provider.label,
       description: provider.id,
       detail: "installed and enabled",
       provider,
-    })),
-    { title, placeHolder: "Choose the CLI that will run this agent" },
+    }))],
+    { title, placeHolder: allowRanked ? "Rank all providers, or choose a provider filter" : "Choose the CLI that will run this agent" },
   );
   return picked?.provider;
 }
@@ -790,19 +791,17 @@ export async function activate(
       await chatProvider.newConversation();
     }),
     vscode.commands.registerCommand("interact.agents.spawn", async () => {
-      const provider = await chooseAgentProvider("Start an agent — choose a provider");
-      if (!provider) return;
-      // Definitions are provider-local. A shared role is only offered after this CLI confirms it
-      // can resolve the role; the company file alone is design metadata, not launch proof.
-      const listed = await interactCli(["agents", "definitions", "--provider", provider.id]);
+      const provider = await chooseAgentProvider("Start an agent", true);
+      if (provider === undefined) return;
+      const listed = await interactCli(["agents", "definitions", ...(provider ? ["--provider", provider.id] : [])]);
       if (listed.error) {
-        void vscode.window.showErrorMessage(cliFailure(`read ${provider.id} agent roles`));
+        void vscode.window.showErrorMessage(cliFailure("read agent roles"));
         return;
       }
       const definitions = listed.stdout.split("\n").map((name) => name.trim()).filter(Boolean);
       if (!definitions.length) {
         void vscode.window.showErrorMessage(
-          `Interact: ${provider.label} has no verified agent roles available here.`,
+          `Interact: ${provider?.label ?? "the available providers"} has no verified agent roles available here.`,
         );
         return;
       }
@@ -810,7 +809,7 @@ export async function activate(
       // department they sit in, and where they can actually run. The definitions list stays the
       // ground truth for what is runnable, so an agent the org file omits is still offered.
       const picked = await vscode.window.showQuickPick(
-        spawnChoices(definitions, readOrg(), { includePlain: false, provider: provider.id }),
+        spawnChoices(definitions, readOrg(), { includePlain: false, provider: provider?.id }),
         { title: "Who should take this?", placeHolder: "the definition it will run as",
           matchOnDetail: true },
       );
@@ -825,16 +824,16 @@ export async function activate(
       // How much this one may do on its own — the decision that makes a heterogeneous team
       // possible rather than N copies of the same autonomy. Read from the CLI, never hardcoded:
       // two copies of a vendor's flag values drift, and it is always this copy that drifts.
-      const modes = await knownModes(provider.id);
+      const modes = provider ? await knownModes(provider.id) : [];
       // The workspace default — what "/permissions" set. It APPLIES; it does not merely float to
       // the top of the picker. Those were two meanings of one setting in two files, and the
       // command's own confirmation ("New agents here start with X") promised the first while the
       // spawn path did the second: dismiss the picker and you silently got the CLI's default.
-      const workspaceDefault = context.workspaceState.get<string | null>(
+      const workspaceDefault = provider ? context.workspaceState.get<string | null>(
         permissionModeKey(provider.id), null,
-      );
+      ) : null;
       let permissionMode: string | null = workspaceDefault;
-      if (modes.length) {
+      if (provider && modes.length) {
         const mode = await vscode.window.showQuickPick(modeChoices(modes, workspaceDefault), {
           title: `How much may ${picked.label} do on its own?`,
           placeHolder: workspaceDefault
@@ -851,14 +850,26 @@ export async function activate(
         await context.workspaceState.update(permissionModeKey(provider.id), mode.id);
       }
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const providerModes: Record<string, string> = {};
+      if (!provider) {
+        const statuses = await agentProviderStatuses();
+        if (!statuses) {
+          void vscode.window.showErrorMessage(cliFailure("read provider workspace permissions"));
+          return;
+        }
+        for (const item of statuses) {
+          const mode = context.workspaceState.get<string | null>(permissionModeKey(item.id), null);
+          if (mode) providerModes[item.id] = mode;
+        }
+      }
       const args = spawnArgs({
-        task, provider: provider.id, agent: picked.label, cwd, org: readOrg(), permissionMode,
+        task, provider: provider?.id, agent: picked.label, cwd, org: readOrg(), permissionMode, providerModes,
         // The launcher reads the named role's current policy and resolves model/effort there.
         // Passing the editor's old model pin here would bypass that single policy decision.
       });
       const result = await interactCli(args);
       if (result.error) {
-        void vscode.window.showErrorMessage(cliFailure(`start ${picked.label} through ${provider.id}`));
+        void vscode.window.showErrorMessage(cliFailure(`start ${picked.label}`));
         return;
       }
       const runId = result.stdout.trim().split(/\s+/)

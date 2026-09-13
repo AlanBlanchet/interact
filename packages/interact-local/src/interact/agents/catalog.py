@@ -269,15 +269,19 @@ class AgentCatalog(BaseModel):
         except ValueError as error:
             raise CatalogConnectionError("invalid exact agent or prompt revision received from server") from error
 
-    def definition(self, role: str, task: str) -> str:
+    def role_prompt(self, role: str) -> str:
+        """Complete pinned role instructions, independent of a delegated task."""
         status = "stale" if self.stale else "current"
         agent = self.role(role)
         return (
             f"AGENT_ROLE: {role}\n\n"
             f"Server agent identity: {agent.id}; revision: {agent.revision}\n\n"
             f"Head catalog: {status}; cursor={self.snapshot.cursor}; fetched={self.fetched_at.isoformat()}\n\n"
-            f"{self.instructions(role)}\n\nDelegated task:\n{task}"
+            f"{self.instructions(role)}"
         )
+
+    def definition(self, role: str, task: str) -> str:
+        return f"{self.role_prompt(role)}\n\nDelegated task:\n{task}"
 
     def instructions(self, role: str) -> str:
         agent = self.role(role)

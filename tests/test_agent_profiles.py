@@ -225,4 +225,4 @@ def test_a_broken_provider_config_never_blocks_the_spawn(tmp_path, monkeypatch):
 def test_an_unknown_provider_is_assumed_unmeshed():
     from interact.agents.run import already_meshed
 
-    assert already_meshed("codex") in (True, False)  # never raises; a bool either way
+    assert already_meshed("fixture-unknown-provider") is False

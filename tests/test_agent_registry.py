@@ -51,6 +51,31 @@ def _record(**kw):
     return reg.register(**{**base, **kw})
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_registry_persists_explicit_mesh_choice(enabled):
+    _record(mesh_enabled=enabled)
+    assert reg.get_run("r1").mesh_enabled is enabled
+
+
+def test_registry_preserves_ranked_selection_and_tool_denials():
+    first = reg.LaunchCandidate(provider="fixture-a", model="top", catalog_id="example/top", rank=0)
+    second = reg.LaunchCandidate(provider="fixture-b", model="next", catalog_id="example/next", rank=1)
+    original = _record(candidates=(first, second), skipped=(reg.SkippedCandidate(candidate=first, reason="unauthenticated"),),
+                       denied_tools=("mcp__interact__report_issue",))
+    restored = reg.get_run("r1")
+    assert restored.candidates == original.candidates
+    assert restored.skipped == original.skipped
+    assert restored.denied_tools == original.denied_tools
+    with pytest.raises(ValueError):
+        reg.AgentRun.model_validate({**original.model_dump(), "denied_tools": ["--bad"]})
+
+
+def test_historical_record_does_not_enable_mesh_on_resume():
+    original = _record()
+    (reg.agents_dir() / "r1.json").write_text(original.model_dump_json(exclude={"mesh_enabled"}))
+    assert reg.get_run("r1").mesh_enabled is False
+
+
 def test_the_registry_ignores_the_debug_dir_override(tmp_path):
     # It must be findable by a process that never saw INTERACT_DEBUG_DIR.
     assert "somewhere-else" not in str(reg.agents_dir())

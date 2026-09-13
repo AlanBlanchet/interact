@@ -24,7 +24,7 @@ from interact_core import AgentRevisionRef
 from interact.agents import registry as reg
 from interact.agents.policy import Policy, policy_path
 from interact.agents.profiles import overlay_for, profiles_from
-from interact.agents.providers import AgentProvider, _safe_process_detail
+from interact.agents.providers import PROVIDERS, AgentProvider, CodexProvider, UnsupportedToolPolicy, validate_denied_tools, _safe_process_detail
 from interact.criteria import Criteria, CriteriaError, Variables
 from interact.models import Model, ModelCapability
 
@@ -56,6 +56,95 @@ def resolve_model(
     if not overlay:
         return {}, model
     return overlay, overlay.get("ANTHROPIC_MODEL", model)
+
+
+def rank_candidates(
+    model: str, env: dict[str, str], *, providers: Sequence[AgentProvider], weights: str = "",
+) -> tuple[reg.LaunchCandidate, ...]:
+    """ONE ordered list across every given CLI — "we rank based on all providers, we get the
+    first one from the criteria, and if not available we get the next one".
+
+    `Criteria.ranked` runs once over the UNION of what the given CLIs can run, so a criterion has
+    one answer whatever binary ends up running it; one provider given alone is that same list
+    filtered, never a different ranking. A row two CLIs can run yields one candidate per CLI,
+    in registry order, sharing the row's rank. A plain model id yields the CLIs that can run it,
+    or every given CLI when the id is outside the catalog — passed through untouched, as
+    :func:`resolve_model` does. The criterion itself is never relaxed: an empty list raises,
+    naming the pools that were searched.
+    """
+    # The list is ranked over EVERY registered CLI and then filtered, so a rank means the same
+    # thing whichever subset a caller asked for; the given providers only decide who may run.
+    universe = list(PROVIDERS.values()) + [p for p in providers if p.name not in PROVIDERS]
+    allowed = {p.name for p in providers}
+    if model.startswith("@"):
+        model = load_policy().rule(model)
+    if not is_criterion(model):
+        row = Model.by_id(model)
+        candidates = tuple(
+            reg.LaunchCandidate(provider=p.name, model=model, rank=0,
+                                catalog_id=f"{row.provider}/{row.id}" if row is not None else None)
+            for p in universe if p.name in allowed and (row is None or p.can_run(row, env))
+        )
+        if not candidates:
+            names = ", ".join(sorted(allowed)) or "none"
+            raise ModelUnavailable(f"The {names} CLIs cannot run model {model!r}")
+        return candidates
+    try:
+        criteria = Criteria.parse(model)
+    except CriteriaError as err:
+        raise ModelUnavailable(f"{model!r} is not a usable model criterion: {err}") from err
+    pool = lambda m: any(p.can_run(m, env) for p in universe if p.name in allowed)
+    ranked = criteria.ranked(runnable=lambda m: any(p.can_run(m, env) for p in universe), weights=weights)
+    candidates = tuple(
+        reg.LaunchCandidate(provider=p.name, model=p.model_id_for(row),
+                            catalog_id=f"{row.provider}/{row.id}", rank=rank)
+        for rank, row in enumerate(ranked) for p in universe
+        if p.name in allowed and p.can_run(row, env)
+    )
+    if not candidates:
+        names = ", ".join(sorted(allowed)) or "none"
+        raise ModelUnavailable(
+            f"no model the {names} CLIs can run clears {criteria}:\n{criteria.explain(True, pool)}"
+        )
+    return candidates
+
+
+async def _unavailable(
+    provider: AgentProvider, policy: Policy, *, permission_mode: str | None, images: bool,
+    allowed_tools: list[str], denied_tools: tuple[str, ...], env: dict[str, str],
+    auth_cache: dict[tuple[str, str], bool | None], route_key: str,
+) -> reg.SkipReason | None:
+    """The machine-local fact stopping this candidate BEFORE anything runs, or None.
+
+    Every check here is answerable without starting the task. Authentication runs the CLI's own
+    auth-status command (no credential is read). Failed checks are distinct from logged-out
+    status. Adapters without a status command leave authentication to their own launcher.
+    """
+    if not provider.available():
+        return "cli_missing"
+    if not policy.provider_active(provider.name):
+        return "provider_off"
+    try:
+        provider.validate_permission_mode(permission_mode)
+    except ValueError:
+        return "permission_mode_unsupported"
+    if images and not provider.image_attachment_support():
+        return "images_unsupported"
+    try:
+        provider.validate_tool_policy(allowed_tools, denied_tools)
+    except UnsupportedToolPolicy:
+        return "tool_policy_unsupported"
+    key = (provider.name, route_key)
+    if key not in auth_cache:
+        try:
+            auth_cache[key] = await provider.authenticated(env, timeout=3)
+        except NotImplementedError:
+            auth_cache[key] = True
+    if auth_cache[key] is None:
+        return "auth_check_failed"
+    if not auth_cache[key]:
+        return "unauthenticated"
+    return None
 
 
 def load_policy() -> Policy:
@@ -212,7 +301,7 @@ def _interact_command() -> tuple[str, list[str]]:
     return sys.executable, ["-m", "interact", "mcp"]
 
 
-def already_meshed(provider: str) -> bool:
+def already_meshed(provider: str, *, cwd: str | None = None) -> bool:
     """Whether this provider's OWN configuration already registers interact as an MCP server.
 
     "activate the agents for the provider, but once (and not twice)... no conflicts." `interact
@@ -222,9 +311,11 @@ def already_meshed(provider: str) -> bool:
     flows — INTERACT_PARENT_RUN_ID rides the child's process env, the globally-configured server
     inherits it.
 
-    Reads only; a corrupt or absent config means "not registered" — doubling a server is annoying,
-    a spawn refusing to start over a config file is worse.
+    Reads only. Codex configuration errors fail closed: an unreadable entry may disable
+    the server, so injecting a replacement must not override that operator decision.
     """
+    if provider == "codex":
+        return CodexProvider().has_mcp_server("interact", cwd=cwd or str(Path.cwd()))
     checks = {
         "claude": Path.home() / ".claude.json",
         "cursor": Path.home() / ".cursor" / "mcp.json",
@@ -384,25 +475,28 @@ def launch_continuation(
     policy = load_policy()
     policy, _ = policy.for_launch(run.agent, reference=run.agent_ref)
     catalog = policy.catalog
+    routed: dict[str, str] = {}
     if catalog is not None:
         if not run.agent:
             raise ModelUnavailable("Server catalog continuation requires a named role")
         criterion = policy.criterion_for(run.agent)
         if not criterion:
             raise ModelUnavailable(f"No model criterion for {run.agent!r}")
-        model = resolve_model(criterion, dict(os.environ), provider=provider, weights=policy.weights_for(run.agent))[1]
+        routed, model = resolve_model(criterion, dict(os.environ), provider=provider, weights=policy.weights_for(run.agent))
         reasoning = policy.reasoning_for(run.agent)
-        message = catalog.definition(run.agent, message)
+    provider.validate_tool_policy(policy.tools_for(run.agent), run.denied_tools)
     argv = provider.resume_command(
         session_id, message, model=model, permission_mode=run.permission_mode,
-        reasoning=reasoning, agent=run.agent if catalog is None else None,
+        reasoning=reasoning, agent=run.agent,
+        allowed_tools=policy.tools_for(run.agent), denied_tools=run.denied_tools,
+        agent_prompt=catalog.role_prompt(run.agent) if catalog is not None else None,
+        mcp_config=mesh_config(run_id=run.run_id)
+        if run.mesh_enabled and not already_meshed(provider.name, cwd=run.cwd) else None,
     )
-    if catalog is not None and provider.name == "claude" and policy.tools_for(run.agent):
-        argv += ["--allowedTools", ",".join(policy.tools_for(run.agent))]
     sink = reg.open_raw_events(run.run_id, append=True)
     stderr_file = tempfile.TemporaryFile()
     try:
-        env = {**os.environ, "INTERACT_RUN_ID": run.run_id, "INTERACT_PARENT_RUN_ID": run.run_id}
+        env = {**os.environ, **routed, "INTERACT_RUN_ID": run.run_id, "INTERACT_PARENT_RUN_ID": run.run_id}
         if provider.name == "claude":
             env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning
         process = subprocess.Popen(
@@ -503,7 +597,7 @@ async def _reap(run_id: str, process, lifecycle_token: str) -> None:
 
 
 async def run_agent(
-    provider: AgentProvider,
+    provider: AgentProvider | None,
     task: str,
     *,
     name: str | None = None,
@@ -517,6 +611,8 @@ async def run_agent(
     profile: str | None = None,
     mesh: bool = True,
     image_paths: tuple[Path, ...] = (),
+    denied_tools: tuple[str, ...] = (),
+    provider_modes: dict[str, str] | None = None,
 ) -> RunHandle:
     """Spawn an agent run and register it, returning as soon as it is alive.
 
@@ -535,19 +631,46 @@ async def run_agent(
 
     ``image_paths`` is an optional tuple of existing absolute PNG, JPEG, or WebP paths. The
     provider and resolved model are checked before any child process is created.
+
+    ``provider`` None means the ranked choice: the role's criterion is ranked ONCE across every
+    registered CLI (:func:`rank_candidates`) and the list is walked in order until a candidate
+    can start here — installed, switched on, logged in, honouring the requested mode and
+    attachments. A named provider is the same list filtered to it and never falls through:
+    the caller chose, so its failure is reported as such. Fall-through happens only BEFORE the
+    child exists; whatever happens once it can act — a denial, a crash, a stop — is that run's
+    outcome and is never replayed on another candidate.
     """
-    provider.validate_permission_mode(permission_mode)
     validated_images = validate_image_paths(image_paths)
-    if not provider.available():
-        raise RuntimeError(
-            f"the {provider.name!r} CLI is not installed (looked for {provider.binary!r} on PATH). "
-            "interact drives the vendor's own binary with your own login; install and sign into "
-            "it first."
-        )
-    if validated_images and not provider.image_attachment_support():
-        raise RuntimeError(
-            f"the {provider.name!r} provider does not support image attachments"
-        )
+    validate_denied_tools(denied_tools)
+    for provider_name, mode in (provider_modes or {}).items():
+        if provider_name not in PROVIDERS:
+            raise ValueError(f"Unknown provider in workspace permissions: {provider_name!r}")
+        PROVIDERS[provider_name].validate_permission_mode(mode)
+    if provider is None and permission_mode is not None:
+        # A mode NO registered CLI knows is a caller mistake, refused before any policy or
+        # catalog is read — same edge as the named-provider check below, over the whole set.
+        # A mode only SOME CLIs know is legal and narrows the walk (`permission_mode_unsupported`).
+        accepted = {mode.id for p in PROVIDERS.values() for mode in p.permission_modes()}
+        if permission_mode not in accepted:
+            known = "; ".join(
+                f"{p.name}: {', '.join(m.id for m in p.permission_modes()) or 'none'}"
+                for p in PROVIDERS.values()
+            )
+            raise ValueError(
+                f"{permission_mode!r} is not a permission mode any registered CLI accepts (known: {known})"
+            )
+    if provider is not None:
+        provider.validate_permission_mode(permission_mode)
+        if not provider.available():
+            raise RuntimeError(
+                f"the {provider.name!r} CLI is not installed (looked for {provider.binary!r} on PATH). "
+                "interact drives the vendor's own binary with your own login; install and sign into "
+                "it first."
+            )
+        if validated_images and not provider.image_attachment_support():
+            raise RuntimeError(
+                f"the {provider.name!r} provider does not support image attachments"
+            )
     policy = load_policy()
     parent = parent_run_id or os.environ.get("INTERACT_PARENT_RUN_ID") or None
     parent_run = reg.get_run(parent) if parent is not None else None
@@ -557,7 +680,7 @@ async def run_agent(
         agent, reference=agent_ref,
         parent=parent_run.agent_ref if parent_run is not None else None, capability=delegate,
     )
-    if not policy.provider_active(provider.name):
+    if provider is not None and not policy.provider_active(provider.name):
         raise ModelUnavailable(f"Agent provider {provider.name!r} is disabled by policy")
     if not agent:
         raise ModelUnavailable("Choose a named agent role; anonymous delegation bypasses role criteria")
@@ -587,6 +710,42 @@ async def run_agent(
             "Change the agent's rule in the policy UI instead."
         )
     model = required_model or model
+    weights = policy.weights_for(agent)
+    # Explicit provider only narrows the pool; every candidate uses the same preflight.
+    pool = [provider] if provider is not None else list(PROVIDERS.values())
+    by_name = {p.name: p for p in pool}
+    candidates = rank_candidates(model, dict(os.environ), providers=pool, weights=weights)
+    skipped: list[reg.SkippedCandidate] = []
+    chosen: reg.LaunchCandidate | None = None
+    auth_cache: dict[tuple[str, str], bool | None] = {}
+    allowed_tools = policy.tools_for(agent)
+    base_env = dict(os.environ)
+    for candidate in candidates:
+        candidate_provider = by_name[candidate.provider]
+        routed, resolved_model = resolve_model(candidate.model, base_env, provider=candidate_provider, weights=weights)
+        reason = await _unavailable(
+            candidate_provider, policy, permission_mode=permission_mode if permission_mode is not None else (provider_modes or {}).get(candidate.provider),
+            images=bool(validated_images), allowed_tools=allowed_tools, denied_tools=denied_tools,
+            env={**base_env, **routed}, auth_cache=auth_cache,
+            route_key=json.dumps({key: value for key, value in routed.items() if key != "ANTHROPIC_MODEL"}, sort_keys=True),
+        )
+        if reason is None and validated_images:
+            try:
+                _require_vlm_model(resolved_model)
+            except ModelUnavailable:
+                reason = "model_capability_unsupported"
+        if reason is None:
+            chosen = candidate
+            break
+        skipped.append(reg.SkippedCandidate(candidate=candidate, reason=reason))
+    if chosen is None:
+        walked = "\n".join(f"  {s.candidate.provider}/{s.candidate.model}: {s.reason}" for s in skipped)
+        raise ModelUnavailable(
+            f"No candidate for {agent!r} can start on this machine; the ranked list was:\n{walked}"
+        )
+    provider = by_name[chosen.provider]
+    if permission_mode is None:
+        permission_mode = (provider_modes or {}).get(provider.name)
     # A run named after its agent DEFINITION ("visual-critic") self-describes in the panel;
     # falling back to the provider ("claude") says nothing about what it's for.
     label = name or agent or provider.name
@@ -595,7 +754,7 @@ async def run_agent(
     env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
     # The agent's policy is authoritative; caller profiles were rejected above. Its model id
     # can still carry a provider prefix resolved through the operator's allowed routing.
-    routed, model = resolve_model(model, dict(os.environ), provider=provider, weights=policy.weights_for(agent))
+    routed, model = resolve_model(chosen.model, dict(os.environ), provider=provider, weights=weights)
     env.update(routed)
     if validated_images:
         _require_vlm_model(model)
@@ -622,8 +781,6 @@ async def run_agent(
         f"First progress message: [{agent}] followed by your concrete task; then start immediately.\n\n"
         f"{task}"
     )
-    if policy.catalog is not None:
-        brief = policy.catalog.definition(agent, brief)
     # argv built AFTER the model is decided: used to build first with raw text, so a criterion,
     # a `@profile` or a routed `ollama/x` id reached the binary unresolved while the resolved
     # name went only into the env and run record.
@@ -631,10 +788,14 @@ async def run_agent(
         cwd=cwd, model=model,
         # Once, never twice: skip the mesh when the provider's own config already registers
         # interact — else the child would carry two registrations of the same server.
-        mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name) else None,
-        run_id=run_id, agent=agent if policy.catalog is None else None, permission_mode=permission_mode,
-        allowed_tools=policy.tools_for(agent), reasoning=effort,
+        mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name, cwd=cwd) else None,
+        run_id=run_id, agent=agent, permission_mode=permission_mode,
+        allowed_tools=allowed_tools, reasoning=effort,
     )
+    if policy.catalog is not None:
+        command_kwargs["agent_prompt"] = policy.catalog.role_prompt(agent)
+    if denied_tools:
+        command_kwargs["denied_tools"] = denied_tools
     if validated_images:
         command_kwargs["image_paths"] = validated_images
     argv = provider.command(brief, **command_kwargs)
@@ -657,7 +818,9 @@ async def run_agent(
         run_id=run_id, pid=process.pid, provider=provider.name, name=label,
         task=task, cwd=cwd, model=model, parent_run_id=parent, agent=agent,
         permission_mode=permission_mode, requested_criterion=required_model,
+        mesh_enabled=mesh,
         reasoning=effort,
+        candidates=candidates, skipped=tuple(skipped), denied_tools=denied_tools,
         provider_session_id=run_id if provider.name == "claude" else None,
         agent_ref=selected_ref, definition_path=definition_path,
     )

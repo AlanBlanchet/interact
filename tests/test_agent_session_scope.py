@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -203,6 +204,7 @@ def test_actual_cli_process_reads_scoped_registry_without_vendor_launch():
 async def test_real_launcher_and_child_process_inherit_owner_through_recorded_parent(tmp_path, monkeypatch):
     provider = CodexProvider()
     monkeypatch.setattr(CodexProvider, "available", lambda self: True)
+    monkeypatch.setattr(CodexProvider, "authenticated", AsyncMock(return_value=True))
     monkeypatch.setattr(run_module, "load_policy", lambda: Policy(agents={"tester": "fixture-model"}, reasoning={"tester": "medium"}))
     monkeypatch.setattr(run_module, "resolve_model", lambda model, env, **kwargs: ({}, model))
     monkeypatch.setenv("INTERACT_SESSION_ID", "stale-launcher-conversation")

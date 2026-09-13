@@ -296,19 +296,21 @@ export function modelFor(agent: string, org: Org | null, chosen?: string | null)
 export function spawnArgs(
   opts: {
     task: string;
-    provider: string;
+    provider?: string;
     /** A named role for Start an Agent; null is the intentional generic-session route. */
     agent: string | null;
     cwd?: string | null;
     org: Org | null;
     /** How much autonomy to grant. Null/absent leaves the CLI's own default alone. */
     permissionMode?: string | null;
+    providerModes?: Record<string, string>;
     /** An explicit model/profile/criterion supplied by a generic session caller. Named roles leave
      *  this absent so the common launcher reads and resolves their policy exactly once. */
     model?: string | null;
   },
 ): string[] {
-  const args = ["agents", "spawn", opts.task, "--provider", opts.provider];
+  const args = ["agents", "spawn", opts.task];
+  if (opts.provider) args.push("--provider", opts.provider);
   if (opts.agent) args.push("--agent", opts.agent);
   const model = opts.model === undefined
     ? null
@@ -316,5 +318,8 @@ export function spawnArgs(
   if (model) args.push("--model", model);
   if (opts.cwd) args.push("--cwd", opts.cwd);
   if (opts.permissionMode) args.push("--permission-mode", opts.permissionMode);
+  for (const [provider, mode] of Object.entries(opts.providerModes ?? {})) {
+    args.push("--provider-mode", `${provider}=${mode}`);
+  }
   return args;
 }

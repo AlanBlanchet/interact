@@ -3,6 +3,11 @@
 The extension version tracks the [interact](https://github.com/AlanBlanchet/interact) server
 version. See the [full changelog](https://github.com/AlanBlanchet/interact/blob/main/CHANGELOG.md).
 
+## 0.43.0 — 2026-09-14
+
+- Choose Best available when starting an agent; criteria rank models across providers while existing workspace permissions are preserved.
+- Show one ordered model ranking with availability checked when the agent starts.
+
 ## [Unreleased]
 
 ### Added

@@ -379,6 +379,12 @@ test("two spellings of one model are one model", () => {
   assert.equal(resolved.get("nothing"), undefined);
 });
 
+test("ranked policy shows one ordered cross-provider list with availability deferred to launch", () => {
+  assert.deepEqual(ruleReads({name: "tester", rule: "price.in > 0", criterion: true,
+    resolves: "model-a", why: null, ranked: [{provider: "alpha", model: "model-a", rank: 0}, {provider: "beta", model: "model-b", rank: 1}]}),
+  {model: "model-a", line: "ranked price.in > 0 → alpha/model-a → beta/model-b · availability checked at start"});
+});
+
 test("a rule reads as what it RESOLVES to, and a pinned id says it is pinned", () => {
   // "Why is the code reviewer set to sonet instead of being resolved to sonnet? ... we shouldn't
   // write a model, but resolve a model from the constraints." A row printing a bare model id

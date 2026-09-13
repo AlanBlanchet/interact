@@ -25,14 +25,15 @@ from interact.agents.catalog_connection import (
     CatalogConnectionError,
 )
 from interact.agents.policy import Policy
-from interact.agents.providers import ClaudeCodeProvider, CodexProvider
+from interact.agents.providers import AgentProvider, ClaudeCodeProvider, CodexProvider
+from unittest.mock import AsyncMock
 from interact.agents.run import ModelUnavailable, launch_continuation, run_agent
 from interact.config import UserConfig
 from interact.cli.app import app
 from interact.cli import app_commands
 
 
-def snapshot(version=1):
+def snapshot(version=1, tools=None):
     prompts = tuple(PromptRevision(
         key=PromptKey(namespace="fixture", slug=slug), revision=uuid4(),
         content=f"{slug} instruction revision {version}",
@@ -44,7 +45,7 @@ def snapshot(version=1):
         id=uuid4(), revision=uuid4(), name="Fixture worker", role_key="fixture-worker",
         prompt=refs[0], paradigms=(refs[1], refs[2]), skill_paradigms=(refs[3],),
         criteria=f"price.in >= {version}", reasoning="high" if version == 1 else "low",
-        criteria_weights="gui.screenspot=1", harness_tools=("Read",) if version == 1 else ("Write",),
+        criteria_weights="gui.screenspot=1", harness_tools=tools if tools is not None else (("Read",) if version == 1 else ("Write",)),
         resources=(), created_at=datetime.now(UTC),
     )
     lead = AgentRevision(
@@ -60,6 +61,7 @@ def snapshot(version=1):
 
 @pytest.fixture
 def catalog_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(AgentProvider, "authenticated", AsyncMock(return_value=True))
     monkeypatch.setattr(UserConfig, "PATH", tmp_path / "config.env")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -156,18 +158,31 @@ async def test_common_launcher_uses_one_catalog_for_prompt_and_policy(catalog_ho
     monkeypatch.setattr(provider_type, "available", lambda self: True)
     monkeypatch.setattr(provider_type, "command", command)
     monkeypatch.setattr("interact.agents.run.resolve_model", lambda rule, env, **kwargs: ({}, "fixture-model"))
+    # The ranked list is stubbed at its entry point for the same reason the resolver is: the
+    # fixture role weights `gui.screenspot`, which no catalog row scores, so a real ranking finds
+    # nothing — and a real launch is not what these tests measure.
+    monkeypatch.setattr("interact.agents.run.rank_candidates", lambda rule, env, *, providers, weights="": (
+        reg.LaunchCandidate(provider=providers[0].name, model=rule, rank=0),))
     for version in (1, 2):
-        catalog = AgentCatalog.refresh(connection, transport=catalog_transport(snapshot(version)))
+        catalog = AgentCatalog.refresh(connection, transport=catalog_transport(snapshot(version, tools=() if provider_type is CodexProvider else None)))
         monkeypatch.setattr("interact.agents.run.load_policy", lambda: Policy.from_catalog(catalog))
         handle = await run_agent(provider_type(), "bounded task", cwd=str(catalog_home), agent="fixture-worker", mesh=False)
         await asyncio.wait_for(handle.wait(), 10)
         assert handle.criterion == f"price.in >= {version}"
-    assert "primary instruction revision 1" in captured[0][0]
-    assert "primary instruction revision 2" in captured[1][0]
+    prompt = lambda entry: entry[1].get("agent_prompt", entry[0])
+    assert "primary instruction revision 1" in prompt(captured[0])
+    assert "primary instruction revision 2" in prompt(captured[1])
     assert captured[1][1]["reasoning"] == "low"
-    assert captured[1][1]["allowed_tools"] == ["Write"]
-    assert captured[1][1]["agent"] is None
-    assert "--agent" not in captured[1][2]
+    assert captured[1][1]["allowed_tools"] == ([] if provider_type is CodexProvider else ["Write"])
+    if provider_type is ClaudeCodeProvider:
+        assert captured[1][1]["agent"] == "fixture-worker"
+        assert "--agents" in captured[1][2] and "--allowedTools" not in captured[1][2]
+    else:
+        assert captured[1][1]["agent"] == "fixture-worker" and "--agent" not in captured[1][2]
+        actual_task = captured[1][2][2]
+        assert actual_task.count("AGENT_ROLE:") == 1
+        assert actual_task.count("Delegated task:") == 1
+        assert "bounded task" in actual_task
 
 
 @pytest.mark.parametrize("endpoint", [
@@ -594,34 +609,39 @@ async def test_local_delegation_and_resume_run_exact_parent_pin(advanced_catalog
     parent = reg.register(run_id=str(uuid4()), pid=None, provider="codex", name="Fixture lead",
                           agent="fixture-lead", agent_ref=lead_ref, cwd=str(catalog_home))
     captured = []
-    original_command = CodexProvider.command
+    original_command = ClaudeCodeProvider.command
 
     def command(self, task, **kwargs):
         captured.append((task, kwargs, original_command(self, task, **kwargs)))
         return [sys.executable, "-c", "import json, os; print(json.dumps({'run': os.environ.get('INTERACT_RUN_ID'), 'parent': os.environ.get('INTERACT_PARENT_RUN_ID')}))"]
 
-    monkeypatch.setattr(CodexProvider, "available", lambda self: True)
-    monkeypatch.setattr(CodexProvider, "command", command)
-    monkeypatch.setattr(CodexProvider, "resume_command", lambda self, session_id, task, **kwargs: command(self, task, cwd=str(catalog_home), mcp_config=None, run_id="resume", **kwargs))
+    monkeypatch.setattr(ClaudeCodeProvider, "available", lambda self: True)
+    monkeypatch.setattr(ClaudeCodeProvider, "command", command)
+    monkeypatch.setattr(ClaudeCodeProvider, "resume_command", lambda self, session_id, task, **kwargs: command(self, task, cwd=str(catalog_home), run_id="resume", **kwargs))
     monkeypatch.setattr("interact.agents.run.resolve_model", lambda rule, env, **kwargs: ({}, f"fixture-model-{rule.rsplit(' ', 1)[-1]}"))
-    handle = await run_agent(CodexProvider(), "Pinned task", agent=None if by_capability else "fixture-worker",
+    # The ranked list is stubbed at its entry point for the same reason the resolver is: the
+    # fixture role weights `gui.screenspot`, which no catalog row scores, so a real ranking finds
+    # nothing — and a real launch is not what these tests measure.
+    monkeypatch.setattr("interact.agents.run.rank_candidates", lambda rule, env, *, providers, weights="": (
+        reg.LaunchCandidate(provider=providers[0].name, model=rule, rank=0),))
+    handle = await run_agent(ClaudeCodeProvider(), "Pinned task", agent=None if by_capability else "fixture-worker",
         delegate="ask_worker" if by_capability else None, parent_run_id=parent.run_id, cwd=str(catalog_home), mesh=False)
     await asyncio.wait_for(handle.wait(), 10)
     saved = reg.get_run(handle.run_id)
     assert saved.agent_ref == worker_ref
     assert saved.name == "fixture-worker"
     assert saved.model == "fixture-model-1" and saved.reasoning == "high"
-    assert "primary instruction revision 1" in captured[0][0]
-    assert "primary instruction revision 2" not in captured[0][0]
+    assert "primary instruction revision 1" in captured[0][1]["agent_prompt"]
+    assert "primary instruction revision 2" not in captured[0][1]["agent_prompt"]
     assert captured[0][1]["allowed_tools"] == ["Read"]
     assert str(worker_ref.revision) in saved.definition_path
     assert "primary instruction revision 1" in Path(saved.definition_path).read_text()
-    resumed = launch_continuation(CodexProvider(), saved, "fixture-session", "Continue pinned work",
+    resumed = launch_continuation(ClaudeCodeProvider(), saved, "fixture-session", "Continue pinned work",
         model="wrong-new-model", criterion="price.in >= 2", reasoning="low", raw_index=0)
     assert resumed.wait() == 0
     resumed_environment = json.loads(reg.raw_events_path(saved.run_id).read_text().splitlines()[-1])
     assert resumed_environment == {"run": saved.run_id, "parent": saved.run_id}
-    assert "primary instruction revision 1" in captured[1][0]
+    assert "primary instruction revision 1" in captured[1][1]["agent_prompt"]
     assert captured[1][1]["model"] == "fixture-model-1" and captured[1][1]["reasoning"] == "high"
     assert any(request.url.path.endswith(f"/agents/{worker_ref.id}/revisions/{worker_ref.revision}") for request in historical_http)
     assert any(request.url.path.endswith(f"/agents/{lead_ref.id}/revisions/{lead_ref.revision}") for request in historical_http)

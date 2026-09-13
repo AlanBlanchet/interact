@@ -23,7 +23,9 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Protocol
+from typing import Annotated, ClassVar, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
 
 from interact.agents.catalog import AgentCatalog
 from interact.agents.events import AgentEvent
@@ -129,6 +131,24 @@ def _failure_event_facts(events: list[AgentEvent]) -> tuple[AgentEvent, ...]:
     )
 
 
+class UnsupportedToolPolicy(ValueError):
+    """The adapter cannot expose the requested role tool set without weakening it."""
+
+
+DeniedTool = Annotated[str, StringConstraints(
+    pattern=r"^(?:[A-Z][A-Za-z0-9]*|mcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+)$",
+    max_length=256,
+)]
+_DENIED_TOOLS = TypeAdapter(tuple[DeniedTool, ...])
+
+
+def validate_denied_tools(tools: tuple[str, ...]) -> None:
+    try:
+        _DENIED_TOOLS.validate_python(tools)
+    except ValueError as exc:
+        raise ValueError("Denied tool must be an exact built-in or qualified MCP tool name") from exc
+
+
 class AgentProvider(ABC):
     """How to launch one vendor's agent CLI and read what it emits."""
 
@@ -154,7 +174,7 @@ class AgentProvider(ABC):
         return shutil.which(self.binary) is not None
 
     def executable(self) -> str:
-        """Resolved executable path, so PATH cannot change between auth preflight and execution."""
+        """Resolve the installed executable for a CLI status probe."""
         found = shutil.which(self.binary)
         if found is None:
             raise FileNotFoundError(f"{self.name} CLI is not installed")
@@ -194,9 +214,13 @@ class AgentProvider(ABC):
         """True only for the vendor's consumer-subscription login, never API-backed auth."""
         raise NotImplementedError
 
-    async def subscription_authenticated(
-        self, env: dict[str, str], *, timeout: float = 10
-    ) -> bool:
+    def accepts_any_auth(self, stdout: str, stderr: str) -> bool:
+        """True for ANY login the CLI reports — subscription or key. The launch pool asks this,
+        never the subscription-only test: an agent child inherits the caller's environment, so a
+        key-authenticated CLI runs it as well as a subscription one does."""
+        return self.accepts_subscription_auth(stdout, stderr)
+
+    async def _auth_status(self, env: dict[str, str], *, timeout: float) -> tuple[int, str, str] | None:
         """Run the CLI's own auth-status command without reading a credential store."""
         argv = self.auth_command()
         try:
@@ -204,10 +228,19 @@ class AgentProvider(ABC):
                 argv, cwd=Path.cwd(), env=env, timeout=timeout
             )
         except (OSError, TimeoutError):
-            return False
-        stdout = stdout_bytes.decode(errors="replace")
-        stderr = stderr_bytes.decode(errors="replace")
-        return returncode == 0 and self.accepts_subscription_auth(stdout, stderr)
+            return None
+        return returncode, stdout_bytes.decode(errors="replace"), stderr_bytes.decode(errors="replace")
+
+    async def subscription_authenticated(
+        self, env: dict[str, str], *, timeout: float = 10
+    ) -> bool:
+        status = await self._auth_status(env, timeout=timeout)
+        return status is not None and status[0] == 0 and self.accepts_subscription_auth(*status[1:])
+
+    async def authenticated(self, env: dict[str, str], *, timeout: float = 10) -> bool | None:
+        """CLI login state; None means its status check could not complete."""
+        status = await self._auth_status(env, timeout=timeout)
+        return None if status is None else status[0] == 0 and self.accepts_any_auth(*status[1:])
 
     #: Catalog providers whose models this CLI runs through its OWN login — no API key in our env.
     native_providers: frozenset[str] = frozenset()
@@ -223,12 +256,36 @@ class AgentProvider(ABC):
         that must be routed, so `resolve_model`'s overlay fires."""
         return model.id if model.provider in self.native_providers else f"{model.provider}/{model.id}"
 
+    @staticmethod
+    def validate_agent_name(agent: str) -> None:
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", agent):
+            raise ValueError("Agent name must start with a lowercase letter and contain only letters, digits, underscores or hyphens (80 characters maximum)")
+
+    def definition_prompt(self, agent: str) -> str:
+        self.validate_agent_name(agent)
+        path = self.definition_path(agent)
+        if path is None:
+            raise UnsupportedToolPolicy(f"No prompt definition for role {agent!r}")
+        text = path.read_text(encoding="utf-8")
+        if text.startswith("---\n"):
+            frontmatter = re.match(r"---\n.*?\n---(?:\n|$)", text, re.S)
+            if frontmatter is None:
+                raise ValueError(f"Unterminated frontmatter for role {agent!r}")
+            text = text[frontmatter.end():].strip()
+        return text
+
+    def validate_tool_policy(self, allowed_tools: list[str], denied_tools: tuple[str, ...]) -> None:
+        validate_denied_tools(denied_tools)
+        if allowed_tools or denied_tools:
+            raise UnsupportedToolPolicy(f"{self.name} cannot enforce this role's tool restriction")
+
     @abstractmethod
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
                 permission_mode: str | None = None,
                 allowed_tools: list[str] | None = None,
                 reasoning: str | None = None,
+                agent_prompt: str | None = None, denied_tools: tuple[str, ...] = (),
                 image_paths: tuple[Path, ...] = ()) -> list[str]:
         """The argv to spawn for this task. ``agent`` names a definition the CLI resolves itself
         (Claude Code reads ~/.claude/agents/<name>.md), so a run can BE 'visual-critic'."""
@@ -310,7 +367,9 @@ class AgentProvider(ABC):
     def resume_command(
         self, session_id: str, message: str, *, model: str | None = None,
         permission_mode: str | None = None, reasoning: str | None = None,
-        agent: str | None = None,
+        agent: str | None = None, agent_prompt: str | None = None,
+        mcp_config: str | None = None, allowed_tools: list[str] | None = None,
+        denied_tools: tuple[str, ...] = (),
     ) -> list[str]:
         """The argv that delivers ``message`` into an existing session."""
         raise NotImplementedError(f"{type(self).__name__} cannot resume a session")
@@ -393,6 +452,13 @@ class ClaudeCodeProvider(AgentProvider):
             and status.get("loggedIn") is True
             and status.get("authMethod") == "claude.ai"
         )
+
+    def accepts_any_auth(self, stdout: str, stderr: str) -> bool:
+        try:
+            status = json.loads(stdout)
+        except ValueError:
+            return False
+        return isinstance(status, dict) and status.get("loggedIn") is True
 
     def supports_session_media(self, media_kind: str) -> bool:
         return media_kind in self.session_media_kinds
@@ -540,11 +606,36 @@ class ClaudeCodeProvider(AgentProvider):
     def permission_modes(self) -> list[PermissionMode]:
         return list(self._MODES)
 
+    def validate_tool_policy(self, allowed_tools: list[str], denied_tools: tuple[str, ...]) -> None:
+        validate_denied_tools(denied_tools)
+
+    def role_arguments(self, agent: str | None, agent_prompt: str | None,
+                       allowed_tools: list[str] | None, denied_tools: tuple[str, ...]) -> list[str]:
+        self.validate_tool_policy(allowed_tools or [], denied_tools)
+        arguments = []
+        if agent is not None:
+            self.validate_agent_name(agent)
+        if allowed_tools or agent_prompt is not None:
+            if not agent:
+                raise UnsupportedToolPolicy("A named role is required to restrict Claude tools")
+            if agent_prompt is None:
+                agent_prompt = self.definition_prompt(agent)
+            definition = {"description": f"Interact role {agent}", "prompt": agent_prompt}
+            if allowed_tools:
+                definition["tools"] = allowed_tools
+            arguments += ["--agents", json.dumps({agent: definition})]
+        if agent:
+            arguments += ["--agent", agent]
+        if denied_tools:
+            arguments += ["--disallowedTools", ",".join(denied_tools)]
+        return arguments
+
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
                 permission_mode: str | None = None,
                 allowed_tools: list[str] | None = None,
                 reasoning: str | None = None,
+                agent_prompt: str | None = None, denied_tools: tuple[str, ...] = (),
                 image_paths: tuple[Path, ...] = ()) -> list[str]:
         if image_paths:
             self._image_args(image_paths)
@@ -558,14 +649,9 @@ class ClaudeCodeProvider(AgentProvider):
         ]
         if model:
             argv += ["--model", model]
-        if agent:
-            argv += ["--agent", agent]
+        argv += self.role_arguments(agent, agent_prompt, allowed_tools, denied_tools)
         if mcp_config:
             argv += ["--mcp-config", mcp_config]
-        # A TOOLSET, expanded. Absent means unrestricted — an allow-list nobody asked for would
-        # silently take tools away from every agent that never mentioned one.
-        if allowed_tools:
-            argv += ["--allowedTools", ",".join(allowed_tools)]
         argv += self._permission_flag(permission_mode)
         return argv
 
@@ -590,6 +676,8 @@ class ClaudeCodeProvider(AgentProvider):
         self, session_id: str, message: str, *, model: str | None = None,
         permission_mode: str | None = None, reasoning: str | None = None,
         agent: str | None = None,
+        agent_prompt: str | None = None, allowed_tools: list[str] | None = None,
+        denied_tools: tuple[str, ...] = (), mcp_config: str | None = None,
     ) -> list[str]:
         """Continue an existing session using its provider session id."""
         return [
@@ -597,7 +685,7 @@ class ClaudeCodeProvider(AgentProvider):
             "--resume", session_id,
             "--output-format", "stream-json",
             "--verbose",
-        ] + (["--model", model] if model else []) + self._permission_flag(permission_mode)
+        ] + (["--model", model] if model else []) + self._permission_flag(permission_mode) + self.role_arguments(agent, agent_prompt, allowed_tools, denied_tools) + (["--mcp-config", mcp_config] if mcp_config else [])
 
     def parse(self, line: str) -> AgentEvent | None:
         line = line.strip()
@@ -713,6 +801,26 @@ class ClaudeCodeProvider(AgentProvider):
         return found if isinstance(found, list) else []
 
 
+class _CodexMeshServer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    command: str = Field(min_length=1)
+    args: list[str]
+    env: dict[Literal["INTERACT_PARENT_RUN_ID"], Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+
+
+class _CodexMesh(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    servers: dict[Literal["interact"], _CodexMeshServer] = Field(alias="mcpServers", min_length=1)
+
+
+class _CodexMcpRegistration(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    name: str = Field(min_length=1)
+
+
 class CodexProvider(AgentProvider):
     """OpenAI's Codex CLI (Apache-2.0), driven through its documented `codex exec` mode.
 
@@ -752,14 +860,53 @@ class CodexProvider(AgentProvider):
         status = f"{stdout}\n{stderr}".strip().lower()
         return "logged in using chatgpt" in status and "api key" not in status
 
+    def accepts_any_auth(self, stdout: str, stderr: str) -> bool:
+        status = f"{stdout}\n{stderr}".strip().lower()
+        return status.startswith("logged in using ")
+
+    def has_mcp_server(self, name: str, *, cwd: str) -> bool:
+        """Ask Codex to resolve all configuration layers; retain registration names only."""
+        try:
+            result = subprocess.run(
+                [self.executable(), "mcp", "list", "--json"],
+                cwd=cwd, capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode:
+                raise ValueError("Codex configuration lookup failed")
+            registrations = TypeAdapter(list[_CodexMcpRegistration]).validate_json(result.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            # Provider output and validation errors can contain environment/configuration values.
+            raise ValueError("Cannot inspect Codex MCP configuration safely") from None
+        return any(registration.name == name for registration in registrations)
+
+    @staticmethod
+    def mesh_arguments(mcp_config: str | None) -> list[str]:
+        """Project the launcher's credential-free stdio mesh without granting access."""
+        if mcp_config is None:
+            return []
+        try:
+            server = _CodexMesh.model_validate_json(mcp_config).servers["interact"]
+        except ValueError:
+            # Validation errors include input values; never echo rejected environment data.
+            raise ValueError("Invalid credential-free Codex mesh configuration") from None
+        return [
+            "-c", f"mcp_servers.interact.command={json.dumps(server.command, ensure_ascii=False)}",
+            "-c", f"mcp_servers.interact.args={json.dumps(server.args, ensure_ascii=False)}",
+            "-c", "mcp_servers.interact.env.INTERACT_PARENT_RUN_ID="
+            + json.dumps(server.env["INTERACT_PARENT_RUN_ID"], ensure_ascii=False),
+        ]
+
     def command(self, task: str, *, cwd: str, model: str | None, mcp_config: str | None,
                 run_id: str, agent: str | None = None,
                 permission_mode: str | None = None,
                 allowed_tools: list[str] | None = None,
                 reasoning: str | None = None,
+                agent_prompt: str | None = None, denied_tools: tuple[str, ...] = (),
                 image_paths: tuple[Path, ...] = ()) -> list[str]:
-        task = self._inject_definition(agent, task)
+        self.validate_tool_policy(allowed_tools or [], denied_tools)
+        task = self._inject_definition(agent, task, agent_prompt)
         argv = [self.binary, "exec", task, "--json", *self.native_delegation_flags]
+        argv += self.mesh_arguments(mcp_config)
         argv += self._permission_flag(permission_mode)
         if model:
             argv += ["--model", model]
@@ -790,14 +937,18 @@ class CodexProvider(AgentProvider):
         self, session_id: str, message: str, *, model: str | None = None,
         permission_mode: str | None = None, reasoning: str | None = None,
         agent: str | None = None,
+        mcp_config: str | None = None, allowed_tools: list[str] | None = None,
+        agent_prompt: str | None = None, denied_tools: tuple[str, ...] = (),
     ) -> list[str]:
         """Resume a stopped session with fresh model and reasoning policy.
 
         ``exec resume`` has no ``--sandbox`` option. The saved Codex session owns that scope;
         callers validate the recorded value before reaching this method and do not widen it here.
         """
-        message = self._inject_definition(agent, message)
+        self.validate_tool_policy(allowed_tools or [], denied_tools)
+        message = self._inject_definition(agent, message, agent_prompt)
         argv = [self.binary, "exec", "resume", session_id, message, "--json", *self.native_delegation_flags]
+        argv += self.mesh_arguments(mcp_config)
         if permission_mode is not None:
             # `exec resume --help` has no `--sandbox`, but accepts config overrides. The recorded
             # mode is validated at the continuation boundary before it reaches this method.
@@ -808,19 +959,19 @@ class CodexProvider(AgentProvider):
             argv += ["-c", f'model_reasoning_effort="{reasoning}"']
         return argv
 
-    def _inject_definition(self, agent: str | None, task: str) -> str:
+    def _inject_definition(self, agent: str | None, task: str, agent_prompt: str | None = None) -> str:
         if not agent:
+            if agent_prompt is not None:
+                raise ValueError("A named role is required for a pinned prompt")
             return task
-        catalog = AgentCatalog.active()
-        if catalog is not None:
-            return catalog.definition(agent, task)
-        definition = self.definition_path(agent)
-        if definition is None:
-            raise ValueError(f"Codex role {agent!r} has no generated prompt definition")
-        instructions = definition.read_text(encoding="utf-8")
-        if instructions.startswith("---\n"):
-            instructions = instructions.split("\n---", 1)[1].strip()
-        return f"AGENT_ROLE: {agent}\n\n{instructions}\n\nDelegated task:\n{task}"
+        self.validate_agent_name(agent)
+        if agent_prompt is None:
+            catalog = AgentCatalog.active()
+            if catalog is not None:
+                return catalog.definition(agent, task)
+            agent_prompt = self.definition_prompt(agent)
+            agent_prompt = f"AGENT_ROLE: {agent}\n\n{agent_prompt}"
+        return f"{agent_prompt}\n\nDelegated task:\n{task}"
 
     def definition_path(self, agent: str) -> Path | None:
         catalog = AgentCatalog.active()

@@ -29,7 +29,7 @@ from interact_core import AgentRevisionRef, PromptExecutionRef
 
 from interact.agents.events import AgentEvent
 from interact.agents.catalog_connection import CatalogConnection
-from interact.agents.providers import PROVIDERS
+from interact.agents.providers import PROVIDERS, DeniedTool
 from interact.server_registry import (
     _alive,  # generic pid liveness (Windows-safe, no signal sent)
 )
@@ -50,6 +50,39 @@ ConversationCapability = Literal[
 ]
 _RUN_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,160}$")
 _SESSION_ID: ContextVar[str | None] = ContextVar("agent_session_id", default=None)
+#: Why a ranked candidate was passed over BEFORE anything ran. Every value is a fact about this
+#: machine or the caller's request, never about the task: a denial or failure once the child
+#: could act is a run outcome, recorded on that run, never a reason to try the next candidate.
+SkipReason = Literal[
+    "cli_missing", "provider_off", "unauthenticated", "auth_check_failed", "permission_mode_unsupported",
+    "images_unsupported", "tool_policy_unsupported", "model_capability_unsupported",
+]
+
+
+class LaunchCandidate(BaseModel):
+    """One (provider, model) pair from the ranked list a launch walks in order.
+
+    ``rank`` is the position of the catalog row; two providers able to run the same row share it,
+    so the record shows which CLI was preferred for one model and which model over another.
+    """
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    provider: str = Field(min_length=1)
+    #: What the CLI is asked for — bare id for a native model, `provider/id` for a routed one.
+    model: str = Field(min_length=1)
+    #: `<catalog provider>/<id>`; None when a plain id outside the catalog is passed through.
+    catalog_id: str | None = None
+    rank: int = Field(ge=0)
+
+
+class SkippedCandidate(BaseModel):
+    """A candidate the launcher did not start, and the machine-local reason."""
+
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    candidate: LaunchCandidate
+    reason: SkipReason
 
 
 class AgentRun(BaseModel):
@@ -88,6 +121,8 @@ class AgentRun(BaseModel):
     #: about a run you're watching that nothing else on the record answers. None means nobody
     #: chose, so the CLI's own configured default applied.
     permission_mode: str | None = None
+    #: Only an explicitly recorded opt-in may add the launcher mesh on resume.
+    mesh_enabled: bool = False
     parent_run_id: str | None = None
     root_run_id: str | None = None
     #: Owning caller conversation, independent of run genealogy and the child's vendor session.
@@ -104,6 +139,11 @@ class AgentRun(BaseModel):
     pending_model: str | None = None
     pending_criterion: str | None = None
     pending_reasoning: str | None = None
+    #: The ranked list this launch walked and the entries passed over before the one that ran.
+    #: Records written before ranking existed load as empty tuples.
+    candidates: tuple[LaunchCandidate, ...] = ()
+    skipped: tuple[SkippedCandidate, ...] = ()
+    denied_tools: tuple[DeniedTool, ...] = ()
     prompt: PromptExecutionRef | None = None
     cataloged_at: float | None = None
     charge_path: ChargePath = "unknown"
@@ -559,10 +599,14 @@ def session_runs(*, session_id: str | None = None, all_sessions: bool = False, i
 def register(*, run_id: str, pid: int | None, provider: str, name: str, task: str = "",
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
              agent: str | None = None, permission_mode: str | None = None,
+             mesh_enabled: bool = False,
              requested_criterion: str | None = None, reasoning: str | None = None,
              provider_session_id: str | None = None,
              agent_ref: AgentRevisionRef | None = None,
-             definition_path: Path | None = None, session_id: str | None = None) -> AgentRun:
+             definition_path: Path | None = None, session_id: str | None = None,
+             candidates: tuple[LaunchCandidate, ...] = (),
+             skipped: tuple[SkippedCandidate, ...] = (),
+             denied_tools: tuple[DeniedTool, ...] = ()) -> AgentRun:
     provider_impl = PROVIDERS.get(provider)
     definition = definition_path
     if definition is None and agent_ref is None:
@@ -572,7 +616,9 @@ def register(*, run_id: str, pid: int | None, provider: str, name: str, task: st
                    session_id=resolve_session_id(session_id, parent_run_id=parent_run_id),
                    agent=agent, agent_ref=agent_ref, definition_path=str(definition) if definition else None,
                    permission_mode=permission_mode, requested_criterion=requested_criterion,
+                   mesh_enabled=mesh_enabled,
                    reasoning=reasoning,
+                   candidates=candidates, skipped=skipped, denied_tools=denied_tools,
                    provider_session_id=provider_session_id,
                    lifecycle_token=secrets.token_hex(16),
                    started_at=time.time())

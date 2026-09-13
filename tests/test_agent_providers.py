@@ -9,12 +9,62 @@ stores or forwards a credential — the CLI authenticates itself with the user's
 """
 
 import json
+import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from interact.agents.events import AgentEvent
 from interact.agents.providers import PROVIDERS, ClaudeCodeProvider, CodexProvider, provider_for
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_claude_role_tools_and_denials_are_available_tool_restrictions_on_every_turn(resume):
+    provider = ClaudeCodeProvider()
+    options = dict(model="fixture-model", agent="visual-critic", agent_prompt="Pinned role instructions",
+                   allowed_tools=["Read", "Bash", "mcp__interact__screenshot", "mcp__interact__report_issue"],
+                   denied_tools=("mcp__interact__report_issue",))
+    command = provider.resume_command("fixture-session", "Review", **options) if resume else provider.command(
+        "Review", cwd="/tmp", mcp_config=None, run_id="fixture-run", **options)
+    definition = json.loads(command[command.index("--agents") + 1])["visual-critic"]
+    assert definition["prompt"] == "Pinned role instructions"
+    assert definition["tools"] == options["allowed_tools"]
+    assert command[command.index("--agent") + 1] == "visual-critic"
+    assert command[command.index("--disallowedTools") + 1] == "mcp__interact__report_issue"
+    assert "--allowedTools" not in command
+    assert "--permission-mode" not in command
+
+
+def test_denied_tool_names_cannot_inject_flags_or_unverified_patterns():
+    provider = ClaudeCodeProvider()
+    for tool in ("--permission-mode", "Bash(git *)", "mcp__*", "Read,Write", "Read\nWrite"):
+        with pytest.raises(ValueError, match="tool"):
+            provider.command("t", cwd="/tmp", model=None, mcp_config=None, run_id="x", denied_tools=(tool,))
+
+
+@pytest.mark.parametrize("provider_type", [ClaudeCodeProvider, CodexProvider])
+def test_role_definition_rejects_malformed_frontmatter_and_unsafe_names(provider_type, monkeypatch, tmp_path):
+    provider = provider_type()
+    path = tmp_path / "role.md"
+    path.write_text("---\nname: fixture\n")
+    monkeypatch.setattr(provider, "definition_path", lambda agent: path)
+    with pytest.raises(ValueError, match="frontmatter"):
+        provider.definition_prompt("fixture")
+    with pytest.raises(ValueError, match="name"):
+        provider.definition_prompt("../fixture")
+    path.write_text("---\nname: fixture\n---\nRole instructions")
+    assert provider.definition_prompt("fixture") == "Role instructions"
+    path.write_text("Role instructions")
+    assert provider.definition_prompt("fixture") == "Role instructions"
+
+
+def test_codex_auth_status_requires_an_affirmative_login_message():
+    provider = CodexProvider()
+    assert provider.accepts_any_auth("", "Logged in using ChatGPT")
+    assert provider.accepts_any_auth("Logged in using an API key", "")
+    for status in ("logged in: false", "Not logged in", "Login failed", ""):
+        assert not provider.accepts_any_auth(status, "")
 
 
 def test_codex_command_uses_the_effort_resolved_by_the_launcher():
@@ -37,6 +87,85 @@ def test_codex_command_honors_the_requested_write_scope():
             "Edit the assigned file", cwd="/tmp", model="fixture-model", mcp_config=None,
             run_id="fixture-run", permission_mode="invented-mode",
         )
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_projects_mesh_without_changing_permissions(resume):
+    provider = CodexProvider()
+    config = json.dumps({"mcpServers": {"interact": {
+        "command": '/fixture path/\U00010400/interact', "args": ["mcp", 'quoted"arg'],
+        "env": {"INTERACT_PARENT_RUN_ID": "fixture-run"},
+    }}})
+    if resume:
+        argv = provider.resume_command("thread", "continue", mcp_config=config)
+    else:
+        argv = provider.command("read", cwd=".", model=None, mcp_config=config, run_id="fixture-run")
+    overrides = [argv[i + 1] for i, value in enumerate(argv) if value == "-c"]
+    data = tomllib.loads("\n".join(overrides))
+    assert data["mcp_servers"]["interact"] == json.loads(config)["mcpServers"]["interact"]
+    assert set(data) == {"features", "mcp_servers"}
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_rejects_unsupported_tool_restrictions(resume):
+    provider = CodexProvider()
+    with pytest.raises(ValueError, match="cannot enforce.*tool restriction"):
+        if resume:
+            provider.resume_command("thread", "continue", allowed_tools=["Read"])
+        else:
+            provider.command("read", cwd=".", model=None, mcp_config=None,
+                             run_id="fixture-run", allowed_tools=["Read"])
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([{"name": "interact", "enabled": True, "transport": {"command": "system-wrapper"}}], True),
+    ([{"name": "interact", "enabled": False, "transport": {"url": "https://example.invalid/mcp"}}], True),
+    ([{"name": "another-server"}], False),
+    ([], False),
+])
+def test_codex_registration_uses_provider_effective_configuration(tmp_path, monkeypatch, rows, expected):
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "executable", lambda: "fixture-codex")
+    calls = []
+
+    def configured(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, json.dumps(rows), "")
+
+    monkeypatch.setattr(subprocess, "run", configured)
+    assert provider.has_mcp_server("interact", cwd=str(tmp_path)) is expected
+    assert calls == [(["fixture-codex", "mcp", "list", "--json"], {
+        "cwd": str(tmp_path), "capture_output": True, "text": True, "timeout": 10,
+    })]
+
+
+@pytest.mark.parametrize("failure", ["timeout", "os-error", "exit", "json", "shape"])
+def test_codex_registration_discovery_fails_closed_without_echoing_output(tmp_path, monkeypatch, failure):
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "executable", lambda: "fixture-codex")
+
+    def failed(argv, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 10, output="fixture-sensitive-value")
+        if failure == "os-error":
+            raise OSError("fixture-sensitive-value")
+        output = '[{"missing_name":"fixture-sensitive-value"}]' if failure == "shape" else "fixture-sensitive-value"
+        return subprocess.CompletedProcess(argv, 1 if failure == "exit" else 0, output, "fixture-sensitive-value")
+
+    monkeypatch.setattr(subprocess, "run", failed)
+    with pytest.raises(ValueError, match="^Cannot inspect Codex MCP configuration safely$"):
+        provider.has_mcp_server("interact", cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("env", {"INTERACT_PARENT_RUN_ID": "fixture-run", "TOKEN": "fixture-sensitive-value"}),
+    ("enabled", True), ("command", ""), ("args", [42]),
+])
+def test_codex_mesh_rejects_extra_fields_and_invalid_values_without_echoing_them(field, value):
+    server = {"command": "fixture-interact", "args": ["mcp"],
+              "env": {"INTERACT_PARENT_RUN_ID": "fixture-run"}, field: value}
+    with pytest.raises(ValueError, match="^Invalid credential-free Codex mesh configuration$"):
+        CodexProvider.mesh_arguments(json.dumps({"mcpServers": {"interact": server}}))
 
 
 def test_codex_image_support_is_verified_from_installed_help(monkeypatch):

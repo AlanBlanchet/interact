@@ -105,6 +105,7 @@ export type PolicyRule = {
   /** What each switched-on vendor CLI would actually run — a criterion resolves inside what THAT
    *  binary can be pointed at, so one rule legitimately means two models. */
   providers?: Record<string, string | null>;
+  ranked?: {provider: string; model: string; rank: number}[];
 };
 
 /** Whether a rule LOOKS like a criterion — the DEGRADED answer, used only when the CLI can't be
@@ -129,6 +130,10 @@ export function ruleReads(r: PolicyRule): { model: string | undefined; line: str
   // resolves first: a pin written as @profile names no model of its own, so taking the rule
   // verbatim left it unscored, sorted below every ranked colleague.
   if (!r.criterion) return { model: r.resolves ?? r.rule, line: `pinned ${r.rule}` };
+  if (r.ranked?.length) {
+    const order = r.ranked.slice(0, 3).map(candidate => `${candidate.provider}/${candidate.model}`).join(" → ");
+    return {model: r.ranked[0].model, line: `ranked ${r.rule} → ${order} · availability checked at start`};
+  }
   // A criterion matching nobody is a STATE, not an absence: saying "inherit" would be a lie
   // about a rule that is set, and would hide exactly the case worth seeing.
   const perCli = Object.entries(r.providers ?? {});

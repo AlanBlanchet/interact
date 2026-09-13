@@ -7,14 +7,17 @@ on a vendor binary being installed.
 
 import asyncio
 import json
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
-from interact.agents import registry as reg
+from interact.agents import registry as reg, run as run_module
 from interact.agents.events import AgentEvent
-from interact.agents.providers import AgentProvider
+from interact.agents.providers import AgentProvider, CodexProvider
 from interact.agents.run import mesh_config, run_agent, validate_image_paths
 
 
@@ -69,8 +72,9 @@ class _CrashingProvider(_FakeProvider):
 
 
 @pytest.mark.asyncio
-async def test_a_run_streams_its_events_and_records_its_cost(tmp_path):
-    run = await run_agent(_FakeProvider(), "do a thing", agent="tester", name="worker", cwd=str(tmp_path))
+@pytest.mark.parametrize("mesh", [True, False])
+async def test_a_run_streams_its_events_and_records_its_cost(tmp_path, mesh):
+    run = await run_agent(_FakeProvider(), "do a thing", agent="tester", name="worker", cwd=str(tmp_path), mesh=mesh)
     await asyncio.wait_for(run.wait(), timeout=30)
 
     events = reg.read_events(run.run_id)
@@ -81,6 +85,7 @@ async def test_a_run_streams_its_events_and_records_its_cost(tmp_path):
     assert listed.last == "done"
     assert listed.provider_session_id == "SID"
     assert listed.requested_criterion == "fixture-model" and listed.reasoning == "medium"
+    assert listed.mesh_enabled is mesh
 
 
 @pytest.mark.asyncio
@@ -138,6 +143,84 @@ def test_the_mesh_config_carries_no_credential():
     cfg = mesh_config(run_id="r1").lower()
     for banned in ("api_key", "apikey", "token", "oauth", "secret"):
         assert banned not in cfg, f"{banned!r} must never be handed to a spawned agent"
+
+
+@pytest.fixture
+def codex_configuration(monkeypatch):
+    """Provider-resolved entries, with no duplicate interpretation of config layers."""
+    monkeypatch.setattr(CodexProvider, "executable", lambda self: "fixture-codex")
+
+    def configure(entry):
+        rows = [] if entry is None else [entry]
+        monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 0, json.dumps(rows), "",
+        ))
+
+    return configure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mesh,entry", [
+    (True, None), (False, None),
+    (True, {"name": "interact", "enabled": True, "transport": {"command": "system-wrapper"}}),
+    (True, {"name": "interact", "enabled": False, "transport": {"command": "system-wrapper"}}),
+    (True, {"name": "interact", "transport": {"url": "https://example.invalid/mcp"}}),
+])
+async def test_codex_launcher_mesh_reaches_spawn_boundary_without_overriding_opt_out(
+    tmp_path, monkeypatch, codex_configuration, mesh, entry
+):
+    codex_configuration(entry)
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "available", lambda: True)
+    monkeypatch.setattr(provider, "_inject_definition", lambda agent, task, agent_prompt=None: task)
+    monkeypatch.setattr(run_module, "resolve_model", lambda *args, **kwargs: ({}, "fixture-model"))
+    monkeypatch.setattr(provider, "authenticated", AsyncMock(return_value=True))
+    captured = []
+
+    async def capture(*argv, **kwargs):
+        captured.extend(argv)
+        raise RuntimeError("fixture spawn boundary")
+
+    monkeypatch.setattr(run_module.asyncio, "create_subprocess_exec", capture)
+    with pytest.raises(RuntimeError, match="fixture spawn boundary"):
+        await run_agent(provider, "read", agent="tester", cwd=str(tmp_path), mesh=mesh)
+    overrides = [captured[i + 1] for i, value in enumerate(captured) if value == "-c"]
+    data = tomllib.loads("\n".join(overrides))
+    assert ("mcp_servers" in data) == (mesh and entry is None)
+    assert "approval_policy" not in data and "sandbox_mode" not in data
+
+
+@pytest.mark.parametrize("mesh,entry", [
+    (True, None), (False, None), (None, None),
+    (True, {"name": "interact", "enabled": True, "transport": {"command": "system-wrapper"}}),
+    (True, {"name": "interact", "enabled": False, "transport": {"command": "system-wrapper"}}),
+    (True, {"name": "interact", "transport": {"url": "https://example.invalid/mcp"}}),
+])
+def test_codex_resume_replays_only_recorded_mesh_opt_in(tmp_path, monkeypatch, codex_configuration, mesh, entry):
+    codex_configuration(entry)
+    kwargs = {} if mesh is None else {"mesh_enabled": mesh}
+    run = reg.register(run_id="fixture-run", pid=None, provider="codex", name="tester",
+                       agent="tester", cwd=str(tmp_path), session_id="fixture-owner", **kwargs)
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "_inject_definition", lambda agent, task, agent_prompt=None: task)
+    captured = []
+
+    def capture(argv, **kwargs):
+        captured.extend(argv)
+        assert kwargs["env"]["INTERACT_PARENT_RUN_ID"] == run.run_id
+        raise RuntimeError("fixture resume boundary")
+
+    monkeypatch.setattr(run_module.subprocess, "Popen", capture)
+    with pytest.raises(RuntimeError, match="fixture resume boundary"):
+        run_module.launch_continuation(provider, reg.get_run(run.run_id), "vendor-thread", "read",
+                                       model="fixture-model", criterion=None, reasoning="medium", raw_index=0)
+    overrides = [captured[i + 1] for i, value in enumerate(captured) if value == "-c"]
+    data = tomllib.loads("\n".join(overrides))
+    assert ("mcp_servers" in data) == (mesh is True and entry is None)
+    if mesh is True and entry is None:
+        assert data["mcp_servers"]["interact"]["env"] == {"INTERACT_PARENT_RUN_ID": run.run_id}
+    assert "approval_policy" not in data and "sandbox_mode" not in data
+    assert reg.get_run(run.run_id).session_id == "fixture-owner"
 
 
 def test_image_paths_are_absolute_supported_readable_and_bounded(tmp_path):

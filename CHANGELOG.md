@@ -4,6 +4,13 @@ Notable changes to **interact**. Follows [Semantic Versioning](https://semver.or
 [Keep a Changelog](https://keepachangelog.com). Releases are cut from `main` (and `release/X.Y`
 maintenance branches) — see [RELEASING.md](RELEASING.md).
 
+## 0.43.0 — 2026-09-14
+
+- Rank each agent's criteria across providers, then select the first locally available candidate. Record skipped candidates and their reasons.
+- Preserve provider permissions when choosing Best available in VS Code; show one ordered model ranking.
+- Enforce Claude role tool availability on initial and resumed turns, including per-run tool exclusions.
+- Carry pinned server prompts and mesh configuration through the same provider launch contract. Refuse tool policies an adapter cannot enforce.
+
 ## 0.42.0 — 2026-09-13
 
 - Share portable tool preferences through the signed-in account, with revision checks and verified caches across CLI, TUI and VS Code.

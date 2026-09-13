@@ -33,7 +33,7 @@ def _fmt(run: reg.AgentRun) -> str:
 @instrumented
 async def agent_spawn(
     task: str,
-    provider: str = "claude",
+    provider: str | None = None,
     agent: str | None = None,
     name: str | None = None,
     model: str | None = None,
@@ -44,6 +44,7 @@ async def agent_spawn(
     agent_ref: AgentRevisionRef | None = None,
     delegate: str | None = None,
     session_id: str | None = None,
+    denied_tools: list[str] | None = None,
 ) -> str:
     """Start another agent to work alongside you, and return its run id immediately.
 
@@ -63,7 +64,9 @@ async def agent_spawn(
     session_id: owning caller conversation, shared by spawn and list. Omit only when a
         recorded parent or INTERACT_SESSION_ID provides it. No cwd or MCP transport inference.
     task: what the agent should do — write it as a complete brief; the agent cannot ask you.
-    provider: which CLI to run ("claude", "codex"). Only installed ones can be used.
+    provider: which CLI to run ("claude", "codex"). Omit it to rank the role's criterion across
+        every installed, switched-on CLI and start the first candidate this machine can run;
+        naming one restricts the ranked list to it and never falls through to another.
     agent: a definition the CLI resolves itself — Claude Code reads ~/.claude/agents/<name>.md —
         so the run IS that agent (e.g. "code-reviewer"), with its own system prompt and tools.
         The run is named after it, which is what makes a team readable at a glance.
@@ -84,21 +87,29 @@ async def agent_spawn(
         this revision, never the current head. Conflicts with a parent's capability pin fail.
     delegate: name of a delegate capability on the parent run's recorded revision. Its exact
         agent reference is resolved automatically. Named-role delegation also honours parent pins.
+    denied_tools: exact built-in or qualified MCP tool names to remove for this run and its
+        continuations. Only narrows the role tool set; never changes permissions or user config.
     """
     try:
-        prov = provider_for(provider)
+        prov = provider_for(provider) if provider is not None else None
     except ValueError as e:
         return f"ERROR: {e}"
-    if not prov.available():
+    # No provider named: the launcher ranks the role's criterion across every installed,
+    # switched-on CLI and starts the first candidate this machine can run. The checks below
+    # then hold for the set, not one binary.
+    candidates = [prov] if prov is not None else list(PROVIDERS.values())
+    if prov is not None and not prov.available():
         installed = ", ".join(p.name for p in available_providers()) or "none"
         return (f"ERROR: the {provider!r} CLI is not installed on this machine "
                 f"(installed providers: {installed}). interact drives the vendor's own binary, "
                 f"so it has to be present and signed in.")
-    if agent is not None and agent_ref is None and delegate is None and not prov.valid_definition(agent):
+    if agent is not None and agent_ref is None and delegate is None and not any(
+        p.valid_definition(agent) for p in candidates
+    ):
         # At the edge: this value becomes a filesystem path, recorded on the run, offered by the
         # panel as a clickable "system prompt" link.
-        known = ", ".join(prov.agent_definitions()) or "none"
-        return (f"ERROR: {provider} has no agent definition {agent!r}. "
+        known = ", ".join(sorted({name for p in candidates for name in p.agent_definitions()})) or "none"
+        return (f"ERROR: No agent definition {agent!r} in {provider or 'the registered providers'}. "
                 f"Available definitions: {known}.")
     # A tool caller is a MODEL, and a model's context routinely holds text it didn't write — a
     # fetched page, a file, an issue body — so this parameter is reachable by indirect injection.
@@ -106,16 +117,13 @@ async def agent_spawn(
     # watching, nothing on screen before it runs. Refused HERE, not deeper: CLI and panel picker
     # still offer the full set, since a person choosing it for themselves is the point of the
     # control — widening your own privileges is not.
-    unrestricted = {m.id for m in prov.permission_modes() if m.unrestricted}
+    unrestricted = {m.id for p in candidates for m in p.permission_modes() if m.unrestricted}
     if permission_mode in unrestricted:
-        allowed = ", ".join(m.id for m in prov.permission_modes() if not m.unrestricted)
+        allowed = ", ".join(sorted({m.id for p in candidates for m in p.permission_modes() if not m.unrestricted}))
         return (f"ERROR: {permission_mode!r} lets an agent act without asking, and cannot be set "
                 f"from a tool call. Choose one of: {allowed}. To run an agent unrestricted, start "
                 f"it yourself — `interact agents spawn ... --permission-mode {permission_mode}` — "
                 "so the choice has a person behind it.")
-    if not prov.verified:
-        # Never let an unexercised adapter look as trustworthy as a tested one.
-        pass
     try:
         with reg.session_context(session_id) as owner:
             handle = await run_agent(
@@ -124,18 +132,25 @@ async def agent_spawn(
                 profile=profile,
                 agent_ref=agent_ref, delegate=delegate,
                 image_paths=tuple(Path(path) for path in (image_paths or ())),
+                denied_tools=tuple(denied_tools or ()),
             )
     except ValueError as e:  # an unknown permission mode, refused before it reaches a shell
         return f"ERROR: {e}"
     except (OSError, RuntimeError) as e:
-        return f"ERROR: could not start the {provider} agent — {e}"
-    caveat = f"\nNOTE: the {provider} adapter is {prov.caveat}" if not prov.verified else ""
-    return (f"Started [{name or agent or prov.name}] ({provider}) — run_id={handle.run_id}\n"
+        return f"ERROR: could not start the {provider or 'ranked'} agent — {e}"
+    # The recorded run names the CLI that actually started; a ranked launch may have walked
+    # past candidates, and the record carries which ones and why.
+    started = reg.get_run(handle.run_id)
+    ran = provider_for(started.provider) if started is not None else prov
+    skipped = ", ".join(f"{s.candidate.provider}/{s.candidate.model} ({s.reason})" for s in (started.skipped if started else ()))
+    walked = f"\nSkipped before starting: {skipped}" if skipped else ""
+    caveat = f"\nNOTE: the {ran.name} adapter is {ran.caveat}" if ran is not None and not ran.verified else ""
+    return (f"Started [{name or agent or (ran.name if ran else 'agent')}] ({ran.name if ran else 'ranked'}) — run_id={handle.run_id}\n"
             f"Session: {owner or 'unknown; pass session_id to make future launches discoverable in this conversation'}\n"
             f"Task: {' '.join(task.split())[:180]}\n"
             f"Launch policy: model={getattr(handle, 'model', None)}; "
             f"reasoning={getattr(handle, 'reasoning', None)}; "
-            f"criterion={getattr(handle, 'criterion', None)}\n"
+            f"criterion={getattr(handle, 'criterion', None)}{walked}\n"
             f"Watch it with agent_list, or agent_events(run_id=\"{handle.run_id}\").{caveat}")
 
 

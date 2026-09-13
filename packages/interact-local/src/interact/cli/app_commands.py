@@ -29,7 +29,7 @@ from interact.agents.providers import (
     available_providers,
     provider_for,
 )
-from interact.agents.run import ModelUnavailable, is_criterion, resolve_model, run_agent
+from interact.agents.run import ModelUnavailable, is_criterion, rank_candidates, resolve_model, run_agent
 from interact.cli.clients import ClientTarget, MCPServer, Scope
 from interact.cli.command_bootstrap import Config, UserConfig
 from interact.cli.render import CliRenderer
@@ -929,9 +929,8 @@ def agents_variables() -> None:
 def _per_vendor(rule: str, weights: str = "", policy: Policy | None = None) -> dict[str, str | None]:
     """What each switched-on vendor CLI would ACTUALLY run for `rule`, by the spawn's own resolver.
 
-    A criterion has no single answer: the pool is what THAT binary can be pointed at — its own
-    vendor's models through its login, a routed one when its key is here. A surface previewing one
-    catalog-wide winner offers a rule that refuses the moment it's used.
+    Explicit-provider previews are filters. The default launch ranks the combined pool first;
+    these individual answers remain useful when a caller chooses a provider constraint.
     """
     policy = policy if policy is not None else Policy.load()
     answers: dict[str, str | None] = {}
@@ -1146,14 +1145,17 @@ def agents_policy(json_out: bool = False) -> None:
             rule = policy.criterion_for(agent) or ""
             resolves: str | None = rule
             why = None
+            ranked = ()
             if is_criterion(rule):
                 try:
-                    resolves = resolve_model(rule, dict(os.environ), weights=policy.weights_for(agent))[1]
+                    ranked = rank_candidates(rule, dict(os.environ), providers=list(agent_providers.PROVIDERS.values()), weights=policy.weights_for(agent))
+                    resolves = ranked[0].model
                 except ModelUnavailable as err:
                     resolves, why = None, str(err).splitlines()[0]
             agents.append({
                 "name": agent, "rule": policy.agents[agent], "criterion": is_criterion(rule),
                 "resolves": resolves, "why": why,
+                "ranked": [candidate.model_dump() for candidate in ranked[:3]],
                 "providers": _per_vendor(rule, policy.weights_for(agent), policy) if is_criterion(rule) else {},
             })
         print(json.dumps({
@@ -1179,19 +1181,12 @@ def agents_policy(json_out: bool = False) -> None:
             shown = rule if rule == resolved else f"{rule}  →  {resolved}"
             note = ""
             if is_criterion(resolved):
-                # What each switched-on vendor CLI would ACTUALLY run — resolved by the spawn's
-                # own code, per CLI, since the pool is what that binary can be pointed at; a
-                # catalog-wide answer here once named a model the claude spawn could never run.
-                answers = []
-                for pname in PROVIDERS:
-                    if not policy.provider_active(pname):
-                        continue
-                    try:
-                        _, chosen = resolve_model(resolved, dict(os.environ), provider=provider_for(pname), weights=policy.weights_for(agent))
-                        answers.append(f"{pname} ⇒ {chosen}")
-                    except ModelUnavailable as err:
-                        answers.append(f"{pname} ⇒ NOTHING ({str(err).splitlines()[0].rstrip(':')})")
-                note = "  " + "; ".join(answers) if answers else "  ⇒ every provider is switched off"
+                try:
+                    ranked = rank_candidates(resolved, dict(os.environ), providers=list(agent_providers.PROVIDERS.values()), weights=policy.weights_for(agent))
+                    note = "  ranked: " + " → ".join(f"{item.provider}/{item.model}" for item in ranked[:3]) + " (availability checked at start)"
+                except ModelUnavailable as err:
+                    note = "  ⇒ NOTHING (" + str(err).splitlines()[0].rstrip(":") + ")"
+
             print(f"  {agent:<16} {shown}{note}")
     if policy.toolsets:
         print("\ntoolsets")
@@ -1318,7 +1313,7 @@ def _agent_runner():
 
 
 @agents_app.command(name="definitions")
-def agents_definitions(provider: str = "claude") -> None:
+def agents_definitions(provider: str | None = None) -> None:
     """Print the agent definitions this CLI can resolve, one per line.
 
     Machine-readable on purpose: the panel's picker used to scrape the human `agents providers`
@@ -1326,7 +1321,8 @@ def agents_definitions(provider: str = "claude") -> None:
     prose here would parse as an agent called "no agents found".
     """
 
-    for name in provider_for(provider).agent_definitions():
+    providers = [provider_for(provider)] if provider is not None else list(agent_providers.PROVIDERS.values())
+    for name in sorted({name for item in providers for name in item.agent_definitions()}):
         print(name)
 
 
@@ -1380,14 +1376,29 @@ def agents_modes(provider: str = "claude") -> None:
         print(f"{mode.id}\t{mode.label}\t{mode.detail}\t{'yes' if mode.unrestricted else 'no'}")
 
 
+def _provider_modes(values: list[str] | None) -> dict[str, str]:
+    modes: dict[str, str] = {}
+    for value in values or ():
+        name, separator, mode = value.partition("=")
+        if not separator or not name or not mode:
+            raise ValueError("--provider-mode expects provider=mode")
+        provider_for(name).validate_permission_mode(mode)
+        if name in modes and modes[name] != mode:
+            raise ValueError(f"Conflicting workspace modes for {name!r}")
+        modes[name] = mode
+    return modes
+
+
 @agents_app.command(name="spawn")
-def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
+def agents_spawn(task: str, provider: str | None = None, agent: str | None = None,
                  name: str | None = None, model: str | None = None,
                  cwd: str | None = None, permission_mode: str | None = None,
                  image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None,
                  agent_id: UUID | None = None, agent_revision: UUID | None = None,
                  delegate: str | None = None, parent_run_id: str | None = None,
-                 session_id: str | None = None) -> None:
+                 session_id: str | None = None,
+                 denied_tools: Annotated[list[str] | None, Parameter(name="--deny-tool")] = None,
+                 provider_modes: Annotated[list[str] | None, Parameter(name="--provider-mode")] = None) -> None:
     """Start an agent and return its id immediately, without waiting for it to finish.
 
     `agents run` streams until the agent is done — right at a terminal, useless to a UI — the
@@ -1399,17 +1410,23 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
     --parent-run-id defaults to the calling agent's recorded run from its environment.
     --session-id records the owning conversation, otherwise inherited from the parent,
     INTERACT_SESSION_ID, or the CLI harness CODEX_THREAD_ID. Unknown ownership stays unknown.
+    Omit --provider to rank across providers. --deny-tool removes an exact tool for this run
+    and its continuations; it never grants permissions or changes global configuration.
+    --provider-mode provider=mode preserves a provider's existing workspace permission setting
+    during automatic selection. An explicit --permission-mode takes precedence.
     """
 
 
     async def _go():
         handle = await _agent_runner()(
-            provider_for(provider), task, name=name or agent,
+            provider_for(provider) if provider is not None else None, task, name=name or agent,
             cwd=cwd or os.getcwd(), agent=agent, model=model,
             permission_mode=permission_mode,
             image_paths=tuple(image_paths or ()),
             agent_ref=AgentCatalog.reference(agent_id, agent_revision),
             delegate=delegate, parent_run_id=parent_run_id,
+            denied_tools=tuple(denied_tools or ()),
+            provider_modes=_provider_modes(provider_modes),
         )
         # Give the child a moment to be alive before this process exits out from under it.
         await asyncio.sleep(0.2)
@@ -1430,13 +1447,15 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
 
 
 @agents_app.command(name="run")
-def agents_run(task: str, provider: str = "claude", agent: str | None = None,
+def agents_run(task: str, provider: str | None = None, agent: str | None = None,
                name: str | None = None, model: str | None = None, cwd: str | None = None,
                permission_mode: str | None = None,
                image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None,
                agent_id: UUID | None = None, agent_revision: UUID | None = None,
                delegate: str | None = None, parent_run_id: str | None = None,
-               session_id: str | None = None) -> None:
+               session_id: str | None = None,
+               denied_tools: Annotated[list[str] | None, Parameter(name="--deny-tool")] = None,
+               provider_modes: Annotated[list[str] | None, Parameter(name="--provider-mode")] = None) -> None:
     """Spawn an agent and stream its events until it finishes.
 
     ``--agent`` selects a server role when a catalog is configured, otherwise an installed
@@ -1449,13 +1468,15 @@ def agents_run(task: str, provider: str = "claude", agent: str | None = None,
 
 
     async def _go() -> int:
-        prov = provider_for(provider)
+        prov = provider_for(provider) if provider is not None else None
         handle = await run_agent(prov, task, name=name or agent,
                                  cwd=cwd or os.getcwd(), agent=agent, model=model,
                                  permission_mode=permission_mode,
                                  image_paths=tuple(image_paths or ()),
                                  agent_ref=AgentCatalog.reference(agent_id, agent_revision),
-                                 delegate=delegate, parent_run_id=parent_run_id)
+                                 delegate=delegate, parent_run_id=parent_run_id,
+                                 denied_tools=tuple(denied_tools or ()),
+                                 provider_modes=_provider_modes(provider_modes))
         print(f"run_id {handle.run_id}")
         seen = 0
         while True:
