@@ -131,6 +131,7 @@ class AgentCatalog(BaseModel):
     connection: CatalogConnection
     snapshot: CatalogSnapshot
     fetched_at: datetime
+    access_generation: UUID = UUID(int=0)
     stale: bool = Field(default=False, exclude=True)
     selection: AgentInstructionSet | None = Field(default=None, exclude=True)
 
@@ -166,42 +167,63 @@ class AgentCatalog(BaseModel):
         return CatalogConnection.path().with_name("agent-catalog-cache.json")
 
     @classmethod
+    def discard_invalidated_cache(cls, connection: CatalogConnection, target: Path) -> None:
+        with connection.access_guard() as generation:
+            try:
+                cached = cls.model_validate_json(target.read_bytes())
+            except FileNotFoundError:
+                return
+            except ValueError:
+                target.unlink(missing_ok=True)
+                return
+            if cached.connection == connection and cached.access_generation != generation:
+                target.unlink(missing_ok=True)
+
+    @classmethod
     def refresh(
         cls, connection: CatalogConnection, *, allow_stale: bool = False,
         cache_path: Path | None = None, transport: httpx.BaseTransport | None = None,
     ) -> Self:
         target = cache_path if cache_path is not None else cls.cache_path()
+        generation = connection.access_generation()
+        resolved = connection
         try:
             with connection.connect(transport=transport) as client:
                 resolved = connection.authenticate(client)
+                if resolved != connection:
+                    generation = resolved.access_generation()
                 payload = resolved.request(client, "GET", f"/v1/workspaces/{resolved.workspace_id}/agent-catalog")
             try:
                 snapshot = CatalogSnapshot.model_validate_json(payload)
             except ValueError as error:
                 raise CatalogConnectionError("invalid server agent catalog; cache was not replaced") from error
-            value = cls(connection=resolved, snapshot=snapshot, fetched_at=datetime.now(UTC))
-            CatalogConnection.replace_text(target, value.model_dump_json())
-            return value
+            value = cls(connection=resolved, snapshot=snapshot, fetched_at=datetime.now(UTC), access_generation=generation)
+            with resolved.access_guard(generation):
+                CatalogConnection.replace_text(target, value.model_dump_json())
+                return value
         except CatalogAuthenticationError:
-            target.unlink(missing_ok=True)
+            cls.discard_invalidated_cache(resolved, target)
             raise
         except (httpx.NetworkError, httpx.TimeoutException) as error:
             if not allow_stale:
                 raise CatalogConnectionError("agent catalog service is unreachable; sync was not applied") from error
-            try:
-                with target.open("rb") as source:
-                    payload = source.read(16 * 1024 * 1024 + 1)
-                if len(payload) > 16 * 1024 * 1024:
-                    raise ValueError("oversized cache")
-                cached = cls.model_validate_json(payload)
-                if cached.selection is not None:
-                    raise ValueError("active cache contains a launch selection")
-            except (OSError, ValueError) as cache_error:
-                raise CatalogConnectionError("agent catalog is unreachable and no validated cache is available") from cache_error
-            if cached.connection != connection:
-                raise CatalogConnectionError("cached agent catalog belongs to a different connection") from error
-            print(f"STALE agent catalog: service unreachable; using snapshot fetched {cached.fetched_at.isoformat()}", file=sys.stderr)
-            return cached.model_copy(update={"stale": True})
+            with connection.access_guard(generation):
+                try:
+                    with target.open("rb") as source:
+                        payload = source.read(16 * 1024 * 1024 + 1)
+                    if len(payload) > 16 * 1024 * 1024:
+                        raise ValueError("oversized cache")
+                    cached = cls.model_validate_json(payload)
+                    if cached.selection is not None:
+                        raise ValueError("active cache contains a launch selection")
+                except (OSError, ValueError) as cache_error:
+                    raise CatalogConnectionError("agent catalog is unreachable and no validated cache is available") from cache_error
+                if cached.connection != connection:
+                    raise CatalogConnectionError("cached agent catalog belongs to a different connection") from error
+                if cached.access_generation != generation:
+                    raise CatalogAuthenticationError("cached catalog access was invalidated; sync online before use")
+                print(f"STALE agent catalog: service unreachable; using snapshot fetched {cached.fetched_at.isoformat()}", file=sys.stderr)
+                return cached.model_copy(update={"stale": True})
 
     @classmethod
     def active(cls) -> Self | None:
@@ -209,11 +231,12 @@ class AgentCatalog(BaseModel):
         return None if connection is None else cls.refresh(connection, allow_stale=True)
 
     def at_revision(self, reference: AgentRevisionRef) -> Self:
-        if self.selection is not None and self.selection.agent.id == reference.id and self.selection.agent.revision == reference.revision:
-            return self
-        for agent in self.snapshot.agents:
-            if agent.id == reference.id and agent.revision == reference.revision:
-                return self.model_copy(update={"selection": AgentInstructionSet(agent=agent, prompts=self.snapshot.paradigms)})
+        with self.connection.access_guard(self.access_generation):
+            if self.selection is not None and self.selection.agent.id == reference.id and self.selection.agent.revision == reference.revision:
+                return self
+            for agent in self.snapshot.agents:
+                if agent.id == reference.id and agent.revision == reference.revision:
+                    return self.model_copy(update={"selection": AgentInstructionSet(agent=agent, prompts=self.snapshot.paradigms)})
         try:
             with self.connection.connect() as client:
                 connection = self.connection.authenticate(client)
@@ -234,8 +257,10 @@ class AgentCatalog(BaseModel):
                         AgentInstructionSet.find_prompt((prompt,), ref)
                     prompts.append(prompt)
             selection = AgentInstructionSet(agent=agent, prompts=tuple(prompts))
+            with self.connection.access_guard(self.access_generation):
+                return self.model_copy(update={"selection": selection})
         except CatalogAuthenticationError:
-            self.cache_path().unlink(missing_ok=True)
+            self.discard_invalidated_cache(self.connection, self.cache_path())
             raise
         except CatalogConnectionError:
             raise
@@ -243,7 +268,6 @@ class AgentCatalog(BaseModel):
             raise CatalogConnectionError("pinned agent revision is unavailable during network failure; latest revision is not a fallback") from error
         except ValueError as error:
             raise CatalogConnectionError("invalid exact agent or prompt revision received from server") from error
-        return self.model_copy(update={"selection": selection})
 
     def definition(self, role: str, task: str) -> str:
         status = "stale" if self.stale else "current"

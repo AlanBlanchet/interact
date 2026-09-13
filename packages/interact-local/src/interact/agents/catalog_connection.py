@@ -11,12 +11,12 @@ import os
 import stat
 import tempfile
 import warnings
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from http.cookiejar import LWPCookieJar, LoadError
 from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from interact_core.accounts import Bootstrap
@@ -127,21 +127,23 @@ class CatalogConnection(BaseModel):
     def authenticate(self, client: httpx.Client) -> Self:
         if self.auth_mode == "preview":
             with self.session_lock():
-                if not client.cookies:
-                    jar = LWPCookieJar(self.session_path())
-                    try:
-                        self.check_private_file(self.session_path())
-                        # CookieJar's malformed-input warning includes the cookie line.
-                        # Treat corruption as an empty session without exposing its contents.
-                        with warnings.catch_warnings(record=True):
-                            warnings.simplefilter("always")
-                            jar.load(ignore_discard=True)
-                    except FileNotFoundError:
-                        pass
-                    except LoadError:
-                        jar.clear()
-                        self.session_path().unlink(missing_ok=True)
-                    client.cookies.update(jar)
+                generation = self.access_generation()
+                # Another process may have denied the cookies retained by this client.
+                client.cookies.clear()
+                jar = LWPCookieJar(self.session_path())
+                try:
+                    self.check_private_file(self.session_path())
+                    # CookieJar's malformed-input warning includes the cookie line.
+                    # Treat corruption as an empty session without exposing its contents.
+                    with warnings.catch_warnings(record=True):
+                        warnings.simplefilter("always")
+                        jar.load(ignore_discard=True)
+                except FileNotFoundError:
+                    pass
+                except LoadError:
+                    jar.clear()
+                    self.session_path().unlink(missing_ok=True)
+                client.cookies.update(jar)
                 client.cookies.jar.clear_expired_cookies()
                 if not client.cookies:
                     self.request(client, "POST", "/v1/auth/local-preview")
@@ -150,9 +152,11 @@ class CatalogConnection(BaseModel):
                 for cookie in client.cookies.jar:
                     jar.set_cookie(cookie)
                 payload = "#LWP-Cookies-2.0\n" + jar.as_lwp_str(ignore_discard=True)
-                self.replace_text(self.session_path(), payload)
-                if resolved != self:
-                    self.replace_text(resolved.session_path(), payload)
+                with self.access_guard(generation):
+                    self.replace_text(self.session_path(), payload)
+                    if resolved != self:
+                        with resolved.access_guard():
+                            self.replace_text(resolved.session_path(), payload)
                 return resolved
         return self.resolve_workspace(client)
 
@@ -170,19 +174,51 @@ class CatalogConnection(BaseModel):
             raise LoadError("catalog session exceeds its size limit")
 
     @contextmanager
-    def session_lock(self):
+    def session_lock(self, *, suffix: Literal[".lock", ".access-lock"] = ".lock"):
         path = self.session_path()
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = path.parent.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
             raise CatalogConnectionError("catalog session directory must be private and owned by the current user")
-        descriptor = os.open(path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        descriptor = os.open(path.with_suffix(suffix), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             yield
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
+
+    @contextmanager
+    def access_guard(self, generation: UUID | None = None):
+        """Serialize denial, publication and fallback across independent processes."""
+        with self.session_lock(suffix=".access-lock"):
+            path = self.session_path().with_suffix(".generation")
+            try:
+                self.check_private_file(path)
+                current = UUID(path.read_text())
+            except FileNotFoundError:
+                current = UUID(int=0)
+            except (ValueError, LoadError) as error:
+                raise CatalogAuthenticationError("invalid catalog access generation; cached access is disabled") from error
+            if generation is not None and current != generation:
+                raise CatalogAuthenticationError("catalog access was invalidated during this operation; cached access is disabled")
+            yield current
+
+    def access_generation(self) -> UUID:
+        with self.access_guard() as generation:
+            return generation
+
+    def invalidate_access(self, client: httpx.Client) -> None:
+        # A bootstrap may still be preparing to publish this workspace's cookies.
+        # Match bootstrap publication's lock order: unselected, then selected.
+        connections = (self,) if self.workspace_id is None else (self.model_copy(update={"workspace_id": None}), self)
+        with ExitStack() as locks:
+            for connection in connections:
+                locks.enter_context(connection.access_guard())
+            for connection in connections:
+                connection.replace_text(connection.session_path().with_suffix(".generation"), str(uuid4()))
+                connection.session_path().unlink(missing_ok=True)
+            client.cookies.clear()
 
     def resolve_workspace(self, client: httpx.Client) -> Self:
         # Token consumers can explicitly select their workspace. They need no cookie bootstrap.
@@ -200,9 +236,7 @@ class CatalogConnection(BaseModel):
         with client.stream(method, path) as response:
             workspace_refused = response.status_code == 404 and path.startswith("/v1/workspaces/")
             if response.status_code in {401, 403} or workspace_refused:
-                if self.auth_mode == "preview":
-                    self.session_path().unlink(missing_ok=True)
-                    client.cookies.clear()
+                self.invalidate_access(client)
                 raise CatalogAuthenticationError(
                     f"catalog access refused (HTTP {response.status_code}); cached access is disabled"
                 )

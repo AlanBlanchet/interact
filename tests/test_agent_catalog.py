@@ -527,7 +527,7 @@ def test_exact_read_refusal_invalidates_cache_before_later_outage(advanced_catal
     monkeypatch.setattr(CatalogConnection, "connect", lambda self, **kwargs: connect(self, transport=httpx.MockTransport(offline)))
     with pytest.raises(CatalogConnectionError, match="no validated cache"):
         AgentCatalog.refresh(current.connection, allow_stale=True)
-    with pytest.raises(CatalogConnectionError, match="pinned agent revision is unavailable"):
+    with pytest.raises(CatalogAuthenticationError, match="invalidated"):
         current.at_revision(worker_ref)
 
 
@@ -783,3 +783,157 @@ def test_private_session_cache_rejects_unsafe_files_without_printing_cookies(cat
         return
     with pytest.raises(CatalogConnectionError, match="must be private"):
         AgentCatalog.refresh(connection, transport=catalog_transport(value))
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+@pytest.mark.parametrize("separate_process", [False, True])
+def test_denial_prevents_older_refresh_restoring_stale_access(catalog_home, status, separate_process):
+    connection = CatalogConnection(endpoint="http://localhost:8767", auth_mode="preview", workspace_id=uuid4())
+    value = snapshot()
+    AgentCatalog.refresh(connection, transport=catalog_transport(value))
+    previous = AgentCatalog.cache_path().read_bytes()
+    successful = catalog_transport(value)
+
+    def deny():
+        fresh = CatalogConnection.model_validate_json(connection.model_dump_json())
+        with pytest.raises(CatalogAuthenticationError):
+            AgentCatalog.refresh(fresh, transport=catalog_transport(value, status))
+
+    def race(request):
+        if request.method == "GET":
+            # A's successful response began before B denied access, but arrives last.
+            response = successful.handle_request(request)
+            if separate_process:
+                child = multiprocessing.get_context("fork").Process(target=deny)
+                child.start()
+                try:
+                    child.join(timeout=10)
+                    assert child.exitcode == 0
+                finally:
+                    if child.is_alive():
+                        child.terminate()
+                        child.join(timeout=5)
+            else:
+                deny()
+            return response
+        return successful.handle_request(request)
+
+    with pytest.raises(CatalogAuthenticationError):
+        AgentCatalog.refresh(connection, transport=httpx.MockTransport(race))
+    assert not AgentCatalog.cache_path().exists()
+
+    def offline(request):
+        raise httpx.ConnectError("fixture outage")
+
+    with pytest.raises(CatalogConnectionError):
+        AgentCatalog.refresh(connection, allow_stale=True, transport=httpx.MockTransport(offline))
+    AgentCatalog.cache_path().write_bytes(previous)
+    with pytest.raises(CatalogAuthenticationError, match="invalidated"):
+        AgentCatalog.refresh(connection, allow_stale=True, transport=httpx.MockTransport(offline))
+    # A new online authorization may restore access, and only its snapshot may go stale.
+    fresh = AgentCatalog.refresh(connection, transport=catalog_transport(snapshot(2)))
+    stale = AgentCatalog.refresh(connection, allow_stale=True, transport=httpx.MockTransport(offline))
+    assert stale.stale and stale.snapshot == fresh.snapshot
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_denial_fences_session_publication(catalog_home, status):
+    connection = CatalogConnection(endpoint="http://localhost:8767", auth_mode="preview", workspace_id=uuid4())
+
+    def delayed_login(request):
+        response = httpx.Response(200, headers={"Set-Cookie": "session=fixture-cookie; Path=/"}, json={})
+        with connection.connect(transport=httpx.MockTransport(lambda request: httpx.Response(status))) as other:
+            with pytest.raises(CatalogAuthenticationError):
+                connection.request(other, "GET", f"/v1/workspaces/{connection.workspace_id}/agent-catalog")
+        return response
+
+    with connection.connect(transport=httpx.MockTransport(delayed_login)) as client:
+        with pytest.raises(CatalogAuthenticationError, match="invalidated"):
+            connection.authenticate(client)
+    assert not connection.session_path().exists()
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_denial_fences_historical_result(advanced_catalogs, historical_http, monkeypatch, status):
+    _, current, worker_ref, _ = advanced_catalogs
+    original = CatalogConnection.request
+
+    def delayed(self, client, method, path):
+        payload = original(self, client, method, path)
+        if f"/agents/{worker_ref.id}/" in path:
+            with self.connect(transport=httpx.MockTransport(lambda request: httpx.Response(status))) as other:
+                with pytest.raises(CatalogAuthenticationError):
+                    original(self, other, "GET", f"/v1/workspaces/{self.workspace_id}/agent-catalog")
+        return payload
+
+    monkeypatch.setattr(CatalogConnection, "request", delayed)
+    with pytest.raises(CatalogAuthenticationError, match="invalidated"):
+        current.at_revision(worker_ref)
+    assert not AgentCatalog.cache_path().exists()
+
+
+def test_late_invalidated_response_preserves_new_authorized_cache(catalog_home):
+    connection = CatalogConnection(endpoint="http://localhost:8767", auth_mode="preview", workspace_id=uuid4())
+    old, new = snapshot(), snapshot(2)
+    AgentCatalog.refresh(connection, transport=catalog_transport(old))
+
+    def race(request):
+        response = catalog_transport(old).handle_request(request)
+        with pytest.raises(CatalogAuthenticationError):
+            AgentCatalog.refresh(connection, transport=catalog_transport(old, 401))
+        AgentCatalog.refresh(connection, transport=catalog_transport(new))
+        return response
+
+    with pytest.raises(CatalogAuthenticationError):
+        AgentCatalog.refresh(connection, transport=httpx.MockTransport(race))
+    assert AgentCatalog.model_validate_json(AgentCatalog.cache_path().read_bytes()).snapshot.cursor == new.cursor
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_token_denial_fences_inflight_fallback(catalog_home, status):
+    token = catalog_home / "token"
+    token.write_text("synthetic-token")
+    token.chmod(0o600)
+    connection = CatalogConnection(endpoint="https://example.test", auth_mode="token", token_file=token, workspace_id=uuid4())
+    value = snapshot()
+    success = httpx.MockTransport(lambda request: httpx.Response(200, content=value.model_dump_json()))
+    AgentCatalog.refresh(connection, transport=success)
+
+    def race(request):
+        assert request.headers["Authorization"] == "Bearer synthetic-token"
+        with pytest.raises(CatalogAuthenticationError):
+            AgentCatalog.refresh(connection, transport=httpx.MockTransport(lambda request: httpx.Response(status)))
+        # Even a newer authorized cache cannot rescue an operation begun before denial.
+        AgentCatalog.refresh(connection, transport=success)
+        raise httpx.ConnectError("fixture outage")
+
+    with pytest.raises(CatalogAuthenticationError, match="invalidated"):
+        AgentCatalog.refresh(connection, allow_stale=True, transport=httpx.MockTransport(race))
+    assert not connection.session_path().exists()
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_workspace_denial_fences_inflight_bootstrap_cookie_alias(catalog_home, status):
+    selected = CatalogConnection(endpoint="http://localhost:8767", auth_mode="preview", workspace_id=uuid4())
+    unselected = selected.model_copy(update={"workspace_id": None})
+    bootstrap = {
+        "account": {"account_id": str(uuid4()), "email": "fixture@example.test", "locale": "en", "verified": True},
+        "workspaces": [{"workspace_id": str(selected.workspace_id), "name": "Fixture", "role": "owner"}],
+        "current_workspace_id": str(selected.workspace_id), "csrf_token": "fixture-csrf",
+        "session_expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    }
+
+    def delayed(request):
+        if request.method == "POST":
+            return httpx.Response(200, headers={"Set-Cookie": "session=fixture-cookie; Path=/"}, json=bootstrap)
+        response = httpx.Response(200, json=bootstrap)
+        with selected.connect(transport=httpx.MockTransport(lambda request: httpx.Response(status))) as other:
+            with pytest.raises(CatalogAuthenticationError):
+                selected.request(other, "GET", f"/v1/workspaces/{selected.workspace_id}/agent-catalog")
+        return response
+
+    with unselected.connect(transport=httpx.MockTransport(delayed)) as client:
+        with pytest.raises(CatalogAuthenticationError, match="invalidated"):
+            unselected.authenticate(client)
+    assert not selected.session_path().exists()
+    assert not unselected.session_path().exists()
