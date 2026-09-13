@@ -12,6 +12,8 @@ import re
 import sys
 
 from interact.agents.policy import Policy, PolicyError
+from interact.agents.catalog import AgentCatalog
+from interact.agents import registry as reg
 from interact.agents.run import is_criterion
 from interact.criteria import Criteria
 
@@ -100,7 +102,7 @@ def _select(policy: Policy, role: str) -> tuple[str, str, str, str]:
             and all(value is not None and math.isfinite(value) and value >= 0 for value in prices)
         )
 
-    chosen = Criteria.parse(rule).choose(runnable=eligible)
+    chosen = Criteria.parse(rule).choose(runnable=eligible, weights=policy.weights_for(role))
     if chosen is None:
         raise PolicyError(
             f"No native Codex model with known prices clears {role!r}: {rule!r} "
@@ -116,6 +118,15 @@ def _select(policy: Policy, role: str) -> tuple[str, str, str, str]:
 
 def handle(event: dict) -> dict:
     kind = event.get("hook_event_name")
+    if kind in {"SessionStart", "SubagentStart"}:
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            context = (
+                "Use AGENT_ROLE with a role from the configured server catalog for delegation. "
+                "First progress message: [role-name] followed by the concrete task. "
+                f"Catalog cursor: {catalog.snapshot.cursor}."
+            )
+            return {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": context}}
     if kind == "SessionStart":
         return {"hookSpecificOutput": {
             "hookEventName": kind,
@@ -151,10 +162,15 @@ def handle(event: dict) -> dict:
     if arguments.get("agent_type") not in {None, "default", "worker", "explorer"}:
         raise PolicyError("Use a default native agent with AGENT_ROLE; custom config layers can override model policy.")
     policy = Policy.load()
+    parent_id = os.environ.get("INTERACT_PARENT_RUN_ID")
+    parent_run = reg.get_run(parent_id) if parent_id else None
+    if policy.catalog is not None and parent_id and (parent_run is None or parent_run.agent_ref is None):
+        raise PolicyError("Parent run has no recorded server revision; start the parent again")
+    policy, role = policy.for_launch(role, parent=parent_run.agent_ref if parent_run is not None else None)
     if not policy.provider_active("codex"):
         raise PolicyError("Codex is disabled in the shared agent policy.")
     model, effort, rule, price = _select(policy, role)
-    definition = _definition(role)
+    definition = _definition(role) if policy.catalog is None else policy.catalog.definition(role, "")
     updated = dict(arguments)
     updated["model"] = model
     updated["reasoning_effort"] = effort

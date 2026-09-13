@@ -10,6 +10,7 @@ connected.
 import asyncio
 import os
 from pathlib import Path
+from interact_core import AgentRevisionRef
 
 from interact.agents import messaging, registry as reg
 from interact.agents.providers import PROVIDERS, available_providers, provider_for
@@ -40,6 +41,8 @@ async def agent_spawn(
     permission_mode: str | None = None,
     profile: str | None = None,
     image_paths: list[str] | None = None,
+    agent_ref: AgentRevisionRef | None = None,
+    delegate: str | None = None,
 ) -> str:
     """Start another agent to work alongside you, and return its run id immediately.
 
@@ -74,6 +77,10 @@ async def agent_spawn(
     image_paths: optional absolute paths to existing PNG, JPEG, or WebP files to attach to the
         initial prompt. The provider must support native image attachments and the resolved model
         must meet cap.vlm; paths are bounded and validated before spawn.
+    agent_ref: exact server agent identity and revision. Both prompt and model policy come from
+        this revision, never the current head. Conflicts with a parent's capability pin fail.
+    delegate: name of a delegate capability on the parent run's recorded revision. Its exact
+        agent reference is resolved automatically. Named-role delegation also honours parent pins.
     """
     try:
         prov = provider_for(provider)
@@ -84,7 +91,7 @@ async def agent_spawn(
         return (f"ERROR: the {provider!r} CLI is not installed on this machine "
                 f"(installed providers: {installed}). interact drives the vendor's own binary, "
                 f"so it has to be present and signed in.")
-    if agent is not None and not prov.valid_definition(agent):
+    if agent is not None and agent_ref is None and delegate is None and not prov.valid_definition(agent):
         # At the edge: this value becomes a filesystem path, recorded on the run, offered by the
         # panel as a clickable "system prompt" link.
         known = ", ".join(prov.agent_definitions()) or "none"
@@ -108,9 +115,10 @@ async def agent_spawn(
         pass
     try:
         handle = await run_agent(
-            prov, task, name=name or agent or prov.name, cwd=cwd or os.getcwd(),
+            prov, task, name=name or agent, cwd=cwd or os.getcwd(),
             agent=agent, model=model, permission_mode=permission_mode,
             profile=profile,
+            agent_ref=agent_ref, delegate=delegate,
             image_paths=tuple(Path(path) for path in (image_paths or ())),
         )
     except ValueError as e:  # an unknown permission mode, refused before it reaches a shell

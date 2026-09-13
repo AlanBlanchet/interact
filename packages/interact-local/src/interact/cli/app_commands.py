@@ -10,13 +10,17 @@ import sys
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Annotated, cast
+from uuid import UUID
 
 from cyclopts import App, Parameter
+from pydantic import ValidationError
 
 from interact import feedback, live_sources, model_catalog, ollama
 from interact.agents import messaging
 from interact.agents import providers as agent_providers
 from interact.agents import registry as reg
+from interact.agents.catalog import AgentCatalog
+from interact.agents.catalog_connection import CatalogConnection
 from interact.agents.host import run_console
 from interact.agents.policy import ParadigmProjection, Policy, PolicyError, policy_path
 from interact.agents.providers import (
@@ -688,6 +692,49 @@ def config_path() -> None:
 agents_app = App(name="agents", help="Spawn and supervise agent runs across providers.")
 
 
+@agents_app.command(name="sync")
+def agents_sync(
+    endpoint: Annotated[str | None, Parameter(name="--endpoint")] = None,
+    preview: bool = False,
+    workspace: Annotated[str | None, Parameter(name="--workspace")] = None,
+    token_file: Annotated[Path | None, Parameter(name="--token-file")] = None,
+) -> None:
+    """Refresh the server-owned role catalog; save connection settings after validation.
+
+    First sync requires --endpoint and either --preview (loopback only) or --token-file.
+    Later syncs reuse the saved connection. --workspace selects a workspace UUID;
+    otherwise the authenticated bootstrap supplies the current workspace.
+    """
+    try:
+        if endpoint is None:
+            if preview or workspace is not None or token_file is not None:
+                raise ValueError("connection changes require an explicit --endpoint")
+            connection = CatalogConnection.load()
+            if connection is None:
+                raise ValueError("first sync requires --endpoint and --preview or --token-file")
+        else:
+            if preview == (token_file is not None):
+                raise ValueError("choose exactly one of --preview or --token-file")
+            connection = CatalogConnection(
+                endpoint=endpoint.rstrip("/"), workspace_id=workspace,
+                auth_mode="preview" if preview else "token",
+                token_file=token_file.absolute() if token_file is not None else None,
+            )
+        catalog = AgentCatalog.refresh(connection)
+        catalog.connection.save()
+    except ValidationError:
+        print("ERROR: invalid catalog connection; check endpoint, workspace UUID and auth mode", file=sys.stderr)
+        raise SystemExit(2) from None
+    except (ValueError, OSError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    print(json.dumps({
+        "status": "current", "workspace": str(catalog.connection.workspace_id),
+        "agents": len(catalog.snapshot.agents), "paradigms": len(catalog.snapshot.paradigms),
+        "cursor": catalog.snapshot.cursor, "fetched_at": catalog.fetched_at.isoformat(),
+    }))
+
+
 @agents_app.command(name="policy-hook")
 def agents_policy_hook() -> None:
     """Apply the shared agent policy to Codex lifecycle events on stdin; no model call."""
@@ -798,14 +845,14 @@ def agents_variables() -> None:
           " clears every term is used, and re-resolved at every spawn.")
 
 
-def _per_vendor(rule: str) -> dict[str, str | None]:
+def _per_vendor(rule: str, weights: str = "", policy: Policy | None = None) -> dict[str, str | None]:
     """What each switched-on vendor CLI would ACTUALLY run for `rule`, by the spawn's own resolver.
 
     A criterion has no single answer: the pool is what THAT binary can be pointed at — its own
     vendor's models through its login, a routed one when its key is here. A surface previewing one
     catalog-wide winner offers a rule that refuses the moment it's used.
     """
-    policy = Policy.load()
+    policy = policy if policy is not None else Policy.load()
     answers: dict[str, str | None] = {}
     # Read THROUGH the module: which CLIs exist is a fact about the caller's environment — a name
     # bound at import time would freeze whatever the process started with.
@@ -814,7 +861,7 @@ def _per_vendor(rule: str) -> dict[str, str | None]:
             continue
         try:
             answers[name] = resolve_model(
-                rule, dict(os.environ), provider=agent_providers.provider_for(name))[1]
+                rule, dict(os.environ), provider=agent_providers.provider_for(name), weights=weights)[1]
         except ModelUnavailable:
             answers[name] = None
     return answers
@@ -1000,7 +1047,7 @@ def agents_models(
 
 @agents_app.command(name="policy")
 def agents_policy(json_out: bool = False) -> None:
-    """What ~/.interact/agents.json says: profiles, who wears them, toolsets, paradigms, providers.
+    """Active role policy: server catalog when configured, otherwise local policy.
 
     Each agent row shows the rule as WRITTEN and what it currently RESOLVES to, so a criterion
     quietly matching nothing is visible here rather than at the spawn that fails.
@@ -1020,23 +1067,26 @@ def agents_policy(json_out: bool = False) -> None:
             why = None
             if is_criterion(rule):
                 try:
-                    resolves = resolve_model(rule, dict(os.environ))[1]
+                    resolves = resolve_model(rule, dict(os.environ), weights=policy.weights_for(agent))[1]
                 except ModelUnavailable as err:
                     resolves, why = None, str(err).splitlines()[0]
             agents.append({
                 "name": agent, "rule": policy.agents[agent], "criterion": is_criterion(rule),
                 "resolves": resolves, "why": why,
-                "providers": _per_vendor(rule) if is_criterion(rule) else {},
+                "providers": _per_vendor(rule, policy.weights_for(agent), policy) if is_criterion(rule) else {},
             })
         print(json.dumps({
-            "policy": str(policy_path()), "profiles": dict(policy.profiles), "agents": agents,
+            "policy": "server catalog" if policy.catalog is not None else str(policy_path()),
+            "catalog_cursor": policy.catalog.snapshot.cursor if policy.catalog is not None else None,
+            "stale": policy.catalog.stale if policy.catalog is not None else False,
+            "profiles": dict(policy.profiles), "agents": agents,
             "paradigms": {
                 agent: [{"paradigm": a.paradigm, "as": a.projection} for a in assignments]
                 for agent, assignments in policy.paradigms.items()
             },
         }))
         return
-    print(f"policy: {policy_path()}")
+    print(f"policy: {'server catalog ' + policy.catalog.snapshot.cursor if policy.catalog is not None else policy_path()}")
     if policy.profiles:
         print("\nprofiles")
         for name, rule in policy.profiles.items():
@@ -1056,7 +1106,7 @@ def agents_policy(json_out: bool = False) -> None:
                     if not policy.provider_active(pname):
                         continue
                     try:
-                        _, chosen = resolve_model(resolved, dict(os.environ), provider=provider_for(pname))
+                        _, chosen = resolve_model(resolved, dict(os.environ), provider=provider_for(pname), weights=policy.weights_for(agent))
                         answers.append(f"{pname} ⇒ {chosen}")
                     except ModelUnavailable as err:
                         answers.append(f"{pname} ⇒ NOTHING ({str(err).splitlines()[0].rstrip(':')})")
@@ -1253,21 +1303,29 @@ def agents_modes(provider: str = "claude") -> None:
 def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
                  name: str | None = None, model: str | None = None,
                  cwd: str | None = None, permission_mode: str | None = None,
-                 image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None) -> None:
+                 image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None,
+                 agent_id: UUID | None = None, agent_revision: UUID | None = None,
+                 delegate: str | None = None, parent_run_id: str | None = None) -> None:
     """Start an agent and return its id immediately, without waiting for it to finish.
 
     `agents run` streams until the agent is done — right at a terminal, useless to a UI — the
     panel needs the id NOW to show the agent working. Nothing is lost by letting go: the child
     leads its own session and writes its own stream, so it outlives this process.
+
+    --delegate selects the parent run's named capability and its pinned revision.
+    --agent-id plus --agent-revision selects an exact server revision directly.
+    --parent-run-id defaults to the calling agent's recorded run from its environment.
     """
 
 
     async def _go():
         handle = await _agent_runner()(
-            provider_for(provider), task, name=name or agent or provider,
+            provider_for(provider), task, name=name or agent,
             cwd=cwd or os.getcwd(), agent=agent, model=model,
             permission_mode=permission_mode,
             image_paths=tuple(image_paths or ()),
+            agent_ref=AgentCatalog.reference(agent_id, agent_revision),
+            delegate=delegate, parent_run_id=parent_run_id,
         )
         # Give the child a moment to be alive before this process exits out from under it.
         await asyncio.sleep(0.2)
@@ -1288,20 +1346,27 @@ def agents_spawn(task: str, provider: str = "claude", agent: str | None = None,
 def agents_run(task: str, provider: str = "claude", agent: str | None = None,
                name: str | None = None, model: str | None = None, cwd: str | None = None,
                permission_mode: str | None = None,
-               image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None) -> None:
+               image_paths: Annotated[list[Path] | None, Parameter(name="--image")] = None,
+               agent_id: UUID | None = None, agent_revision: UUID | None = None,
+               delegate: str | None = None, parent_run_id: str | None = None) -> None:
     """Spawn an agent and stream its events until it finishes.
 
-    ``--agent`` names a definition the CLI resolves itself (Claude Code reads
-    ``~/.claude/agents/<name>.md``), so the run IS that agent and is named after it.
+    ``--agent`` selects a server role when a catalog is configured, otherwise an installed
+    local definition. Prompt and model policy come from the same selected revision.
+
+    --delegate selects the parent run's pinned capability. --agent-id together with
+    --agent-revision selects an exact server revision; --parent-run-id selects its parent run.
     """
 
 
     async def _go() -> int:
         prov = provider_for(provider)
-        handle = await run_agent(prov, task, name=name or agent or prov.name,
+        handle = await run_agent(prov, task, name=name or agent,
                                  cwd=cwd or os.getcwd(), agent=agent, model=model,
                                  permission_mode=permission_mode,
-                                 image_paths=tuple(image_paths or ()))
+                                 image_paths=tuple(image_paths or ()),
+                                 agent_ref=AgentCatalog.reference(agent_id, agent_revision),
+                                 delegate=delegate, parent_run_id=parent_run_id)
         print(f"run_id {handle.run_id}")
         seen = 0
         while True:

@@ -112,6 +112,7 @@ _DEFERRED_EXPORTS = frozenset({
     "agents_send",
     "agents_spawn",
     "agents_stop",
+    "agents_sync",
     "agents_variables",
     "config_app",
     "config_get",

@@ -223,3 +223,30 @@ Issues and PRs welcome. Please add a failing test for a bug before fixing it, ke
 ## License
 
 [MIT](LICENSE) © Alan Blanchet
+
+## Server-owned agent definitions
+
+A configured launcher reads agent definitions, model criteria, reasoning effort, tool bindings
+and exact prompt revisions from the server. Local snapshots and generated skill files are
+replaceable caches. Transport failures may use a previously verified snapshot with a visible
+`STALE` notice; authentication or workspace refusal disables cached access.
+
+To connect an existing loopback preview, including an SSH tunnel to a remote server:
+
+```bash
+interact agents sync --endpoint http://127.0.0.1:8817 --preview
+interact agents definitions codex
+```
+
+For the existing token authentication path, pass `--token-file /absolute/private/token-file`
+in place of `--preview` and select `--workspace WORKSPACE_UUID`. The token file must satisfy
+the existing private-file checks. Remote origins require HTTPS; preview login is loopback only.
+Connection settings, private session cookies and catalog content are stored separately.
+
+A parent's delegated capability pins an exact child revision. Use `--delegate CAPABILITY`
+with `--parent-run-id RUN_UUID`, or an explicit `--agent-id UUID --agent-revision UUID`.
+The launcher retrieves historical agent and prompt records when needed, verifies their identity
+and digest, and never substitutes a newer head for a missing pin. Continuations retain the
+original selected revision. Server-side edits appear on the next sync or launch.
+
+Without a configured server catalog, existing local role policy and definitions remain available.

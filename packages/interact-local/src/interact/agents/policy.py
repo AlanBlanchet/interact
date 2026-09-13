@@ -28,7 +28,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from interact_core import AgentRevisionRef
 
+from interact.agents.catalog import AgentCatalog
+from interact.agents.catalog_connection import CatalogConnectionError
 from interact.config import UserConfig
 
 #: The two altitudes a paradigm can be projected at for one agent. Closed on purpose: a third
@@ -75,11 +78,19 @@ class Policy:
     providers: dict[str, bool] = field(default_factory=dict)
     defaults: dict[str, str] = field(default_factory=dict)
     reasoning: dict[str, str] = field(default_factory=dict)
+    catalog: AgentCatalog | None = None
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Policy":
         """Read the policy, or an empty one. A missing file is not an error — most people never
         write one, and interact's defaults must work with nothing configured at all."""
+        if path is None:
+            try:
+                catalog = AgentCatalog.active()
+            except CatalogConnectionError as error:
+                raise PolicyError(str(error)) from error
+            if catalog is not None:
+                return cls.from_catalog(catalog)
         path = Path(path) if path is not None else policy_path()
         try:
             raw = json.loads(path.read_text())
@@ -101,6 +112,79 @@ class Policy:
         )
         policy.validate()
         return policy
+
+    @classmethod
+    def from_catalog(cls, catalog: AgentCatalog) -> "Policy":
+        policy = cls(catalog=catalog)
+        # Provider installation switches are local machine preferences, not role policy.
+        try:
+            raw = json.loads(policy_path().read_text())
+        except FileNotFoundError:
+            raw = {}
+        except (OSError, ValueError) as error:
+            raise PolicyError("Cannot read local provider switches") from error
+        if not isinstance(raw, dict) or not isinstance(raw.get("providers", {}), dict):
+            raise PolicyError("Local provider switches must be an object")
+        policy.providers = dict(raw.get("providers", {}))
+        for agent in catalog.launch_agents:
+            if agent.role_key is None:
+                continue
+            if agent.criteria:
+                policy.agents[agent.role_key] = agent.criteria
+            elif agent.model is not None:
+                policy.agents[agent.role_key] = agent.model.id
+            policy.reasoning[agent.role_key] = agent.reasoning
+            policy.agent_tools[agent.role_key] = list(agent.harness_tools)
+            policy.paradigms[agent.role_key] = [
+                ParadigmAssignment(paradigm=f"{reference.key.namespace}/{reference.key.slug}", projection=projection)
+                for projection, references in (("system_prompt", agent.paradigms), ("skill", agent.skill_paradigms))
+                for reference in references
+            ]
+        policy.validate()
+        return policy
+
+    def for_launch(
+        self, role: str | None, *, reference: AgentRevisionRef | None = None,
+        parent: AgentRevisionRef | None = None, capability: str | None = None,
+    ) -> tuple["Policy", str]:
+        """Resolve a declared delegation pin before reading any model or instructions."""
+        if self.catalog is None:
+            if reference is not None or parent is not None or capability is not None:
+                raise PolicyError("Exact revision delegation requires a configured server catalog")
+            if not role:
+                raise PolicyError("Choose a named agent role; anonymous delegation bypasses role criteria")
+            return self, role
+        selected = reference
+        if capability is not None and parent is None:
+            raise PolicyError("A delegate capability requires a parent run with a recorded server revision")
+        if parent is not None:
+            parent_agent = self.catalog.at_revision(parent).revision(parent)
+            delegates = [value for value in parent_agent.capabilities if value.kind == "delegate"]
+            if capability is not None:
+                matches = [value.agent for value in delegates if value.name == capability]
+                if not matches:
+                    raise PolicyError(f"Parent revision has no delegate capability {capability!r}")
+            else:
+                identity = reference.id if reference is not None else self.catalog.snapshot.role(role).id if role else None
+                matches = list({value.agent for value in delegates if value.agent.id == identity})
+            if len(matches) > 1:
+                raise PolicyError("Parent has multiple revisions for this child; select a delegate capability")
+            if matches:
+                if reference is not None and reference != matches[0]:
+                    raise PolicyError("Requested agent revision conflicts with the parent's delegation pin")
+                selected = matches[0]
+        if selected is not None:
+            catalog = self.catalog.at_revision(selected)
+            agent = catalog.revision(selected)
+            if agent.role_key is None:
+                raise PolicyError("Pinned agent revision has no launch role key")
+            if role is not None and role != agent.role_key:
+                raise PolicyError("Requested role does not match the pinned agent revision")
+            return self.from_catalog(catalog), agent.role_key
+        if not role:
+            raise PolicyError("Choose a named role or an exact agent revision")
+        self.catalog.snapshot.role(role)
+        return self, role
 
     def validate(self) -> None:
         """Everything that can be wrong, found now rather than at spawn."""
@@ -131,11 +215,18 @@ class Policy:
     def criterion_for(self, agent: str) -> str | None:
         """What model rule this agent runs under: its profile's criterion, its own inline
         criterion, or a plain model id — whichever the file says. None when unmentioned."""
+        if self.catalog is not None:
+            self.catalog.role(agent)
         rule = self.agents.get(agent, self.defaults.get("model"))
         return None if rule is None else self.rule(rule, wearer=agent)
 
+    def weights_for(self, agent: str) -> str:
+        return "" if self.catalog is None else self.catalog.role(agent).criteria_weights
+
     def reasoning_for(self, agent: str) -> str:
         """Explicit role effort, independent of the parent session's effort."""
+        if self.catalog is not None:
+            return self.catalog.role(agent).reasoning
         return self.reasoning.get(agent, self.defaults.get("reasoning", "medium"))
 
     def rule(self, text: str, *, wearer: str | None = None) -> str:
@@ -177,6 +268,8 @@ class Policy:
 
     def tools_for(self, agent: str) -> list[str]:
         """The tools this agent may use, or [] when the policy does not restrict it."""
+        if self.catalog is not None:
+            return list(self.catalog.role(agent).harness_tools)
         members = self.agent_tools.get(agent)
         if not members:
             return []
@@ -222,6 +315,8 @@ class Policy:
         than appending a second, contradictory entry; a new paradigm is appended, order kept —
         assignment order is the order a system prompt's fragments are concatenated in.
         """
+        if self.catalog is not None:
+            raise PolicyError("Server catalog is configured; edit the agent's paradigms on the server, then sync")
         if projection not in _PROJECTIONS:
             raise PolicyError(
                 f"{projection!r} is not a paradigm projection — write one of {_PROJECTIONS}"

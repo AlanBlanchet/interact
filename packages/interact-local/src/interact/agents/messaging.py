@@ -69,12 +69,13 @@ def _policy_for_continuation(run, provider: AgentProvider):
     """Resolve current policy; dispatcher calls this again immediately before each resume."""
     try:
         policy = load_policy()
+        policy, _ = policy.for_launch(run.agent, reference=run.agent_ref)
         if not policy.provider_active(provider.name):
             raise ModelUnavailable(f"Agent provider {provider.name!r} is disabled by policy")
         criterion = policy.criterion_for(run.agent)
         if not criterion:
             raise ModelUnavailable(f"No model criterion for {run.agent!r}; configure it in the agent policy UI")
-        if not provider.valid_definition(run.agent):
+        if policy.catalog is None and not provider.valid_definition(run.agent):
             raise ModelUnavailable(f"No installed definition for {run.agent!r}")
         if run.permission_mode is not None and run.permission_mode not in {
             mode.id for mode in provider.permission_modes()
@@ -83,7 +84,7 @@ def _policy_for_continuation(run, provider: AgentProvider):
                 f"Recorded permission mode {run.permission_mode!r} is not accepted by "
                 f"{provider.name!r}; refusing continuation"
             )
-        model = resolve_model(criterion, dict(os.environ), provider=provider)[1]
+        model = resolve_model(criterion, dict(os.environ), provider=provider, weights=policy.weights_for(run.agent))[1]
         return policy, criterion, model, policy.reasoning_for(run.agent)
     except (ModelUnavailable, PolicyError, ValueError) as error:
         raise ModelUnavailable(str(error)) from error

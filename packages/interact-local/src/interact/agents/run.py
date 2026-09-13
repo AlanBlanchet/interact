@@ -19,6 +19,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 from typing import BinaryIO, Sequence
+from interact_core import AgentRevisionRef
 
 from interact.agents import registry as reg
 from interact.agents.policy import Policy, policy_path
@@ -34,6 +35,7 @@ def resolve_model(
     env: dict[str, str],
     available_only: bool = True,
     provider: AgentProvider | None = None,
+    weights: str = "",
 ) -> tuple[dict[str, str], str | None]:
     """Split a model id into (env overlay, what the vendor CLI should be asked for).
 
@@ -49,7 +51,7 @@ def resolve_model(
     """
     if not model:
         return {}, None
-    model = _resolve_criteria(model, available_only, env, provider)
+    model = _resolve_criteria(model, available_only, env, provider, weights)
     overlay = overlay_for(model, env)
     if not overlay:
         return {}, model
@@ -57,8 +59,7 @@ def resolve_model(
 
 
 def load_policy() -> Policy:
-    """Policy file, read fresh. Not cached: criterion's whole point is re-resolving — a policy
-    edited in the panel must bite on the very next spawn."""
+    """Refresh server roles when configured; otherwise read the local policy file."""
     return Policy.load()
 
 
@@ -166,6 +167,7 @@ def is_criterion(text: str) -> bool:
 def _resolve_criteria(
     model: str, available_only: bool, env: dict[str, str] | None = None,
     provider: AgentProvider | None = None,
+    weights: str = "",
 ) -> str:
     """A CRITERION where a model id goes.
 
@@ -192,7 +194,7 @@ def _resolve_criteria(
     except CriteriaError as err:
         raise ModelUnavailable(f"{model!r} is not a usable model criterion: {err}") from err
     runnable = (lambda m: provider.can_run(m, env or {})) if provider is not None else None
-    chosen = criteria.choose(available_only=available_only, runnable=runnable)
+    chosen = criteria.choose(available_only=available_only, runnable=runnable, weights=weights)
     if chosen is None:
         who = f"model the {provider.name} CLI can run" if provider is not None else "configured model"
         raise ModelUnavailable(
@@ -379,16 +381,30 @@ def launch_continuation(
     record_locked: bool = False,
 ) -> ContinuationHandle:
     """Spawn one resumed turn and start its reaper before returning to a caller."""
+    policy = load_policy()
+    policy, _ = policy.for_launch(run.agent, reference=run.agent_ref)
+    catalog = policy.catalog
+    if catalog is not None:
+        if not run.agent:
+            raise ModelUnavailable("Server catalog continuation requires a named role")
+        criterion = policy.criterion_for(run.agent)
+        if not criterion:
+            raise ModelUnavailable(f"No model criterion for {run.agent!r}")
+        model = resolve_model(criterion, dict(os.environ), provider=provider, weights=policy.weights_for(run.agent))[1]
+        reasoning = policy.reasoning_for(run.agent)
+        message = catalog.definition(run.agent, message)
     argv = provider.resume_command(
         session_id, message, model=model, permission_mode=run.permission_mode,
-        reasoning=reasoning, agent=run.agent,
+        reasoning=reasoning, agent=run.agent if catalog is None else None,
     )
+    if catalog is not None and provider.name == "claude" and policy.tools_for(run.agent):
+        argv += ["--allowedTools", ",".join(policy.tools_for(run.agent))]
     sink = reg.open_raw_events(run.run_id, append=True)
     stderr_file = tempfile.TemporaryFile()
     try:
-        env = None
+        env = {**os.environ, "INTERACT_RUN_ID": run.run_id, "INTERACT_PARENT_RUN_ID": run.run_id}
         if provider.name == "claude":
-            env = {**os.environ, "CLAUDE_CODE_EFFORT_LEVEL": reasoning}
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning
         process = subprocess.Popen(
             argv, cwd=run.cwd or ".", env=env, stdout=sink, stderr=stderr_file,
             start_new_session=True,
@@ -493,6 +509,8 @@ async def run_agent(
     name: str | None = None,
     cwd: str,
     agent: str | None = None,
+    agent_ref: AgentRevisionRef | None = None,
+    delegate: str | None = None,
     model: str | None = None,
     parent_run_id: str | None = None,
     permission_mode: str | None = None,
@@ -530,12 +548,25 @@ async def run_agent(
             f"the {provider.name!r} provider does not support image attachments"
         )
     policy = load_policy()
+    parent = parent_run_id or os.environ.get("INTERACT_PARENT_RUN_ID") or None
+    parent_run = reg.get_run(parent) if parent is not None else None
+    if policy.catalog is not None and parent is not None and (parent_run is None or parent_run.agent_ref is None):
+        raise ModelUnavailable("Parent run has no recorded server revision; start the parent again")
+    policy, agent = policy.for_launch(
+        agent, reference=agent_ref,
+        parent=parent_run.agent_ref if parent_run is not None else None, capability=delegate,
+    )
     if not policy.provider_active(provider.name):
         raise ModelUnavailable(f"Agent provider {provider.name!r} is disabled by policy")
     if not agent:
         raise ModelUnavailable("Choose a named agent role; anonymous delegation bypasses role criteria")
     run_id = str(uuid.uuid4())
-    parent = parent_run_id or os.environ.get("INTERACT_PARENT_RUN_ID") or None
+    selected_ref = None
+    definition_path = None
+    if policy.catalog is not None:
+        selected = policy.catalog.role(agent)
+        selected_ref = AgentRevisionRef(id=selected.id, revision=selected.revision)
+        definition_path = policy.catalog.definition_path(agent)
     # Policy speaks for an agent with no own model: a profile is written once, worn by many —
     # the reason it exists.
     required_model = policy.criterion_for(agent)
@@ -570,7 +601,7 @@ async def run_agent(
     else:
         # No named profile, but the model id may still carry its own routing — a company file or
         # the panel can declare `ollama/deepseek-v4-pro:cloud` directly.
-        routed, model = resolve_model(model, dict(os.environ), provider=provider)
+        routed, model = resolve_model(model, dict(os.environ), provider=provider, weights=policy.weights_for(agent))
         env.update(routed)
     if validated_images:
         _require_vlm_model(model)
@@ -578,6 +609,7 @@ async def run_agent(
     if provider.name == "claude":
         # This takes precedence over a session or agent-file effort setting.
         env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+    if provider.name == "claude" and policy.catalog is None:
         definition = provider.definition_path(agent)
         if definition is None:
             raise ModelUnavailable(f"No installed definition for {agent!r}")
@@ -596,6 +628,8 @@ async def run_agent(
         f"First progress message: [{agent}] followed by your concrete task; then start immediately.\n\n"
         f"{task}"
     )
+    if policy.catalog is not None:
+        brief = policy.catalog.definition(agent, brief)
     # argv built AFTER the model is decided: used to build first with raw text, so a criterion,
     # a `@profile` or a routed `ollama/x` id reached the binary unresolved while the resolved
     # name went only into the env and run record.
@@ -604,7 +638,7 @@ async def run_agent(
         # Once, never twice: skip the mesh when the provider's own config already registers
         # interact — else the child would carry two registrations of the same server.
         mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name) else None,
-        run_id=run_id, agent=agent, permission_mode=permission_mode,
+        run_id=run_id, agent=agent if policy.catalog is None else None, permission_mode=permission_mode,
         allowed_tools=policy.tools_for(agent), reasoning=effort,
     )
     if validated_images:
@@ -631,6 +665,7 @@ async def run_agent(
         permission_mode=permission_mode, requested_criterion=required_model,
         reasoning=effort,
         provider_session_id=run_id if provider.name == "claude" else None,
+        agent_ref=selected_ref, definition_path=definition_path,
     )
     pump = asyncio.create_task(_reap(run_id, process, registered.lifecycle_token))
     # Keep the panel's copy of the stream current WHILE it works: a running agent can be watched,

@@ -24,7 +24,7 @@ from typing import BinaryIO, Literal
 import fcntl
 
 from pydantic import BaseModel, Field, PrivateAttr
-from interact_core import PromptExecutionRef
+from interact_core import AgentRevisionRef, PromptExecutionRef
 
 from interact.agents.events import AgentEvent
 from interact.agents.providers import PROVIDERS
@@ -74,6 +74,7 @@ class AgentRun(BaseModel):
     #: prompt and tool set (Claude Code: ``~/.claude/agents/<agent>.md``). None for a plain run.
     #: Without it a run knows its label but not what it actually IS, so nothing can link to it.
     agent: str | None = None
+    agent_ref: AgentRevisionRef | None = None
     #: Where that definition's system prompt actually lives, resolved at registration. The name
     #: alone is answerable only by a caller that can import this module and ask the provider —
     #: and the panel reads these records straight off disk, so a name it can't resolve is a link
@@ -504,12 +505,16 @@ def register(*, run_id: str, pid: int | None, provider: str, name: str, task: st
              cwd: str = "", model: str | None = None, parent_run_id: str | None = None,
              agent: str | None = None, permission_mode: str | None = None,
              requested_criterion: str | None = None, reasoning: str | None = None,
-             provider_session_id: str | None = None) -> AgentRun:
+             provider_session_id: str | None = None,
+             agent_ref: AgentRevisionRef | None = None,
+             definition_path: Path | None = None) -> AgentRun:
     provider_impl = PROVIDERS.get(provider)
-    definition = provider_impl.definition_path(agent) if (provider_impl and agent) else None
+    definition = definition_path
+    if definition is None and agent_ref is None:
+        definition = provider_impl.definition_path(agent) if (provider_impl and agent) else None
     run = AgentRun(run_id=run_id, pid=pid, provider=provider, name=name, task=task, cwd=cwd,
                    project=project_for(cwd), model=model, parent_run_id=parent_run_id,
-                   agent=agent, definition_path=str(definition) if definition else None,
+                   agent=agent, agent_ref=agent_ref, definition_path=str(definition) if definition else None,
                    permission_mode=permission_mode, requested_criterion=requested_criterion,
                    reasoning=reasoning,
                    provider_session_id=provider_session_id,
@@ -612,7 +617,7 @@ def _backfill_definition(run: AgentRun) -> AgentRun:
     of one vendor's directory layout, which is the hard-coding the field exists to remove. Repaired
     on disk rather than re-resolved on every read, so it costs one write per stale record, once.
     """
-    if run.definition_path is not None or not run.agent:
+    if run.definition_path is not None or not run.agent or run.agent_ref is not None:
         return run
     provider = PROVIDERS.get(run.provider)
     resolved = provider.definition_path(run.agent) if provider is not None else None

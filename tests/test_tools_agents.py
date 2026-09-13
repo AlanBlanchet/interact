@@ -7,8 +7,10 @@ ones. These tests pin that, because an error an agent can't act on stalls a whol
 
 import ast
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+from interact_core import AgentRevisionRef
 
 import interact.server as srv
 import interact.server.tools_agents as tools_agents
@@ -150,6 +152,33 @@ async def test_an_agent_can_be_spawned_by_its_definition_name(monkeypatch):
     monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
     await srv.agent_spawn("review it", agent="code-reviewer")
     assert seen["agent"] == "code-reviewer", "the definition must reach the CLI"
+
+
+@pytest.mark.asyncio
+async def test_mcp_validates_and_forwards_exact_revision_without_latest_lookup(monkeypatch):
+    reference = AgentRevisionRef(id=uuid4(), revision=uuid4())
+    seen = []
+
+    async def launch(provider, task, **kwargs):
+        seen.append(kwargs)
+
+        class Handle:
+            run_id, name, pid = "fixture-pinned", "Fixture pinned", 1
+
+        return Handle()
+
+    def forbidden_lookup(*args, **kwargs):
+        pytest.fail("pinned MCP launch tried resolving latest local definition")
+
+    monkeypatch.setattr(tools_agents, "run_agent", launch)
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.available", lambda self: True)
+    monkeypatch.setattr("interact.agents.providers.ClaudeCodeProvider.valid_definition", forbidden_lookup)
+    result = await srv.mcp.call_tool("agent_spawn", {
+        "task": "Bounded task", "agent": "fixture-worker", "agent_ref": reference.model_dump(mode="json"),
+        "delegate": "ask_worker",
+    })
+    assert result
+    assert seen[0]["agent_ref"] == reference and seen[0]["delegate"] == "ask_worker"
 
 
 @pytest.mark.asyncio

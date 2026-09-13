@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Protocol
 
+from interact.agents.catalog import AgentCatalog
 from interact.agents.events import AgentEvent
 from interact.agents.profiles import overlay_for
 from interact.models import Model
@@ -281,6 +282,9 @@ class AgentProvider(ABC):
         out of the definitions directory into something a person clicks. A CLI with no
         definitions concept accepts nothing, correctly: nothing for the name to resolve to.
         """
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            return any(value.role_key == agent for value in catalog.snapshot.agents)
         if not agent or "/" in agent or "\\" in agent or agent.startswith("."):
             return False  # absolute: this becomes a path, and a path is what must not escape
         known = self.agent_definitions()
@@ -564,11 +568,17 @@ class ClaudeCodeProvider(AgentProvider):
         return argv
 
     def definition_path(self, agent: str) -> Path | None:
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            return catalog.definition_path(agent)
         path = Path.home() / ".claude" / "agents" / f"{agent}.md"
         return path if path.exists() else None
 
     def agent_definitions(self) -> list[str]:
         """Claude Code resolves ``--agent <name>`` against ``~/.claude/agents/<name>.md``."""
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            return sorted(value.role_key for value in catalog.snapshot.agents if value.role_key is not None)
         try:
             return sorted(p.stem for p in (Path.home() / ".claude" / "agents").glob("*.md"))
         except OSError:
@@ -799,6 +809,9 @@ class CodexProvider(AgentProvider):
     def _inject_definition(self, agent: str | None, task: str) -> str:
         if not agent:
             return task
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            return catalog.definition(agent, task)
         definition = self.definition_path(agent)
         if definition is None:
             raise ValueError(f"Codex role {agent!r} has no generated prompt definition")
@@ -808,6 +821,9 @@ class CodexProvider(AgentProvider):
         return f"AGENT_ROLE: {agent}\n\n{instructions}\n\nDelegated task:\n{task}"
 
     def definition_path(self, agent: str) -> Path | None:
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            return catalog.definition_path(agent)
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", agent):
             return None
         root = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "interact/prompts"
@@ -816,6 +832,9 @@ class CodexProvider(AgentProvider):
         return found[0] if len(found) == 1 else None
 
     def agent_definitions(self) -> list[str]:
+        catalog = AgentCatalog.active()
+        if catalog is not None:
+            return sorted(value.role_key for value in catalog.snapshot.agents if value.role_key is not None)
         root = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "interact/prompts/agents"
         return sorted(path.stem for path in root.glob("*.md"))
 
