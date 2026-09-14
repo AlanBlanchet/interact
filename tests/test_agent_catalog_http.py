@@ -29,7 +29,7 @@ def test_real_server_two_revisions_cli_sync_and_cache_recreation(tmp_path):
     origin = f'http://127.0.0.1:{port}'
     env = {'PATH': os.defpath, 'HOME': str(root), 'TMPDIR': str(root), 'PYTHONDONTWRITEBYTECODE': '1',
            'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
-           'PYTHONPATH': os.pathsep.join(filter(None, (os.environ.get('PYTHONPATH'), str(public / 'packages/interact-local/src')))),
+           'PYTHONPATH': os.pathsep.join(filter(None, (os.environ.get('PYTHONPATH'), str(public / 'src')))),
            'INTERACT_CSRF_SECRET_HEX': 'ab' * 32, 'INTERACT_MAIL_KEY_HEX': 'cd' * 32,
            'OLLAMA_DISCOVERY': '0', 'BENCHMARK_SCORES': ''}
     with (root / 'server.log').open('w+') as log:

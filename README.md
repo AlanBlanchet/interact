@@ -8,7 +8,7 @@
 
 Interact has a public client, a shared public contracts package, and a private server:
 
-- `packages/interact-local` — the `interact` Python import, CLI, MCP server, automation, local
+- `src/interact` — the `interact` Python import, CLI, MCP server, automation, local
   sessions, and explicit API routes.
 - `interact-core` — the standalone dependency-light contracts package and its generated JSON Schema,
   shared by every surface; `clients/vscode` consumes the generated TypeScript form. In the private

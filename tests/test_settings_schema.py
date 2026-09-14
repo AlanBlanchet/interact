@@ -75,7 +75,7 @@ def test_nested_default_and_numeric_constraints_have_one_declarative_owner() -> 
     size = by_key("desktop.nestedSize")
     assert size.pattern == r"^[1-9]\d*x[1-9]\d*$"
     for exported in (
-        Path("packages/interact-local/src/interact/data/settings.json"),
+        Path("src/interact/data/settings.json"),
         Path("clients/vscode/src/settings.json"),
     ):
         projected = next(item for item in json.loads(exported.read_text())["settings"]

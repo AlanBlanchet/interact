@@ -1,4 +1,4 @@
-"""Tests for packages/interact-local/src/interact/benchmarks/upstream.py."""
+"""Tests for src/interact/benchmarks/upstream.py."""
 
 from __future__ import annotations
 

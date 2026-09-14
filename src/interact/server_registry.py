@@ -32,7 +32,7 @@ def _runtime_dir() -> Path:
 
 def _source_version() -> str | None:
     """The version in the source tree's pyproject.toml when interact runs from an editable checkout
-    (``packages/interact-local/src/interact/`` below the repo root). None for a wheel install — there the
+    (``src/interact/`` below the repo root). None for a wheel install — there the
     installed metadata IS the latest, so no drift is possible without a reinstall+restart."""
     try:
         import tomllib

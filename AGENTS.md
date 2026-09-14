@@ -24,15 +24,15 @@ Public and private halves:
 - User feedback arrives as GitHub issues on the public repo — `.github/ISSUE_TEMPLATE/` shapes the
   human ones, interact's own `report_issue` tool files the agent ones.
 
-Ownership (short names map to the standalone `../interact-core` checkout and `packages/interact-local`):
+Ownership (short names map to the standalone `../interact-core` checkout and `src/interact`):
 
 - `interact-core` — provider-independent contracts and generated API models shared by every surface.
   Source of truth for tool APIs, schemas and payloads; the tool docstrings carry the behaviour. An
   old parameter or tool name survives only if `interact-core` still declares it.
 Tool target routing is defined by `_instructions()` in
-`packages/interact-local/src/interact/server/core.py` and individual tool docstrings.
+`src/interact/server/core.py` and individual tool docstrings.
 
-- `interact-local` — the local implementation: `server` (service lifecycle, target resolution,
+- `src/interact` — the local implementation: `server` (service lifecycle, target resolution,
   capture, analysis dispatch, tool surfaces), `desktop` (isolated displays, input, windows,
   coordinates, recording, accessibility), `cli`, and `config` (typed settings plus the schema every
   front end reads).

@@ -10,7 +10,7 @@ from interact.state import InteractiveElement, PageState, _visible_text, ref_loc
 
 _ANNOTATE_JS = (
     Path(__file__).parents[1]
-    / "packages" / "interact-local" / "src" / "interact" / "js" / "annotate_elements.js"
+    / "src" / "interact" / "js" / "annotate_elements.js"
 ).read_text()
 
 

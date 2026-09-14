@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RELOCATIONS = (
-    ("src/interact", "packages/interact-local/src/interact"),
+    ("packages/interact-local", "src/interact"),
     ("vscode-extension", "clients/vscode"),
     ("docs", "site"),
 )
@@ -38,7 +38,7 @@ def test_public_prompt_contracts_are_exported_to_schema_and_vscode() -> None:
 
 def test_public_python_has_no_private_cloud_dependency() -> None:
     public_roots = (
-        ROOT / "packages/interact-local/src",
+        ROOT / "src",
     )
     assert all(root.is_dir() for root in public_roots)
     for root in public_roots:
@@ -57,6 +57,6 @@ def test_precommit_hook_targets_only_the_relocated_release_graph() -> None:
     hook = (ROOT / ".githooks/pre-commit").read_text()
 
     assert "vscode-extension/" not in hook
-    assert "^src/interact/" not in hook
+    assert "packages/interact-local" not in hook
     assert "clients/vscode" in hook
-    assert "packages/interact-local/src/interact" in hook
+    assert "^src/interact/" in hook

@@ -7,7 +7,7 @@
 
 /** Everything a RESELLER or a release process appends, in no particular order — applied to a
  *  fixpoint below, so stacking them in any sequence still collapses to one name. Python twin is
- *  _SUFFIXES in packages/interact-local/src/interact/model_catalog.py; both held to
+ *  _SUFFIXES in src/interact/model_catalog.py; both held to
  *  tests/data/bare_model_names.json, since two hand-kept copies of these pairs drifted. */
 const SUFFIXES: RegExp[] = [
   /@.*$/,                                 // a revision pin: @default, @20251001

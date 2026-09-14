@@ -1,4 +1,4 @@
-"""Parametrized tests for packages/interact-local/src/interact/parsing.py."""
+"""Parametrized tests for src/interact/parsing.py."""
 
 from __future__ import annotations
 

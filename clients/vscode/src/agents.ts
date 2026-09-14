@@ -4,7 +4,7 @@
  *  spawning and stopping. The panel is a window onto that, which is why a run's status here is
  *  whatever Python derived from the live pid — the extension never guesses liveness itself.
  *
- *  Mirrors interact.agents.registry (packages/interact-local/src/interact/agents/registry.py);
+ *  Mirrors interact.agents.registry (src/interact/agents/registry.py);
  *  tests/test_paths.py binds the directory the two agree on.
  */
 import * as fs from "fs";
