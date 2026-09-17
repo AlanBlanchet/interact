@@ -1012,11 +1012,6 @@ async def test_invalid_json_schema_fails_before_api_dispatch(monkeypatch) -> Non
     assert calls == 0
 
 
-def test_media_item_decoded_size_preflight_accounts_for_base64_padding() -> None:
-    exact = MediaItem.from_bytes(b"fLaC", "audio", "audio/flac")
-    assert exact.decoded(max_bytes=4) == b"fLaC"
-    with pytest.raises(ValueError, match="exceeds"):
-        exact.decoded(max_bytes=3)
 
 
 def test_media_provider_order_is_typed_unique_and_registry_bound() -> None:
@@ -1111,50 +1106,6 @@ async def test_explicit_media_pin_failure_never_dispatches_a_fallback(monkeypatc
     assert calls == [primary.id]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("weights", "expected"),
-    [("aa.mmmu_pro=0.8,gui.screenspot=0.2", "openai/visual-a"),
-     ("aa.mmmu_pro=0.2,gui.screenspot=0.8", "openai/visual-b")],
-)
-async def test_normalized_weights_flip_the_actual_configured_media_route(
-    monkeypatch, weights: str, expected: str,
-) -> None:
-    first = Model(id="openai/visual-a", provider="openai", capabilities={ModelCapability.VLM})
-    second = Model(id="openai/visual-b", provider="openai", capabilities={ModelCapability.VLM})
-    scores = {"mmmu_pro": (0.9, 0.6), "screenspot": (0.5, 0.95)}
-    monkeypatch.setattr(Model, "catalog", lambda: [first, second])
-    monkeypatch.setattr(Model, "_registry", [first, second])
-    monkeypatch.setattr(Model, "is_available", lambda self: True)
-    monkeypatch.setattr(
-        "interact.criteria.benchmark_tables.load_tables",
-        lambda: {
-            benchmark_id: PublishedTable(
-                source_url="https://example.test", retrieved="2026-09-06", freshness="current",
-                entries=[PublishedEntry(model_name=first.id.split("/", 1)[1], model_id=first.id,
-                                        score=values[0], status="eligible"),
-                         PublishedEntry(model_name=second.id.split("/", 1)[1], model_id=second.id,
-                                        score=values[1], status="eligible")],
-            )
-            for benchmark_id, values in scores.items()
-        },
-    )
-    calls: list[str] = []
-
-    async def api(
-        media, context, config, prompt, max_tokens, response_format, model, _dispatch_state,
-    ):
-        calls.append(model)
-        return VLMResult(text="selected", elapsed=0, model=model, backend="api")
-
-    monkeypatch.setattr(vision, "_api_media_completion", api)
-    await analyze_media(
-        [MediaItem.from_bytes(solid_png(12, 8, (0, 0, 128)))], "context",
-        Config(media_backend="api", media_billing="api_allowed", media_criteria="cap.vlm",
-               media_criteria_weights=weights),
-        role="image",
-    )
-    assert calls == [expected]
 
 
 @pytest.mark.asyncio
@@ -1825,15 +1776,6 @@ async def test_api_path_validates_media_signature_before_dispatch(monkeypatch) -
         await analyze_media([item], "context", cfg, role="image", _api_model="openai/example")
 
 
-@pytest.mark.parametrize("timestamp", [math.nan, math.inf])
-def test_media_item_rejects_non_finite_timestamps(timestamp: float) -> None:
-    with pytest.raises(ValueError, match="finite"):
-        MediaItem(
-            data=base64.b64encode(solid_png(12, 8, (0, 0, 128))).decode(),
-            media_type="image",
-            mime_type="image/png",
-            timestamp_seconds=timestamp,
-        )
 
 
 @pytest.mark.asyncio

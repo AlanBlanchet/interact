@@ -4,10 +4,12 @@ reaching a model as if it were real audio.
 """
 
 import base64
+import math
 
 import pytest
 
 from interact.vision import MediaItem
+from tests.support import solid_png
 
 
 def test_media_item_rejects_malformed_base64_at_construction() -> None:
@@ -45,3 +47,21 @@ def test_media_item_rejects_malformed_mpeg_sync(prefix: bytes) -> None:
 def test_media_item_rejects_invalid_mpeg_header_fields(header: bytes) -> None:
     with pytest.raises(ValueError, match="does not match"):
         MediaItem.from_bytes(header, "audio", "audio/mpeg").decoded()
+
+
+def test_media_item_decoded_size_preflight_accounts_for_base64_padding() -> None:
+    exact = MediaItem.from_bytes(b"fLaC", "audio", "audio/flac")
+    assert exact.decoded(max_bytes=4) == b"fLaC"
+    with pytest.raises(ValueError, match="exceeds"):
+        exact.decoded(max_bytes=3)
+
+
+@pytest.mark.parametrize("timestamp", [math.nan, math.inf])
+def test_media_item_rejects_non_finite_timestamps(timestamp: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        MediaItem(
+            data=base64.b64encode(solid_png(12, 8, (0, 0, 128))).decode(),
+            media_type="image",
+            mime_type="image/png",
+            timestamp_seconds=timestamp,
+        )

@@ -170,3 +170,49 @@ async def test_expired_cached_table_reloads_stale_and_stops_before_dispatch(monk
                    media_criteria="aa.mmmu_pro > 0.5"),
             role="image",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("weights", "expected"),
+    [("aa.mmmu_pro=0.8,gui.screenspot=0.2", "openai/visual-a"),
+     ("aa.mmmu_pro=0.2,gui.screenspot=0.8", "openai/visual-b")],
+)
+async def test_normalized_weights_flip_the_actual_configured_media_route(
+    monkeypatch, weights: str, expected: str,
+) -> None:
+    first = Model(id="openai/visual-a", provider="openai", capabilities={ModelCapability.VLM})
+    second = Model(id="openai/visual-b", provider="openai", capabilities={ModelCapability.VLM})
+    scores = {"mmmu_pro": (0.9, 0.6), "screenspot": (0.5, 0.95)}
+    monkeypatch.setattr(Model, "catalog", lambda: [first, second])
+    monkeypatch.setattr(Model, "_registry", [first, second])
+    monkeypatch.setattr(Model, "is_available", lambda self: True)
+    monkeypatch.setattr(
+        "interact.criteria.benchmark_tables.load_tables",
+        lambda: {
+            benchmark_id: PublishedTable(
+                source_url="https://example.test", retrieved="2026-09-06", freshness="current",
+                entries=[PublishedEntry(model_name=first.id.split("/", 1)[1], model_id=first.id,
+                                        score=values[0], status="eligible"),
+                         PublishedEntry(model_name=second.id.split("/", 1)[1], model_id=second.id,
+                                        score=values[1], status="eligible")],
+            )
+            for benchmark_id, values in scores.items()
+        },
+    )
+    calls: list[str] = []
+
+    async def api(
+        media, context, config, prompt, max_tokens, response_format, model, _dispatch_state,
+    ):
+        calls.append(model)
+        return VLMResult(text="selected", elapsed=0, model=model, backend="api")
+
+    monkeypatch.setattr(vision, "_api_media_completion", api)
+    await analyze_media(
+        [MediaItem.from_bytes(solid_png(12, 8, (0, 0, 128)))], "context",
+        Config(media_backend="api", media_billing="api_allowed", media_criteria="cap.vlm",
+               media_criteria_weights=weights),
+        role="image",
+    )
+    assert calls == [expected]

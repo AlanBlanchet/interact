@@ -18,7 +18,7 @@ import pytest
 
 from interact.desktop import ABS_MAX, DesktopWindow, NestedBackend, _DRAG_STEPS, screen_to_abs
 from interact.desktop.backend import PortableBackend
-from tests.support.desktop import desktop_window as make_window
+from tests.support.desktop import desktop_window
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def mock_run():
 
 @pytest.fixture
 def _win():
-    return make_window()
+    return desktop_window()
 
 
 @pytest.mark.parametrize("button", [1, 3], ids=["left", "right"])

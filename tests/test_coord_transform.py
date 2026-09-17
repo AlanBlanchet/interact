@@ -8,12 +8,12 @@ import pytest
 
 from interact.desktop import Box, CoordTransform
 from interact.desktop.frames import Frame
-from tests.support.desktop import desktop_window as make_window
+from tests.support.desktop import desktop_window
 
 
 @pytest.fixture
 def _win():
-    return make_window()
+    return desktop_window()
 
 
 @pytest.mark.parametrize(

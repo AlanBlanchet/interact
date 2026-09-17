@@ -14,7 +14,7 @@
 import pytest
 
 from interact.desktop import DesktopElement, DesktopWindow
-from tests.support.desktop import desktop_window as make_window
+from tests.support.desktop import desktop_window
 
 
 
@@ -56,7 +56,7 @@ class _SafetyBackend:
 
 
 def _bound_win(backend):
-    return make_window(name="App", backend=backend)
+    return desktop_window(name="App", backend=backend)
 
 
 def test_scroll_restores_a_window_the_wheel_resized():

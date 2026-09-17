@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from interact.desktop import DesktopBackend, DesktopWindow, NestedBackend
 
 
@@ -41,16 +39,6 @@ def bare_nested_backend(display: str | None = ":88", size: tuple[int, int] = (40
     nb._repaint_useless = set()
     nb._repaint_attempts = {}
     return nb
-
-
-@pytest.fixture(autouse=True)
-def _desktop_gate_open(desktop_gate_open) -> None:
-    """Back-compat shim: the real fixture now lives in ``conftest.py`` as opt-in
-    (``desktop_gate_open``), requested by name — an autouse fixture belongs where every test can
-    see it turned on, not hidden in a support module that goes live merely by being imported. This
-    autouse alias only exists because a small number of test files still import this exact name
-    for its old live-by-import behaviour; a new caller should request ``desktop_gate_open``
-    directly instead of importing this one."""
 
 
 class RecordingBackend(DesktopBackend):

@@ -15,7 +15,7 @@ import pytest
 from interact.agents import agent_queue, messaging
 from interact.agents import registry as reg
 from interact.agents.providers import PermissionMode
-from tests.support import install_provider, register_run, use_policy
+from tests.support import ScriptedProvider, install_provider, register_run, use_policy
 
 
 def test_an_unknown_run_id_says_how_to_find_the_real_ones():
@@ -97,14 +97,17 @@ def test_delivery_accepts_the_id_the_list_printed(monkeypatch):
     assert error is None and run.run_id.startswith("abcd1234")
 
 
-class _DeliveryProvider:
-    def validate_tool_policy(self, allowed_tools, denied_tools):
-        assert not allowed_tools and not denied_tools
+class _DeliveryProvider(ScriptedProvider):
+    """The delivery side of the shared scripted provider: it records the queue/resume argv it was
+    asked for instead of running one."""
 
     name = "fake"
     can_resume = True
     can_queue = True
-    calls = []
+    calls: list = []
+
+    def validate_tool_policy(self, allowed_tools, denied_tools):
+        assert not allowed_tools and not denied_tools
 
     def valid_definition(self, agent):
         return True
@@ -141,12 +144,6 @@ class _ResumeProvider(_DeliveryProvider):
     def resume_command(self, session_id, message, **kwargs):
         self.calls.append(("resume", session_id, message, kwargs))
         return [sys.executable, "-c", self.script]
-
-    def parse(self, line):
-        from interact.agents.providers import ClaudeCodeProvider
-
-        return ClaudeCodeProvider().parse(line)
-
 
 def _continuation_policy(monkeypatch):
     provider = _DeliveryProvider()

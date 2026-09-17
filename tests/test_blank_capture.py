@@ -23,18 +23,14 @@ from tests.support import varied_png as _varied_png
 from tests.support import solid_png
 
 
-def _png(fill=(0, 0, 0), size=(320, 200), speckle: int = 0) -> bytes:
-    return solid_png(size[0], size[1], fill, speckle=speckle)
-
-
 def test_an_all_black_capture_is_reported_blank_with_its_colour():
-    reason = blank_frame_reason(_png((0, 0, 0)))
+    reason = blank_frame_reason(solid_png((320, 200), colour=(0, 0, 0)))
     assert reason and "#000000" in reason, reason
 
 
 def test_a_white_capture_is_blank_too():
     """A crashed GPU surface grabs black; a blank page grabs white. Both are "nothing to see"."""
-    assert blank_frame_reason(_png((255, 255, 255)))
+    assert blank_frame_reason(solid_png((320, 200), colour=(255, 255, 255)))
 
 
 def test_the_check_errs_toward_sending_the_frame():
@@ -42,13 +38,13 @@ def test_the_check_errs_toward_sending_the_frame():
     it — the failure this whole gate exists to avoid, in the other direction. Wrongly calling an
     empty one real just spends a model call. So visible content at small size wins, even a
     scattering of it."""
-    assert blank_frame_reason(_png((0, 0, 0), speckle=40)) is None
+    assert blank_frame_reason(solid_png((320, 200), colour=(0, 0, 0), speckle=40)) is None
 
 
 def test_a_full_size_crashed_window_is_caught():
     """The reported case, at the size it was reported at: an entirely black 1440x900 capture of a
     window that had crashed."""
-    assert blank_frame_reason(_png((0, 0, 0), size=(1440, 900)))
+    assert blank_frame_reason(solid_png((1440, 900), colour=(0, 0, 0)))
 
 
 def test_a_real_screenful_is_not_blank():
@@ -62,7 +58,7 @@ async def test_a_blank_capture_is_never_sent_to_the_vlm():
     import interact.server as srv
 
     out = await srv.vlm._media_response(
-        _png((0, 0, 0), size=(400, 300)), "Desktop window: Code (1920x1080)", "what is on screen?"
+        solid_png((400, 300), colour=(0, 0, 0)), "Desktop window: Code (1920x1080)", "what is on screen?"
     )
     assert out.text and out.text.startswith("ERROR:"), out
     assert "blank" in out.text.lower()
@@ -98,7 +94,7 @@ async def test_a_black_window_capture_says_so_even_with_no_query(monkeypatch):
         wid, name, w, h = 33554476, "interact - Visual Studio Code", 1440, 900
 
         def capture(self):
-            return _png((0, 0, 0), size=(240, 150))
+            return solid_png((240, 150), colour=(0, 0, 0))
 
     monkeypatch.setattr(srv.targets, "_resolve_target", lambda *a, **k: (DeadWindow(), None, None))
 
@@ -137,7 +133,7 @@ async def test_a_normal_window_capture_carries_no_such_note(monkeypatch):
 
 @pytest.mark.parametrize("size", [(8, 8), (16, 16), (24, 24), (32, 32), (48, 48), (120, 90)])
 def test_a_blank_crop_is_detected_at_any_size(size):
-    assert blank_frame_reason(_png((0, 0, 0), size=size)), f"{size[0]}x{size[1]} blank frame missed"
+    assert blank_frame_reason(solid_png(size, colour=(0, 0, 0))), f"{size[0]}x{size[1]} blank frame missed"
 
 
 @pytest.mark.parametrize("size", [(16, 16), (64, 64), (200, 200)])
@@ -152,7 +148,7 @@ async def test_the_judgement_tools_are_gated_too():
     path left the two tools most exposed to #112 still exposed."""
     import interact.server as srv
 
-    r = await srv.vlm._vlm(_png((0, 0, 0), size=(400, 300)), "ctx", "what is wrong here?")
+    r = await srv.vlm._vlm(solid_png((400, 300), colour=(0, 0, 0)), "ctx", "what is wrong here?")
     assert r.text.startswith("ERROR:") and "blank" in r.text
     assert r.model == "(not called)", "it must be visible that no model ran"
 
@@ -289,3 +285,27 @@ def test_the_local_backend_reports_an_unreadable_window_the_same_way(monkeypatch
     with pytest.raises(CaptureError) as exc:
         backend.capture_window("doomed")
     assert "doomed" in str(exc.value)
+
+
+def test_blank_gpu_surface_capture_raises_actionable_error(monkeypatch):
+    """An Android-emulator / GPU-surface window grabs uniform black via X — don't hand back a
+    black image; raise a clear error naming the cause + the adb/compositor fixes."""
+    import io
+    from PIL import Image as PILImage
+    from interact.desktop import CaptureError
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", (40, 40), "black").save(buf, format="PNG")
+    black = buf.getvalue()
+
+    def fake(cmd, *a, **k):  # maim → black; xdotool geometry → a valid region
+        if cmd[0] == "xdotool":
+            return "WIDTH=388\nHEIGHT=863\nX=0\nY=0\n"
+        return black
+
+    monkeypatch.setattr("interact.desktop.subprocess.check_output", fake)
+    win = DesktopWindow(name="Android Emulator - Pixel_7:5554", wid=123, x=0, y=0, w=388, h=863)
+    with pytest.raises(CaptureError) as exc:
+        win.capture()
+    msg = str(exc.value)
+    assert "GPU" in msg and "adb" in msg and "Android Emulator" in msg
