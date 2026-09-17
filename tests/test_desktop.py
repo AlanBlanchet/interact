@@ -304,8 +304,9 @@ async def test_backend_scroll_threads_axis(direction, amount, expected):
 @pytest.mark.asyncio
 async def test_desktop_drag_commands(mock_run, _win):
     await _win.drag(0, 0, 100, 100, steps=5)
-    # activate + mousemove start + mousedown + 5 intermediate mousemoves + mouseup = 9
-    assert mock_run.call_count == 9
+    # activate + mousemove start + mousedown + 5 intermediate mousemoves + mouseup
+    # + one settle move at the drop point, which releases the webview's mouse capture (#136) = 10
+    assert mock_run.call_count == 10
     mock_run.assert_any_call("xdotool", "windowactivate", "--sync", "123")
     mock_run.assert_any_call("xdotool", "mousemove", "--window", "123", "0", "0")
     mock_run.assert_any_call("xdotool", "mousedown", "1")

@@ -855,6 +855,19 @@ async def run_agent(
         finally:
             sink.close()  # the child holds its own dup of the fd
             stderr.close()
+        # The child resolves its owning conversation from this run's record, so the record must
+        # exist before it can ask — the probe otherwise sits between spawn and register and the
+        # child reads a stale owner. Registering here also means a candidate skipped for quota
+        # leaves a record saying so, instead of vanishing.
+        reg.register(
+            run_id=run_id, pid=candidate_process.pid, provider=candidate_provider.name, name=label,
+            task=task, cwd=cwd, model=candidate_model, parent_run_id=parent, agent=agent,
+            permission_mode=candidate_permission_mode, requested_criterion=required_model,
+            mesh_enabled=mesh, reasoning=effort,
+            candidates=candidates, skipped=tuple(skipped), denied_tools=denied_tools,
+            provider_session_id=run_id if candidate_provider.name == "claude" else None,
+            agent_ref=selected_ref, definition_path=definition_path,
+        )
         quota_reason = await _quota_probe(run_id, candidate_process)
         if quota_reason is not None:
             if candidate_process.returncode is None:

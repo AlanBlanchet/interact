@@ -46,7 +46,7 @@ def test_dump_input_writes_both_files(tmp_path):
 def test_el_report_never_leaks_coordinates(monkeypatch):
     import interact.actions.dispatch as dispatch
 
-    monkeypatch.setattr(dispatch, "_fmt_cursor", lambda: "default")
+    monkeypatch.setattr(dispatch, "_fmt_cursor", lambda win=None: "default")
 
     class _El:
         index, role, name, center_x, center_y = 2, "button", "Submit", 137, 451
@@ -62,7 +62,7 @@ def test_xy_report_states_the_coordinates_it_acted_on(monkeypatch):
     literal input, and omitting them left it unable to tell where the click landed (#81)."""
     import interact.actions.dispatch as dispatch
 
-    monkeypatch.setattr(dispatch, "_fmt_cursor", lambda: "default")
+    monkeypatch.setattr(dispatch, "_fmt_cursor", lambda win=None: "default")
     report = dispatch._xy_report("clicked", 137, 451)
     assert "(137,451)" in report  # the pixel actually acted on
     assert "hint" not in report.lower()  # no prescriptive nudge
