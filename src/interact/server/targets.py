@@ -93,7 +93,15 @@ def _sandbox_death_diagnostics(backend) -> str:
     """Why the sandbox is empty, when it can be told: a dead nested X server (with its decoded
     exit signal — SIGKILL points at the host OOM-killer, not interact) and the last app's own
     output. Without this a caller couldn't distinguish "the app crashed" from "the host killed
-    the whole sandbox" from "interact lost track of it" (#84)."""
+    the whole sandbox" from "interact lost track of it" (#84).
+
+    ``backend`` here is always the CURRENT (fresh) sandbox — `_get_sandbox` already self-healed a
+    dead one before this runs, so its own `display_health` reports "alive" and says nothing about
+    why the window this call was looking for is gone. `sandbox.last_replace_reason()` carries that
+    forward from the respawn instead of leaving it silently swallowed (#141)."""
+    if replaced := sandbox.last_replace_reason():
+        return f"The sandbox was recreated automatically — the previous one: {replaced}\n"
+
     def _text(fn_name: str) -> str:
         """A diagnostic string from the backend, or "" — never anything that could break the
         resolution this only annotates."""

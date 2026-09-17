@@ -237,6 +237,23 @@ class DesktopBackend(ABC):
             self.move(fx + (tx - fx) * i / steps, fy + (ty - fy) * i / steps)
             time.sleep(0.01)
         self.mouse_up()
+        self._settle_after_drag(tx, ty)
+
+    def _settle_after_drag(self, x: float, y: float) -> None:
+        """A no-op move at the drop point, right after the release (#136).
+
+        A nested Electron/Chromium target can end a drag still believing the button is held: its
+        internal mouse-capture tracking is reconciled by the NEXT motion/button event it
+        receives, and our synthetic sequence ends exactly at ``mouse_up`` with nothing after it —
+        so a webview that captured the pointer for the drag never sees the event that would tell
+        it the button is up, and stays dead to every following click. One extra MotionNotify at
+        the same point (button state now clear) costs nothing and flushes it. Best-effort: any
+        backend that overrides ``move`` to raise on a redundant call degrades to the old
+        (occasionally-stuck) behaviour rather than crashing the drag that just completed."""
+        try:
+            self.move(x, y)
+        except Exception:
+            pass
 
     def type_text(self, text: str) -> None:
         """Type a literal string into whatever currently has focus."""
@@ -299,6 +316,7 @@ class DesktopBackend(ABC):
             time.sleep(0.01)
         self.move(cx, cy)
         self.mouse_up()
+        self._settle_after_drag(cx, cy)
 
     def close(self) -> None:  # noqa: B027 — optional teardown
         pass

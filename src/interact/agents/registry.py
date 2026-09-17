@@ -50,12 +50,17 @@ ConversationCapability = Literal[
 ]
 _RUN_ID = re.compile(r"^[A-Za-z0-9._:@+-]{1,160}$")
 _SESSION_ID: ContextVar[str | None] = ContextVar("agent_session_id", default=None)
-#: Why a ranked candidate was passed over BEFORE anything ran. Every value is a fact about this
-#: machine or the caller's request, never about the task: a denial or failure once the child
-#: could act is a run outcome, recorded on that run, never a reason to try the next candidate.
+#: Why a ranked candidate was passed over. Every value but one is a fact about this machine or
+#: the caller's request, checked BEFORE anything ran: a denial or failure once the child could
+#: act is otherwise a run outcome, recorded on that run, never a reason to try the next
+#: candidate. "quota_exceeded" is the one exception: a provider refusing "you've reached your
+#: <model> limit, switch to another model" is unavailable for THIS candidate the same as a
+#: missing CLI, discovered moments after the child starts rather than before — so it falls
+#: through too, never relaxing the criterion (#181).
 SkipReason = Literal[
     "cli_missing", "provider_off", "unauthenticated", "auth_check_failed", "permission_mode_unsupported",
     "images_unsupported", "tool_policy_unsupported", "model_capability_unsupported",
+    "quota_exceeded",
 ]
 
 

@@ -70,6 +70,15 @@ class _Crashing(_Alpha):
         return [sys.executable, "-c", "import sys; sys.exit(3)"]
 
 
+class _QuotaRefusing(_Beta):
+    """A provider that refuses instantly with the vendor's own quota/rate-limit wording (#181)."""
+
+    def command(self, *a, **k):
+        return [sys.executable, "-c",
+                "import sys; sys.stderr.write(\"You've reached your model limit. "
+                "Switch to another model\\n\"); sys.exit(1)"]
+
+
 def _row(provider, id, score, price):
     return Model(provider=provider, id=id, capabilities={ModelCapability.VLM},
                  intelligence_score=score, input_cost_per_million=price, output_cost_per_million=price)
@@ -157,6 +166,24 @@ async def test_an_unavailable_first_candidate_falls_through_to_the_next(team, tm
     saved = reg.get_run(run.run_id)
     assert (saved.provider, saved.model) == ("alpha", "a-mid")
     assert [(s.candidate.provider, s.reason) for s in saved.skipped] == [("beta", reason)]
+
+
+@pytest.mark.asyncio
+async def test_a_quota_refusal_falls_through_to_the_next_candidate(team, tmp_path, monkeypatch):
+    """#181: a provider answering "you've reached your <model> limit, switch to another model"
+    is UNAVAILABLE for that candidate the same as a missing CLI — the run falls through under
+    the SAME criterion and records which candidate it used and why the first was skipped."""
+    alpha, beta = team
+    refusing = _QuotaRefusing()
+    monkeypatch.setattr("interact.agents.run.PROVIDERS", {"alpha": alpha, "beta": refusing})
+    monkeypatch.setattr("interact.agents.providers.PROVIDERS", {"alpha": alpha, "beta": refusing})
+    monkeypatch.setattr(reg, "PROVIDERS", {"alpha": alpha, "beta": refusing})
+    run = await run_agent(None, "t", agent="tester", cwd=str(tmp_path), mesh=False)
+    await asyncio.wait_for(run.wait(), 30)
+    saved = reg.get_run(run.run_id)
+    assert (saved.provider, saved.model) == ("alpha", "a-mid")
+    assert [(s.candidate.provider, s.reason) for s in saved.skipped] == [("beta", "quota_exceeded")]
+    assert saved.status == "done"
 
 
 @pytest.mark.asyncio

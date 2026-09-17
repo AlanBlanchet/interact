@@ -187,6 +187,39 @@ class ModelUnavailable(RuntimeError):
     to some other model is worse than none — it looks like it worked."""
 
 
+#: A vendor CLI's own refusal for QUOTA or RATE LIMIT, e.g. "You've reached your <model> limit.
+#: Switch to another model." or "rate limit exceeded" — the one failure `_unavailable()` cannot
+#: see before the child starts, because only the provider itself knows its quota (#181).
+_QUOTA_REFUSAL = re.compile(
+    r"reached your .{0,80}\b(limit|quota)\b|rate.?limit(ed|ing)?|quota exceeded|"
+    r"switch to another model|usage limit reached",
+    re.IGNORECASE,
+)
+
+
+async def _quota_probe(run_id: str, process: "asyncio.subprocess.Process", *,
+                        window: float = 4.0, interval: float = 0.2) -> reg.SkipReason | None:
+    """Give a just-spawned child a short window to refuse for quota/rate-limit before this run
+    commits to it. Such a refusal prints in the child's own stream and it exits almost
+    immediately — the run "dies at $0.00" (#181) — while a genuinely working agent is still
+    writing its first turn well past this window. Returns ``"quota_exceeded"`` when the refusal
+    is seen, else ``None`` (including: still running past the window, which is the common case
+    and must not be slowed down further than this one check).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + window
+    while process.returncode is None and loop.time() < deadline:
+        await asyncio.sleep(interval)
+    text = ""
+    with suppress(Exception):
+        text += reg.read_stderr(run_id)
+    with suppress(Exception):
+        raw = reg.raw_events_path(run_id)
+        if raw.exists():
+            text += raw.read_bytes()[-4000:].decode(errors="replace")
+    return "quota_exceeded" if _QUOTA_REFUSAL.search(text) else None
+
+
 _IMAGE_EXTENSIONS = frozenset({".jpeg", ".jpg", ".png", ".webp"})
 _MAX_IMAGE_ATTACHMENTS = 8
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -635,10 +668,15 @@ async def run_agent(
     ``provider`` None means the ranked choice: the role's criterion is ranked ONCE across every
     registered CLI (:func:`rank_candidates`) and the list is walked in order until a candidate
     can start here — installed, switched on, logged in, honouring the requested mode and
-    attachments. A named provider is the same list filtered to it and never falls through:
-    the caller chose, so its failure is reported as such. Fall-through happens only BEFORE the
-    child exists; whatever happens once it can act — a denial, a crash, a stop — is that run's
-    outcome and is never replayed on another candidate.
+    attachments, AND not refused for quota or rate limit in the few seconds after it starts
+    (:func:`_quota_probe`, #181) — the one failure only the provider itself can report, so it is
+    checked moments after start rather than before. A named provider is the same list filtered
+    to it and never falls through, quota included: the caller chose, so its failure is reported
+    as such. Every other fall-through happens only BEFORE the child exists; whatever else
+    happens once it can act — a denial, a crash, a stop — is that run's outcome and is never
+    replayed on another candidate. Falling through never relaxes the criterion: the next
+    candidate is still ranked under it, and every skip (quota included) is recorded on the run
+    that finally started, naming which candidate ran and why each earlier one was passed over.
     """
     validated_images = validate_image_paths(image_paths)
     validate_denied_tools(denied_tools)
@@ -717,6 +755,10 @@ async def run_agent(
     candidates = rank_candidates(model, dict(os.environ), providers=pool, weights=weights)
     skipped: list[reg.SkippedCandidate] = []
     chosen: reg.LaunchCandidate | None = None
+    chosen_provider: AgentProvider | None = None
+    process: "asyncio.subprocess.Process | None" = None
+    model: str | None = None
+    effort = policy.reasoning_for(agent)
     auth_cache: dict[tuple[str, str], bool | None] = {}
     allowed_tools = policy.tools_for(agent)
     base_env = dict(os.environ)
@@ -734,86 +776,106 @@ async def run_agent(
                 _require_vlm_model(resolved_model)
             except ModelUnavailable:
                 reason = "model_capability_unsupported"
-        if reason is None:
-            chosen = candidate
-            break
-        skipped.append(reg.SkippedCandidate(candidate=candidate, reason=reason))
-    if chosen is None:
+        if reason is not None:
+            skipped.append(reg.SkippedCandidate(candidate=candidate, reason=reason))
+            continue
+        # Preflight cleared what's knowable BEFORE the child starts. Spawn it and give it a
+        # short window to refuse for quota/rate-limit — the one failure only the provider itself
+        # can report, discovered a moment after start rather than before (#181) — before this
+        # run commits to this candidate. A refusal here falls through to the next ranked
+        # candidate under the SAME criterion, same as any other skip; anything else the child
+        # does past this point is that run's outcome, never replayed on another candidate.
+        candidate_permission_mode = permission_mode
+        if candidate_permission_mode is None:
+            candidate_permission_mode = (provider_modes or {}).get(candidate_provider.name)
+        # A run named after its agent DEFINITION ("visual-critic") self-describes in the panel;
+        # falling back to the provider ("claude") says nothing about what it's for.
+        label = name or agent or candidate_provider.name
+        # Child inherits our environment MINUS any parent tag, set explicitly below — else a
+        # grandchild would inherit its grandparent's id and the tree would be wrong.
+        env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
+        # The agent's policy is authoritative; caller profiles were rejected above. Its model id
+        # can still carry a provider prefix resolved through the operator's allowed routing.
+        candidate_routed, candidate_model = resolve_model(candidate.model, dict(os.environ), provider=candidate_provider, weights=weights)
+        env.update(candidate_routed)
+        if validated_images:
+            _require_vlm_model(candidate_model)
+        if candidate_provider.name == "claude":
+            # This takes precedence over a session or agent-file effort setting.
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+        if candidate_provider.name == "claude" and policy.catalog is None:
+            definition = candidate_provider.definition_path(agent)
+            if definition is None:
+                raise ModelUnavailable(f"No installed definition for {agent!r}")
+            raw = definition.read_text(encoding="utf-8")
+            if not raw.startswith("---\n") or "\n---" not in raw[4:]:
+                raise ModelUnavailable(f"Malformed agent definition for {agent!r}")
+            frontmatter = raw[4:].split("\n---", 1)[0]
+            pin = re.search(r"^model:\s*([^\n]+)$", frontmatter, re.MULTILINE)
+            if pin and pin.group(1).strip().strip("\"'") not in {"inherit", candidate_model}:
+                raise ModelUnavailable(
+                    f"Agent definition {agent!r} has a model pin conflicting with its resolved policy; "
+                    "remove the source pin and regenerate instead of bypassing the criterion"
+                )
+        brief = (
+            f"Launch policy: role={agent}; model={candidate_model}; reasoning={effort}; criterion={required_model}.\n"
+            f"First progress message: [{agent}] followed by your concrete task; then start immediately.\n\n"
+            f"{task}"
+        )
+        # argv built AFTER the model is decided: used to build first with raw text, so a criterion,
+        # a `@profile` or a routed `ollama/x` id reached the binary unresolved while the resolved
+        # name went only into the env and run record.
+        command_kwargs = dict(
+            cwd=cwd, model=candidate_model,
+            # Once, never twice: skip the mesh when the provider's own config already registers
+            # interact — else the child would carry two registrations of the same server.
+            mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(candidate_provider.name, cwd=cwd) else None,
+            run_id=run_id, agent=agent, permission_mode=candidate_permission_mode,
+            allowed_tools=allowed_tools, reasoning=effort,
+        )
+        if policy.catalog is not None:
+            command_kwargs["agent_prompt"] = policy.catalog.role_prompt(agent)
+        if denied_tools:
+            command_kwargs["denied_tools"] = denied_tools
+        if validated_images:
+            command_kwargs["image_paths"] = validated_images
+        argv = candidate_provider.command(brief, **command_kwargs)
+        # Child writes its OWN stream straight to disk. Piping it through a coroutine tied events to
+        # the caller's event loop: a caller that spawned and returned lost every event, run then
+        # looked HEALTHY (done, exit 0, no cost, no activity) — worse than looking crashed. At OS
+        # level the stream survives the caller, or interact, dying.
+        sink = reg.open_raw_events(run_id, append=False)
+        stderr = reg.open_stderr(run_id, append=False)
+        try:
+            candidate_process = await asyncio.create_subprocess_exec(
+                *argv, cwd=cwd, env=env,
+                stdout=sink, stderr=stderr,
+                start_new_session=True,  # own process group, so stop() can signal the whole tree
+            )
+        finally:
+            sink.close()  # the child holds its own dup of the fd
+            stderr.close()
+        quota_reason = await _quota_probe(run_id, candidate_process)
+        if quota_reason is not None:
+            if candidate_process.returncode is None:
+                with suppress(ProcessLookupError):
+                    candidate_process.kill()
+            with suppress(Exception):
+                await candidate_process.wait()
+            skipped.append(reg.SkippedCandidate(candidate=candidate, reason=quota_reason))
+            continue
+        chosen = candidate
+        chosen_provider = candidate_provider
+        process = candidate_process
+        permission_mode = candidate_permission_mode
+        model = candidate_model
+        break
+    if chosen is None or process is None or chosen_provider is None or model is None:
         walked = "\n".join(f"  {s.candidate.provider}/{s.candidate.model}: {s.reason}" for s in skipped)
         raise ModelUnavailable(
             f"No candidate for {agent!r} can start on this machine; the ranked list was:\n{walked}"
         )
-    provider = by_name[chosen.provider]
-    if permission_mode is None:
-        permission_mode = (provider_modes or {}).get(provider.name)
-    # A run named after its agent DEFINITION ("visual-critic") self-describes in the panel;
-    # falling back to the provider ("claude") says nothing about what it's for.
-    label = name or agent or provider.name
-    # Child inherits our environment MINUS any parent tag, set explicitly below — else a
-    # grandchild would inherit its grandparent's id and the tree would be wrong.
-    env = {**os.environ, "INTERACT_RUN_ID": run_id, "INTERACT_PARENT_RUN_ID": run_id}
-    # The agent's policy is authoritative; caller profiles were rejected above. Its model id
-    # can still carry a provider prefix resolved through the operator's allowed routing.
-    routed, model = resolve_model(chosen.model, dict(os.environ), provider=provider, weights=weights)
-    env.update(routed)
-    if validated_images:
-        _require_vlm_model(model)
-    effort = policy.reasoning_for(agent)
-    if provider.name == "claude":
-        # This takes precedence over a session or agent-file effort setting.
-        env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
-    if provider.name == "claude" and policy.catalog is None:
-        definition = provider.definition_path(agent)
-        if definition is None:
-            raise ModelUnavailable(f"No installed definition for {agent!r}")
-        raw = definition.read_text(encoding="utf-8")
-        if not raw.startswith("---\n") or "\n---" not in raw[4:]:
-            raise ModelUnavailable(f"Malformed agent definition for {agent!r}")
-        frontmatter = raw[4:].split("\n---", 1)[0]
-        pin = re.search(r"^model:\s*([^\n]+)$", frontmatter, re.MULTILINE)
-        if pin and pin.group(1).strip().strip("\"'") not in {"inherit", model}:
-            raise ModelUnavailable(
-                f"Agent definition {agent!r} has a model pin conflicting with its resolved policy; "
-                "remove the source pin and regenerate instead of bypassing the criterion"
-            )
-    brief = (
-        f"Launch policy: role={agent}; model={model}; reasoning={effort}; criterion={required_model}.\n"
-        f"First progress message: [{agent}] followed by your concrete task; then start immediately.\n\n"
-        f"{task}"
-    )
-    # argv built AFTER the model is decided: used to build first with raw text, so a criterion,
-    # a `@profile` or a routed `ollama/x` id reached the binary unresolved while the resolved
-    # name went only into the env and run record.
-    command_kwargs = dict(
-        cwd=cwd, model=model,
-        # Once, never twice: skip the mesh when the provider's own config already registers
-        # interact — else the child would carry two registrations of the same server.
-        mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(provider.name, cwd=cwd) else None,
-        run_id=run_id, agent=agent, permission_mode=permission_mode,
-        allowed_tools=allowed_tools, reasoning=effort,
-    )
-    if policy.catalog is not None:
-        command_kwargs["agent_prompt"] = policy.catalog.role_prompt(agent)
-    if denied_tools:
-        command_kwargs["denied_tools"] = denied_tools
-    if validated_images:
-        command_kwargs["image_paths"] = validated_images
-    argv = provider.command(brief, **command_kwargs)
-    # Child writes its OWN stream straight to disk. Piping it through a coroutine tied events to
-    # the caller's event loop: a caller that spawned and returned lost every event, run then
-    # looked HEALTHY (done, exit 0, no cost, no activity) — worse than looking crashed. At OS
-    # level the stream survives the caller, or interact, dying.
-    sink = reg.open_raw_events(run_id, append=False)
-    stderr = reg.open_stderr(run_id, append=False)
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *argv, cwd=cwd, env=env,
-            stdout=sink, stderr=stderr,
-            start_new_session=True,  # own process group, so stop() can signal the whole tree
-        )
-    finally:
-        sink.close()  # the child holds its own dup of the fd
-        stderr.close()
+    provider = chosen_provider
     registered = reg.register(
         run_id=run_id, pid=process.pid, provider=provider.name, name=label,
         task=task, cwd=cwd, model=model, parent_run_id=parent, agent=agent,

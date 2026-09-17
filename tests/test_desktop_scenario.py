@@ -59,10 +59,13 @@ def test_drag_circle_geometry() -> None:
 
     assert be.calls[0] == ("move", cx, cy), "press must start at the grab point"
     assert be.calls[1] == ("down", "left")
-    assert be.calls[-1] == ("up", "left"), "must release the button last"
-    assert be.calls[-2] == ("move", cx, cy), "must return to the grab point (closed loop)"
+    # #136: a settle move at the drop point follows the release — a webview that captured the
+    # pointer for the drag only learns the button is up from the NEXT motion/button event.
+    assert be.calls[-1] == ("move", cx, cy), "must settle-move after release (#136)"
+    assert be.calls[-2] == ("up", "left"), "must release the button before the settle move"
+    assert be.calls[-3] == ("move", cx, cy), "must return to the grab point (closed loop)"
 
-    orbit = [(x, y) for tag, x, y in be.calls[2:-2] if tag == "move"]
+    orbit = [(x, y) for tag, x, y in be.calls[2:-3] if tag == "move"]
     radii = [math.hypot(x - cx, y - cy) for x, y in orbit]
     assert all(abs(r - radius) < 1e-6 for r in radii), "every orbit point sits on the circle"
     assert any(x > cx for x, _ in orbit) and any(x < cx for x, _ in orbit), "spans left+right"

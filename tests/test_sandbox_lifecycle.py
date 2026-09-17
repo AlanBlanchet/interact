@@ -117,6 +117,69 @@ def test_get_sandbox_reuses_a_live_display(monkeypatch):
     assert len(_FakeNested.instances) == 1, "no needless respawn of a healthy sandbox"
 
 
+# --- self-heal carries its reason forward, and a caller can tell its sandbox was replaced (#141/#159) ---
+
+
+def test_get_sandbox_respawn_records_the_death_reason(monkeypatch):
+    """`_get_sandbox`'s self-heal must not silently swap in a fresh sandbox — the next caller
+    (targets._sandbox_death_diagnostics) needs to say WHY the previous one vanished (#141)."""
+    monkeypatch.setattr("interact.desktop.NestedBackend", _FakeNested)
+    dead = _FakeNested(alive=False)
+    dead.display_health = lambda: "The sandbox Xephyr :99 is DOWN (SIGKILL — likely OOM-killed)"
+    srv.sandbox._sandbox = dead
+
+    srv._get_sandbox()
+
+    assert srv.sandbox.last_replace_reason() == (
+        "The sandbox Xephyr :99 is DOWN (SIGKILL — likely OOM-killed)"
+    )
+
+
+def test_get_sandbox_respawn_without_display_health_still_records_a_reason(monkeypatch):
+    """A backend with no `display_health` (the reservation/#159 fake used elsewhere) must still
+    get SOME reason recorded — never a silent respawn."""
+    monkeypatch.setattr("interact.desktop.NestedBackend", _FakeNested)
+    dead = _FakeNested(alive=False)
+    srv.sandbox._sandbox = dead
+
+    srv._get_sandbox()
+
+    assert srv.sandbox.last_replace_reason()
+
+
+def test_reservation_replaced_reason_none_while_still_the_live_sandbox(monkeypatch):
+    monkeypatch.setattr("interact.desktop.NestedBackend", _FakeNested)
+    reservation = srv.sandbox.reserve_sandbox()
+    assert reservation.replaced_reason() is None
+
+
+def test_reservation_replaced_reason_names_the_resize_that_replaced_it(monkeypatch):
+    """#159: caller A reserves the sandbox; caller B's launch_app asks for a different explicit
+    size, which respawns the singleton. A's reservation must now say it was replaced, and why —
+    never hand back stale state with no explanation."""
+    monkeypatch.setattr("interact.desktop.NestedBackend", _FakeNested)
+    reservation = srv.sandbox.reserve_sandbox(size="640x480")
+
+    srv._get_sandbox(size="800x600")  # a different caller, explicit new size → respawns it
+
+    reason = reservation.replaced_reason()
+    assert reason is not None
+    assert "640x480" in reason and "800x600" in reason
+
+
+def test_reservation_replaced_reason_after_death_respawn(monkeypatch):
+    """#141 + #159 together: a reservation holder whose sandbox died and self-healed under it (via
+    someone else's call) can ask why its handle is now stale."""
+    monkeypatch.setattr("interact.desktop.NestedBackend", _FakeNested)
+    reservation = srv.sandbox.reserve_sandbox()
+    srv.sandbox._sandbox.alive = False  # the X server dies after the reservation was taken
+
+    srv._get_sandbox()  # another caller's attach self-heals it
+
+    reason = reservation.replaced_reason()
+    assert reason is not None and "stopped answering" in reason
+
+
 # --- reaping + crash diagnostics use real short-lived processes (no X needed) ---
 
 
@@ -314,16 +377,17 @@ def test_idle_sandbox_is_reaped(monkeypatch):
 
     closed = []
     monkeypatch.setattr(srv.sandbox, "_sandbox", _fake_sandbox(idle=901.0))
-    monkeypatch.setattr(srv.sandbox, "_close_sandbox", lambda: closed.append(True))
+    monkeypatch.setattr(srv.sandbox, "_close_sandbox", lambda reason=None: closed.append(reason))
     srv._reap_sandbox(ttl=900)
-    assert closed == [True]
+    assert len(closed) == 1
+    assert "idle" in closed[0], "the reap reason must be carried so a later caller can tell why (#141)"
 
 
 def test_active_or_recording_sandbox_survives(monkeypatch):
     import interact.server as srv
 
     closed = []
-    monkeypatch.setattr(srv.sandbox, "_close_sandbox", lambda: closed.append(True))
+    monkeypatch.setattr(srv.sandbox, "_close_sandbox", lambda reason=None: closed.append(True))
     monkeypatch.setattr(srv.sandbox, "_sandbox", _fake_sandbox(idle=10.0))
     srv._reap_sandbox(ttl=900)                     # recently used → kept
     monkeypatch.setattr(srv.sandbox, "_sandbox", _fake_sandbox(idle=99999.0, recording=True))

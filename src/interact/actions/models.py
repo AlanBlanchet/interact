@@ -292,6 +292,43 @@ class ScrollAction(_CoordinateTargetMixin):
             await page.mouse.wheel(dx, dy)
 
 
+_CLOSEST_CANDIDATES_JS = """
+() => {
+  const els = Array.from(document.querySelectorAll(
+    'a,button,input,select,textarea,[role],[onclick],[tabindex]'
+  )).filter(e => e.getClientRects().length > 0);
+  const short = (el) => {
+    if (el.id) return '#' + el.id;
+    const cls = (typeof el.className === 'string' && el.className.trim())
+      ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.')
+      : '';
+    return el.tagName.toLowerCase() + cls;
+  };
+  const name = (el) => (
+    el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') ||
+    el.value || ''
+  ).trim().replace(/\\s+/g, ' ').slice(0, 50);
+  return els.slice(0, 5).map(el => ({tag: el.tagName.toLowerCase(), name: name(el), selector: short(el)}));
+}
+"""
+
+
+async def _closest_candidates(page: Page) -> str:
+    """A few of the page's own interactive elements — tag, accessible name, selector — for a
+    dead-selector error to embed directly, instead of pointing at a separate
+    get_interactive_elements call to find them (#140)."""
+    try:
+        candidates = await page.evaluate(_CLOSEST_CANDIDATES_JS)
+    except Exception:
+        return ""
+    if not candidates:
+        return ""
+    lines = [
+        f"  <{c['tag']}> {c['name']!r} — try {c['selector']!r}" for c in candidates
+    ]
+    return "\nClosest candidates on the page now:\n" + "\n".join(lines)
+
+
 async def _click_selector(
     page: Page, selector: str, *, double: bool = False, button: str = "left"
 ) -> None:
@@ -307,9 +344,10 @@ async def _click_selector(
     if count == 0:
         # Clicking anyway waits the full actionability timeout and then reports a generic
         # "Timeout exceeded" — 10s spent to learn something one count() already knew (#95).
+        candidates = await _closest_candidates(page)
         raise ValueError(
-            f"no element matches {selector!r} (0 matched) — nothing was clicked. Check the "
-            "selector against the live DOM: get_page_state / get_interactive_elements return the "
+            f"no element matches {selector!r} (0 matched) — nothing was clicked."
+            f"{candidates}\nOr re-scan: get_page_state / get_interactive_elements return the "
             "page's current elements as refs."
         )
     if count <= 1:
@@ -557,7 +595,7 @@ class SleepAction(ObservationAction):
     type: Literal["sleep"] = "sleep"
     # A FIXED pause. For waiting on content/navigation prefer wait_for (selector/text) or a
     # `wait` on the preceding action — they block exactly until ready instead of guessing a duration.
-    duration: float = Field(1.0, gt=0, le=30)
+    duration: float = Field(1.0, gt=0, le=300)  # slow app starts run well past 30s (#162)
 
     async def execute(self, page: Page):
         await asyncio.sleep(self.duration)

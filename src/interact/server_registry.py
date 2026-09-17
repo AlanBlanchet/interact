@@ -147,19 +147,23 @@ def _is_interact_mcp(pid: int) -> bool:
 
 def kill_stale_servers() -> list[int]:
     """Stop every stale MCP server so its editor respawns it on current code — the opt-in
-    ``interact doctor --fix``. Only signals a pid whose cmdline still confirms it's ``interact mcp``
-    (a recycled pid is left untouched), prunes its registry file, and returns the pids signalled.
-    Best-effort: a pid that's gone or unsignalable is skipped, never raised.
+    ``interact doctor --fix`` / ``interact status --fix``. Only signals a pid whose cmdline still
+    confirms it's ``interact mcp`` (a recycled pid is left untouched), prunes its registry file, and
+    returns only the pids CONFIRMED terminated. Best-effort: a pid that's gone or unsignalable is
+    skipped, never raised.
 
     SIGTERM first, then SIGKILL for anything still standing. Measured on a real box, five of six
     servers once ignored SIGTERM entirely — the server blocks reading stdio, versions before the
     teardown handler have nothing to catch it — while this reported them all "restarted". A
     restart command leaving old code running is worse than none: the user then believes the fix
-    reached them."""
+    reached them. Same reasoning applies past SIGKILL (#144): a pid this returns as killed is read
+    back from ``/proc`` one more time, never assumed dead just because a signal was accepted — the
+    caller's "restarted" message must never be a claim this function cannot back with a fresh read.
+    """
     import signal
     import time
 
-    killed: list[int] = []
+    signalled: list[int] = []
     for info in stale_servers():
         pid = info.get("pid")
         if not isinstance(pid, int) or not _is_interact_mcp(pid):
@@ -168,18 +172,21 @@ def kill_stale_servers() -> list[int]:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             continue
-        killed.append(pid)
+        signalled.append(pid)
         (_runtime_dir() / f"{pid}.json").unlink(missing_ok=True)
-    if not killed:
-        return killed
+    if not signalled:
+        return signalled
     deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and any(_still_running(pid) for pid in killed):
+    while time.monotonic() < deadline and any(_still_running(pid) for pid in signalled):
         time.sleep(0.1)
-    for pid in killed:
+    for pid in signalled:
         if _still_running(pid):
             with suppress(OSError):
                 os.kill(pid, signal.SIGKILL)
-    return killed
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and any(_still_running(pid) for pid in signalled):
+        time.sleep(0.05)
+    return [pid for pid in signalled if not _still_running(pid)]
 
 
 def _source_root() -> Path:

@@ -201,18 +201,23 @@ def _print_stale_servers(indent: str = "  ", fix: bool = False) -> None:
         return
     latest = latest_version()
     if fix:
-
-        killed = kill_stale_servers()
+        killed = kill_stale_servers()  # only pids CONFIRMED terminated — never an unverified claim
+        unresolved = [s for s in stale if s.get("pid") not in killed]
         if killed:
             pids = ", ".join(str(p) for p in killed)
-            print(f"{indent}✓ restarted {len(killed)} stale MCP server(s) (pid {pids}) — each editor "
-                  f"respawns interact on current code (v{latest}) on its next tool call.")
-        else:
-            print(f"{indent}⚠ stale server(s) found but none could be restarted (not interact mcp, or "
-                  f"no permission) — reconnect them from your editor.")
+            print(f"{indent}✓ stopped {len(killed)} stale MCP server(s) (pid {pids}), each was serving "
+                  f"code older than v{latest}. Most hosts start a fresh v{latest} process on their next "
+                  f"tool call — if interact tools are still missing afterward, reconnect (or fully "
+                  f"restart) that MCP connection in your editor; a stopped process is not a guarantee "
+                  f"every host reconnects on its own (#144).")
+        if unresolved:
+            pids = ", ".join(str(s.get("pid")) for s in unresolved)
+            print(f"{indent}⚠ could not confirm {len(unresolved)} stale server(s) stopped (pid {pids}) — "
+                  f"not interact mcp, already gone, or no permission to signal it. Reconnect that MCP "
+                  f"connection (or fully restart the editor) to load v{latest}.")
         return
     print(f"{indent}⚠ stale MCP server(s) — serving code older than this tree; reconnect to load fixes")
-    print(f"{indent}   (or run `interact doctor --fix` to restart them):")
+    print(f"{indent}   (add --fix to this command to stop them):")
     for s in stale:
         if s.get("reason") == "code":
             # The common case between releases: the version never moved, the code did.
@@ -287,6 +292,8 @@ def _print_sandboxes(real_display: str | None) -> None:
 
 def status(
     project: Annotated[Path, Parameter(name=["--project", "-p"])] = Path("."),
+    *,
+    fix: bool = False,
 ) -> None:
     """Show how interact is set up: which clients it's registered with, the configured
     subscription-media policy, models and desktop target, optional API keys, and recent usage. The
@@ -296,11 +303,15 @@ def status(
     ----------
     project
         Project root to check for project-scoped client registrations (default: cwd).
+    fix
+        Stop any stale MCP server this same check just flagged, so your editor starts a fresh one
+        (issue #144: `status` used to only name the problem, leaving `doctor --fix` — a second,
+        undiscoverable command — as the only repair; this is that repair, inline).
     """
 
     root = project.resolve()
     print("interact status\n")
-    _print_stale_servers()
+    _print_stale_servers(fix=fix)
 
     print("Registered with (interact install <client> to add):")
     bound = False

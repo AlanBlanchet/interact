@@ -62,3 +62,27 @@ def test_vlm_min_dim_exceeds_max_dim_raises(monkeypatch):
     monkeypatch.setenv("INTERACT_VLM_MAX_DIM", "1280")
     with pytest.raises(ValueError, match="vlm_min_dim.*must be <= vlm_max_dim"):
         Config()
+
+
+def test_require_media_session_confirmation_names_the_in_product_path_forward():
+    cfg = Config(media_session_no_extra_usage_confirmed_for=())
+    with pytest.raises(RuntimeError, match="confirm_media_session_for"):
+        cfg.require_media_session_confirmation(("claude",))
+
+
+def test_confirm_media_session_for_unblocks_the_current_session_only():
+    cfg = Config(media_session_no_extra_usage_confirmed_for=())
+    with pytest.raises(RuntimeError):
+        cfg.require_media_session_confirmation(("claude",))
+
+    cfg.confirm_media_session_for("claude")
+    cfg.require_media_session_confirmation(("claude",))  # no longer raises
+
+    # session-only: a fresh Config (the on-disk default) is unaffected.
+    assert Config(media_session_no_extra_usage_confirmed_for=()).media_session_no_extra_usage_confirmed_for == ()
+
+
+def test_confirm_media_session_for_rejects_unknown_provider():
+    cfg = Config()
+    with pytest.raises(ValueError, match="unknown media provider: bogus"):
+        cfg.confirm_media_session_for("bogus")

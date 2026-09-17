@@ -703,6 +703,10 @@ class DesktopWindow(BaseModel):
             await self._mousemove(ix, iy)
             await asyncio.sleep(_DRAG_STEP_DELAY)
         await self._run("xdotool", "mouseup", "1")
+        # Settle move at the drop point (#136): a webview that captured the pointer for the drag
+        # only learns the button is up from the NEXT motion/button event, not from mouseup alone
+        # — see DesktopBackend._settle_after_drag for the same fix on the backend-driven path.
+        await self._mousemove(xtx, xty)
 
     async def hover(self, x: int, y: int):
         if self._backend is not None:

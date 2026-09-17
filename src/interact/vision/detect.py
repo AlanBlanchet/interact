@@ -442,15 +442,30 @@ async def _detect_desktop_elements(
                 "detect_elements: atspi partial (%d elements), running VLM for fusion",
                 len(atspi_result),
             )
-            vlm_elements, _, _, vlm_label = await _vlm_detect_elements(
-                screenshot_bytes,
-                context,
-                img_w,
-                img_h,
-                crop_offset=crop,
-                invocation_id=invocation_id,
-                model_override=model_override,
-            )
+            try:
+                vlm_elements, _, _, vlm_label = await _vlm_detect_elements(
+                    screenshot_bytes,
+                    context,
+                    img_w,
+                    img_h,
+                    crop_offset=crop,
+                    invocation_id=invocation_id,
+                    model_override=model_override,
+                )
+            except RuntimeError as gated:
+                # The media provider is gated or absent (#157, #161). The AT-SPI elements are
+                # already computed and deterministic: return those rather than nothing at all.
+                _log.info("detect_elements: VLM unavailable (%s); returning atspi only", gated)
+                merged = DesktopElement.merge_into(
+                    win.wid, list(atspi_result), page_sig, _win_geometry(win)
+                )
+                return (
+                    screenshot_bytes,
+                    merged,
+                    None,
+                    time.monotonic() - t0,
+                    "atspi (VLM unavailable)",
+                )
             if vlm_elements:
                 fused = DesktopElement.fuse(vlm_elements, atspi_result)
                 fused = DesktopElement.merge_into(win.wid, fused, page_sig, _win_geometry(win))
@@ -484,15 +499,27 @@ async def _detect_desktop_elements(
         ext="png",
         invocation_id=invocation_id,
     )
-    elements, vlm_elapsed, raw_text, vlm_label = await _vlm_detect_elements(
-        screenshot_bytes,
-        context,
-        img_w,
-        img_h,
-        crop_offset=crop,
-        invocation_id=invocation_id,
-        model_override=model_override,
-    )
+    try:
+        elements, vlm_elapsed, raw_text, vlm_label = await _vlm_detect_elements(
+            screenshot_bytes,
+            context,
+            img_w,
+            img_h,
+            crop_offset=crop,
+            invocation_id=invocation_id,
+            model_override=model_override,
+        )
+    except RuntimeError as gated:
+        # No AT-SPI and no media provider (#157, #161): say so with the capture in hand instead
+        # of raising, so the caller still has the screenshot and a stated reason.
+        _log.info("detect_elements: VLM unavailable (%s) and no atspi elements", gated)
+        return (
+            screenshot_bytes,
+            [],
+            f"No element detection available: {gated}",
+            time.monotonic() - t0,
+            "unavailable",
+        )
     if elements is None:
         detail = (
             "VLM detected 0 interactive elements — "

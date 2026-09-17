@@ -54,6 +54,30 @@ def test_measure_borderline_contrast_verdict_is_correct():
     assert r.contrast_ratio == 4.54 and r.wcag["aa_normal"] is True
 
 
+def test_measure_flags_low_glyph_occupancy_as_uncertain_not_a_confident_violation():
+    """A near-uniform region with a single stray pixel of another colour (anti-aliasing fringe,
+    compression noise) is not legible text — WCAG must not be reported as a confident PASS/FAIL
+    off that sliver (issue #164)."""
+    arr = np.full((100, 100, 3), 255)  # 10000 px, all white
+    arr[0, 0] = [0x77, 0x77, 0x77]  # 1 px, well under 1% occupancy, would read as FAIL if trusted
+    r = measure(_png(arr))
+    assert r.contrast_ratio is not None
+    assert r.contrast_uncertain is True
+    assert r.wcag is None
+    assert "UNCERTAIN" in format_measure(r)
+
+
+def test_measure_real_text_occupancy_still_gets_a_confident_verdict():
+    """A real caption-sized text band (well above the 1% noise floor) still gets a normal
+    confident WCAG verdict — the uncertainty gate must not swallow legitimate low-but-real
+    glyph coverage."""
+    arr = np.full((100, 100, 3), 255)  # 10000 px
+    arr[40:60, 10:90] = 0  # 1600 px = 16% occupancy, unambiguously real text
+    r = measure(_png(arr))
+    assert r.contrast_uncertain is False
+    assert r.wcag == {"aa_normal": True, "aa_large": True, "aaa": True}
+
+
 def test_measure_point_samples_the_exact_color():
     arr = np.zeros((20, 20, 3))
     arr[:] = [10, 20, 30]

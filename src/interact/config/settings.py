@@ -292,10 +292,26 @@ class Config(BaseSettings):
         )
         raise RuntimeError(
             f"session media is blocked for unconfirmed provider(s) {', '.join(missing)}. "
-            f"{instructions}; then list only those confirmed providers in "
+            f"{instructions}; then either call confirm_media_session_for(<provider>) to confirm "
+            "for this session only, or list only those confirmed providers permanently in "
             "media.noExtraUsageConfirmedFor. interact cannot inspect these account settings or "
             "eliminate the race if they change later"
         )
+
+    def confirm_media_session_for(self, provider: str) -> None:
+        """In-product path forward for :meth:`require_media_session_confirmation`'s hard stop:
+        confirm a media provider's session use for the CURRENT process only, so a caller that
+        already has the operator's confirmation is never dead-ended by an error naming a config
+        file it may have no way to edit from inside the product. Not persisted — a fresh process
+        (and the on-disk ``media.noExtraUsageConfirmedFor``) is unaffected; a genuinely durable
+        confirmation still belongs in that setting."""
+        if provider not in MEDIA_PROVIDERS:
+            raise ValueError(f"unknown media provider: {provider}")
+        if provider not in self.media_session_no_extra_usage_confirmed_for:
+            self.media_session_no_extra_usage_confirmed_for = (
+                *self.media_session_no_extra_usage_confirmed_for,
+                provider,
+            )
 
     def model_for(self, role: ModelRole) -> str:
         if role == "video":

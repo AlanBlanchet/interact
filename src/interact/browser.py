@@ -111,6 +111,11 @@ class BrowserManager:
         # rest of the task. get_page/new_tab now heal it instead; each heal appends a note here,
         # drained onto the tool result so the agent LEARNS its page state is gone, never silently.
         self._recovery_notes: list[str] = []
+        # Playwright's "crash" event (renderer OOM/killed — a heavy evaluate_js is a common
+        # trigger) drops the tab to about:blank with NO exception of its own; without tracking it
+        # here, the next call on that page just silently acted on a dead blank tab (#127).
+        # Keyed by id(page): stable for the page object's lifetime, cleared when the tab closes.
+        self._crashed_pages: dict[int, str] = {}
 
     @property
     def _persistent(self) -> bool:
@@ -207,6 +212,7 @@ class BrowserManager:
                     pass
         self._context = self._browser = None
         self._element_map.clear()  # refs pointed at pages of the dead browser
+        self._crashed_pages.clear()  # crash records for pages that no longer exist (#127)
         await self._ensure_browser()
         await self._new_context()
         self._note_recovery(
@@ -249,7 +255,10 @@ class BrowserManager:
         if tab_index is None:
             tab_index = self._active_index(pages)
         if 0 <= tab_index < len(pages):
-            return pages[tab_index]
+            page = pages[tab_index]
+            if reason := self._crashed_pages.get(id(page)):
+                raise RuntimeError(f"Tab {tab_index} crashed — {reason}")
+            return page
         raise IndexError(f"Tab {tab_index} does not exist — {len(pages)} tab(s) open")
 
     async def new_tab(self, url: str | None = None) -> int:
@@ -275,7 +284,9 @@ class BrowserManager:
         pages = self._context.pages
         if tab_index >= len(pages):
             raise IndexError(f"Tab {tab_index} not found")
-        await pages[tab_index].close()
+        closing = pages[tab_index]
+        self._crashed_pages.pop(id(closing), None)  # crash record only outlives the tab (#127)
+        await closing.close()
         # Keep the active tab valid + pointing at the same logical tab after the close.
         if tab_index == self._active_tab:
             self._active_tab = max(0, tab_index - 1)
@@ -687,7 +698,23 @@ class BrowserManager:
             return
         self._dialog_log.append(f"{dialog.type}({dialog.message!r}) → {outcome}")
 
+    def _on_crash(self, page: Page) -> None:
+        """Playwright fires "crash" when the renderer for ``page`` dies (OOM, killed) — the tab is
+        left showing about:blank with no exception raised anywhere. Record it so the next call
+        that resolves this page (get_page — every tool funnels through it) reports the crash
+        instead of silently acting on the dead tab (#127)."""
+        try:
+            last_url = page.url
+        except Exception:  # the crashed page itself may refuse even a URL read
+            last_url = "unknown"
+        self._crashed_pages[id(page)] = (
+            f"the page crashed (renderer died — often an out-of-memory JS execution) and is now "
+            f"an unusable blank tab; last known URL {last_url!r}. Close this tab and open a fresh "
+            "one — its state (including any evaluate_js result in flight) is gone."
+        )
+
     def _attach_page_listeners(self, page: Page):
+        page.on("crash", self._on_crash)
         page.on("dialog", self._on_dialog)
         page.on(
             "request",

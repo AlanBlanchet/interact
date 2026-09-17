@@ -256,6 +256,15 @@ class NestedBackend(DesktopBackend):
             + ("" if tail else " — call reset_sandbox to respawn it.")
         )
 
+    def cursor_type(self) -> str:
+        """The pointer shape on THIS nested display — never the host's. `Cursor.current_type()`
+        with no argument opens the process's own ``$DISPLAY``, which is the real desktop, not this
+        isolated Xephyr/Xvfb; a cursor step reported through that path always read "default"
+        because the host cursor never moves while the agent drives the sandbox (#131)."""
+        from interact.desktop.cursor import Cursor
+
+        return Cursor.current_type(self.display)
+
     def _reap(self) -> None:
         """Drop exited child apps (and unlink their logs) so a long session doesn't accumulate dead
         entries — the leak behind a display that eventually refuses new clients (#10)."""
@@ -355,6 +364,38 @@ class NestedBackend(DesktopBackend):
         self._reap()
         wanted = list(argv)
         return next((p for p in self._procs if self._commands.get(p.pid) == wanted), None)
+
+    def window_pid(self, wid: int) -> int | None:
+        """The pid that owns X window ``wid`` (``xdotool getwindowpid``) — the pid used to look
+        up which launched argv (and so which ``--remote-debugging-port``, #126/#143/#174) created
+        it. Best-effort: an odd WM-less state or a dead window returns None, never raises."""
+        try:
+            out = subprocess.run(
+                ["xdotool", "getwindowpid", str(wid)], env=self.env, check=True,
+                capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+            return int(out)
+        except (subprocess.SubprocessError, ValueError):
+            return None
+
+    def debug_port_for_wid(self, wid: int, timeout: float = 5.0) -> int | None:
+        """The CDP port for the app that owns ``wid``, or None when its launch named no
+        ``--remote-debugging-port`` — the caller then has only the synthetic-input path.
+
+        Looked up by the OWNING pid first; falls back to the sandbox's one other tracked launch
+        when ``getwindowpid`` names a process we never spawned directly (an Electron toplevel can
+        report a helper's pid, not the browser process's) — sound because this sandbox runs ONE
+        app at a time by default (``launch_app``'s ``replace=True``, #92/#118); with exactly one
+        tracked launch there is no ambiguity to resolve."""
+        from interact.desktop.cdp import resolve_port  # noqa: PLC0415 — avoid import cycle at load
+
+        pid = self.window_pid(wid)
+        argv = self._commands.get(pid) if pid is not None else None
+        if argv is None and len(self._commands) == 1:
+            argv = next(iter(self._commands.values()))
+        if argv is None:
+            return None
+        return resolve_port(argv, timeout=timeout)
 
     def _kill_tree(self, proc: subprocess.Popen) -> None:
         """Terminate a launched app and everything it spawned, via its process GROUP — escalating
