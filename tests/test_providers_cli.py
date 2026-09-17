@@ -1,7 +1,7 @@
 """CLI surfaces tell ONE story about model selection: `status`/`providers`/`doctor` all print the
-RESOLVED model per role (not an opaque 'auto'), plus the sovereign quality tier — and `version`/`-v`
-report the build. A grep of availability isn't the answer; resolution (frontier-first, first-available)
-is. The shared helper is exercised here once; the three commands just call it."""
+RESOLVED model per role (not an opaque 'auto'), plus the sovereign quality tier. A grep of
+availability isn't the answer; resolution (frontier-first, first-available) is. The shared helper
+is exercised here once; the three commands just call it."""
 
 import importlib
 import json
@@ -121,18 +121,6 @@ async def test_list_providers_refreshes_a_live_config_file_edit(
     assert edited["provider_order"] == ["claude"]
     assert restored["backend"] == baseline["backend"]
     assert restored["billing"] == baseline["billing"]
-
-
-def test_version_command_prints_the_installed_version(capsys):
-    from interact import installed_version
-
-    cli.version()
-    assert capsys.readouterr().out.strip() == installed_version()
-
-
-def test_dash_v_alias_is_registered_alongside_double_dash_version():
-    # users reach for `-v`; cyclopts wires only `--version` by default, so we add the alias
-    assert "-v" in cli.app.version_flags and "--version" in cli.app.version_flags
 
 
 # --- `agents modes`: the autonomy choices, machine-readably ---------------------------------

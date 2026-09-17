@@ -18,6 +18,7 @@ import pytest
 from interact.desktop import DesktopBackend, NestedBackend
 from interact.desktop import cdp
 from interact.actions import dispatch as D
+from tests.support.desktop import RecordingBackend as _RecordingBackend, bare_nested_backend
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +132,7 @@ def test_pick_target_none_when_no_page_type():
 # ---------------------------------------------------------------------------
 
 def _backend_stub() -> NestedBackend:
-    be = NestedBackend.__new__(NestedBackend)  # skip __init__ (no real X server)
-    be.env = {}
-    return be
+    return bare_nested_backend(display=None)
 
 
 def test_debug_port_for_wid_uses_owning_pid(monkeypatch):
@@ -168,23 +167,6 @@ def test_debug_port_for_wid_none_when_launch_named_no_port(monkeypatch):
 # ---------------------------------------------------------------------------
 # Drag mouse-capture settle (#136) on the shared DesktopBackend.drag path
 # ---------------------------------------------------------------------------
-
-class _RecordingBackend(DesktopBackend):
-    def __init__(self):
-        self.calls: list[tuple] = []
-
-    def capture(self) -> bytes:
-        return b""
-
-    def move(self, x, y):
-        self.calls.append(("move", x, y))
-
-    def mouse_down(self, button="left"):
-        self.calls.append(("down", button))
-
-    def mouse_up(self, button="left"):
-        self.calls.append(("up", button))
-
 
 def test_drag_settles_at_drop_point_after_release():
     be = _RecordingBackend()

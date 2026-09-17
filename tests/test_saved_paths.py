@@ -22,7 +22,7 @@ from interact.browser import BrowserManager
 from interact.desktop import DesktopWindow
 from interact.runtime import config
 from interact.vision import VLMResult
-from tests.conftest import make_varied_png
+from tests.support import varied_png
 
 _DATA = b"MP4DATA"
 
@@ -142,7 +142,7 @@ async def test_download_asset_names_the_absolute_file_it_wrote(sandbox, monkeypa
 async def test_screenshot_names_the_absolute_file_it_wrote(sandbox, monkeypatch, preexisting):
     """Browser capture branch: the reply names the file; an overwrite is still announced (#44), and
     that check looks at the RESOLVED location — not at a cwd-relative one that never existed."""
-    png = make_varied_png()
+    png = varied_png()
     dest = sandbox["out"] / "shots" / "page.png"
     if preexisting:
         dest.parent.mkdir(parents=True)
@@ -160,7 +160,7 @@ async def test_screenshot_names_the_absolute_file_it_wrote(sandbox, monkeypatch,
 
 @pytest.mark.asyncio
 async def test_measure_ui_names_the_absolute_file_it_wrote(sandbox, monkeypatch):
-    png = make_varied_png()
+    png = varied_png()
     captured = AsyncMock(return_value=(png, "Page: Home", None, None, None))
     monkeypatch.setattr(srv.capture, "_capture_or_file", captured)
     out = await srv.measure_ui(path="measure.png")
@@ -196,7 +196,7 @@ def test_a_per_call_debug_dir_follows_the_same_rule(sandbox):
 @pytest.mark.asyncio
 async def test_review_ui_names_the_absolute_file_it_wrote(sandbox, monkeypatch):
     """review_ui / verify_ui saved through the shared capture path and said nothing about where."""
-    png = make_varied_png()
+    png = varied_png()
     monkeypatch.setattr(srv.capture, "_capture_or_file", AsyncMock(return_value=(png, "Page: Home", None, None, None)))
     monkeypatch.setattr(srv.vlm, "_vlm", _vlm_returning("[]"))
     out = await srv.review_ui(path="review.png")

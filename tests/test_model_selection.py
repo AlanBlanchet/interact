@@ -16,42 +16,26 @@ import json
 import pytest
 
 from interact.models import Model, ModelChain
+from tests.support import catalog_dict
 
 #: A catalog with an obvious quality order and a deliberately WRONG curated order, so a test can
-#: tell "sorted by quality" apart from "kept the order it was handed".
-CATALOG = {
-    "providers": {
-        "alpha": {
-            "envKeys": ["ALPHA_KEY"],
-            "models": {
-                "alpha/weak": {"intelligence_score": 10.0, "input_cost_per_million": 0.1,
-                               "output_cost_per_million": 0.1, "capabilities": ["vlm"]},
-                "alpha/strong": {"intelligence_score": 90.0, "input_cost_per_million": 9.0,
-                                 "output_cost_per_million": 9.0, "capabilities": ["vlm"]},
-            },
-        },
-        "beta": {
-            "envKeys": ["BETA_KEY"],
-            "models": {
-                "beta/middling": {"intelligence_score": 50.0, "input_cost_per_million": 1.0,
-                                  "output_cost_per_million": 1.0, "capabilities": ["vlm"]},
-            },
-        },
-        # Needs no key at all. `is_available()` reports False for these deliberately: a keyless
-        # provider is a subscription wrapper, and interact never drives someone's subscription
-        # credentials — its auth is an interactive device-code flow that blocks forever.
-        "keyless": {
-            "envKeys": [],
-            "models": {
-                "keyless/genius": {"intelligence_score": 99.0, "input_cost_per_million": 0.0,
-                                   "output_cost_per_million": 0.0, "capabilities": ["vlm"]},
-            },
-        },
+#: tell "sorted by quality" apart from "kept the order it was handed". `keyless` needs no env key
+#: at all: `is_available()` reports False for it deliberately — a keyless provider is a
+#: subscription wrapper, and interact never drives someone's subscription credentials, so it gets
+#: no entry in `env_keys` (defaults to `[]`).
+CATALOG = catalog_dict(
+    ("alpha/weak", 0.1, 0.1), ("alpha/strong", 9.0, 9.0), ("beta/middling", 1.0, 1.0),
+    ("keyless/genius", 0.0, 0.0),
+    env_keys={"alpha": ["ALPHA_KEY"], "beta": ["BETA_KEY"]},
+    extra={
+        "alpha/weak": {"intelligence_score": 10.0, "capabilities": ["vlm"]},
+        "alpha/strong": {"intelligence_score": 90.0, "capabilities": ["vlm"]},
+        "beta/middling": {"intelligence_score": 50.0, "capabilities": ["vlm"]},
+        "keyless/genius": {"intelligence_score": 99.0, "capabilities": ["vlm"]},
     },
     # Deliberately worst-first: the shipped list is cost-weighted, and reordering it is the point.
-    "recommendations": {"image": ["alpha/weak", "beta/middling", "alpha/strong",
-                                  "keyless/genius"]},
-}
+    recommend={"image": ["alpha/weak", "beta/middling", "alpha/strong", "keyless/genius"]},
+)
 
 
 @pytest.fixture(autouse=True)

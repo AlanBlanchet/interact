@@ -1,11 +1,11 @@
-from pathlib import Path
-
-from interact.config.settings import Config
-from interact.desktop import nested
-from interact.desktop.backend import nested_server_command
+"""Background (headless) default + explicit reveal."""
 
 
-def test_nested_automation_is_background_by_default_and_reveal_is_explicit(monkeypatch, tmp_path: Path) -> None:
+def test_nested_automation_is_background_by_default_and_reveal_is_explicit(monkeypatch, tmp_path):
+    from interact.config.settings import Config
+    from interact.desktop import nested
+    from interact.desktop.backend import nested_server_command
+
     reaped: list[bool] = []
     started: list[tuple[str, bool]] = []
     monkeypatch.setattr(nested.shutil, "which", lambda command: f"/usr/bin/{command}")

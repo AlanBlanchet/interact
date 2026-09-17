@@ -12,8 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from interact.actions import PressAction
-from interact.browser import BrowserManager
-from interact.config import Config
+from tests.support import browser_manager
 
 _PAGE = """
 <style>
@@ -34,7 +33,7 @@ def test_hold_must_be_positive_and_bounded():
 
 @pytest.mark.asyncio
 async def test_a_press_engages_real_active_state_then_releases():
-    mgr = BrowserManager(Config(headless=True, browser_type="chromium"))
+    mgr = browser_manager()
     try:
         try:
             await mgr.ensure_ready()

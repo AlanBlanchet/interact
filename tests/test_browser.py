@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from interact.browser import BrowserManager
-from interact.config import LOG_MAXLEN, Config
+from interact.config import LOG_MAXLEN
 from interact.state import InteractiveElement, PageState, _visible_text, ref_locator
+from tests.support import browser_manager, interactive_element
 
 _ANNOTATE_JS = (
     Path(__file__).parents[1]
@@ -15,23 +15,14 @@ _ANNOTATE_JS = (
 
 
 def _el(index: int, ref: str | None = None) -> InteractiveElement:
-    return InteractiveElement(
-        index=index,
-        ref=ref,
-        role="button",
-        name=f"btn{index}",
-        x=0,
-        y=0,
-        width=10,
-        height=10,
-    )
+    return interactive_element(index, ref, name=f"btn{index}")
 
 
 # --- BrowserManager element map ---
 
 
 def test_element_map_per_tab_isolation():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr.set_element_map(0, [_el(1), _el(2)])
     mgr.set_element_map(1, [_el(3)])
 
@@ -43,7 +34,7 @@ def test_element_map_per_tab_isolation():
 
 
 def test_element_map_tab_overwrite():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr.set_element_map(0, [_el(1)])
     mgr.set_element_map(0, [_el(2)])
     assert mgr.get_element(1, tab=0) is None
@@ -51,12 +42,12 @@ def test_element_map_tab_overwrite():
 
 
 def test_get_element_missing_tab():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     assert mgr.get_element(1, tab=5) is None
 
 
 def test_get_element_default_tab():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr.set_element_map(0, [_el(7)])
     assert mgr.get_element(7) is not None
 
@@ -97,7 +88,7 @@ def test_ref_locator():
 
 
 def test_drain_network_log_returns_entries():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr._network_log.append({"method": "GET", "url": "https://example.com"})
     mgr._network_log.append({"method": "POST", "url": "https://example.com/api"})
     entries = mgr.drain_network_log()
@@ -107,7 +98,7 @@ def test_drain_network_log_returns_entries():
 
 
 def test_drain_network_log_clear():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr._network_log.append({"method": "GET", "url": "https://example.com"})
     entries = mgr.drain_network_log(clear=True)
     assert len(entries) == 1
@@ -115,7 +106,7 @@ def test_drain_network_log_clear():
 
 
 def test_drain_console_log_returns_entries():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr._console_log.append({"level": "log", "text": "hello"})
     entries = mgr.drain_console_log()
     assert len(entries) == 1
@@ -124,7 +115,7 @@ def test_drain_console_log_returns_entries():
 
 
 def test_drain_console_log_clear():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr._console_log.append({"level": "error", "text": "oops"})
     entries = mgr.drain_console_log(clear=True)
     assert len(entries) == 1
@@ -132,13 +123,13 @@ def test_drain_console_log_clear():
 
 
 def test_log_deque_maxlen():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     assert mgr._network_log.maxlen == LOG_MAXLEN
     assert mgr._console_log.maxlen == LOG_MAXLEN
 
 
 def test_is_recording_default_false():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     assert mgr.is_recording is False
 
 
@@ -275,7 +266,7 @@ def test_http_credentials_fold_into_context_kwargs():
     """#70: a native Basic-auth 'Sign in' dialog can't be typed into reliably (keystrokes leak as
     browser accelerators). Setting credentials on the session makes Playwright authenticate at the
     context level — the dialog never appears."""
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     assert "http_credentials" not in mgr._context_kwargs()  # off by default
     mgr.set_http_credentials("alice", "s3cret")
     kw = mgr._context_kwargs()
@@ -283,7 +274,7 @@ def test_http_credentials_fold_into_context_kwargs():
 
 
 def test_http_credentials_parse_user_colon_pass():
-    mgr = BrowserManager(Config())
+    mgr = browser_manager()
     mgr.set_http_credentials_spec("bob:hunter2")
     assert mgr._context_kwargs()["http_credentials"] == {"username": "bob", "password": "hunter2"}
     mgr.set_http_credentials_spec(None)  # clearing removes it

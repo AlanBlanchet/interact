@@ -198,7 +198,6 @@ def test_a_child_is_not_handed_interact_twice(tmp_path, monkeypatch):
 
     cfg = tmp_path / ".claude.json"
     cfg.write_text('{"mcpServers": {"interact": {"command": "/home/x/.local/bin/interact"}}}')
-    monkeypatch.setenv("HOME", str(tmp_path))
     assert already_meshed("claude") is True
 
 
@@ -206,7 +205,6 @@ def test_a_machine_without_interact_registered_still_gets_the_mesh(tmp_path, mon
     """The mesh exists for exactly this case: a provider with no interact of its own."""
     from interact.agents.run import already_meshed
 
-    monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.claude.json at all
     assert already_meshed("claude") is False
     (tmp_path / ".claude.json").write_text('{"mcpServers": {}}')
     assert already_meshed("claude") is False
@@ -218,7 +216,6 @@ def test_a_broken_provider_config_never_blocks_the_spawn(tmp_path, monkeypatch):
     from interact.agents.run import already_meshed
 
     (tmp_path / ".claude.json").write_text("{ not json")
-    monkeypatch.setenv("HOME", str(tmp_path))
     assert already_meshed("claude") is False
 
 

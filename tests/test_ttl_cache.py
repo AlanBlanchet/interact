@@ -8,13 +8,6 @@ import pytest
 from interact.ttl_cache import TTLCache, age_of
 
 
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    yield
-
-
 def test_a_write_leaves_exactly_one_file_and_no_temp():
     """A surviving temp is a leak; a temp that IS the target means the write was not atomic."""
     cache = TTLCache("thing.json")

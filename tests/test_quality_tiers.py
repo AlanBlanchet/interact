@@ -10,6 +10,7 @@ from interact import server as srv
 from interact.config import _DEFAULT_SOVEREIGN_MODEL, Config
 from interact.vision.critique import RequirementCheck, UIFinding, UIReview, VerifyReport
 from interact.state import InteractiveElement
+from tests.support import interactive_element
 from interact.vision import VLMResult
 
 
@@ -78,7 +79,7 @@ def test_quality_plan_explicit_model_beats_the_tier(monkeypatch):
 
 
 def _el(ref: str) -> InteractiveElement:
-    return InteractiveElement(ref=ref, role="button", name="Go", x=1, y=1, w=9, h=9, index=1)
+    return interactive_element(ref=ref, name="Go", x=1, y=1, w=9, h=9)
 
 
 def _stub_browser_capture(monkeypatch, elements):

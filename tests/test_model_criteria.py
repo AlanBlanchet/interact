@@ -10,9 +10,7 @@ itself, re-resolved every spawn — and each variable is NAMESPACED BY ITS SOURC
 `intelligence` hides who measured it and two leaderboards rarely agree.
 """
 
-import copy
 import json
-from contextlib import contextmanager
 from datetime import date, timedelta
 
 import pytest
@@ -21,28 +19,7 @@ from interact.models import Benchmark, Model, ModelCapability
 from interact.criteria import Criteria, CriteriaError, Variables
 from interact.agents.protocol import ConversationRoute, ModelSelection
 
-
-@contextmanager
-def catalog_of(*models: Model):
-    """Swap the catalog for exactly these models, then put back what was there. Later tests — and
-    the self-loading `Model.catalog()` — read the same registry, and an emptied one is not
-    "unloaded": it is a catalog that says there are no models."""
-    saved = list(Model.registry())
-    # The loader's own state is part of the catalog: a test that LOADS a fixture JSON overwrites
-    # the provider keys / grounding table every later test reads, so they go back too.
-    loader_state = {
-        name: copy.copy(getattr(Model, name))
-        for name in ("_provider_keys", "_component_recommendations", "_coord_formats", "_served")
-    }
-    Model._reset()
-    for model in models:
-        Model._register(model)
-    try:
-        yield
-    finally:
-        Model._registry[:] = saved
-        for name, value in loader_state.items():
-            setattr(Model, name, value)
+from tests.support.models import catalog_of
 
 
 def eyes(**spec) -> Model:

@@ -33,6 +33,7 @@ from interact.agents.protocol import (
 from interact.agents.providers import CodexProvider
 from interact.data import PackageData
 from interact.config import Config
+from tests.support import catalog_json
 
 FIXTURES = Path(__file__).parent / "fixtures" / "agents"
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -127,24 +128,12 @@ def _codex_log(binary_dir: Path) -> list[dict]:
 
 
 def _models(*models: tuple[str, float]) -> str:
-    return json.dumps({
-        "providers": {
-            "openai": {
-                "envKeys": ["OPENAI_API_KEY"],
-                "models": {
-                    model: {
-                        "input_cost_per_million": cost,
-                        "output_cost_per_million": cost,
-                        "capabilities": ["llm"],
-                    }
-                    for model, cost in models
-                },
-            }
-        },
-        "recommendations": {},
-        "coordFormats": {},
-        "defaults": {},
-    })
+    return catalog_json(
+        *((model, cost, cost) for model, cost in models),
+        env_keys={"openai": ["OPENAI_API_KEY"]},
+        extra={model: {"capabilities": ["llm"]} for model, _ in models},
+        defaults={},
+    )
 
 
 async def _open_api_server(root: Path, *, delay: float = 0.0):

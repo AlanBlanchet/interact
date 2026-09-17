@@ -18,13 +18,6 @@ from interact.agents import registry as reg
 from interact.agents.events import AgentEvent
 
 
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    yield
-
-
 def test_agent_tool_functions_have_no_local_imports() -> None:
     module_path = tools_agents.__file__
     assert module_path is not None

@@ -14,23 +14,8 @@ import pytest
 
 from interact.agents import agent_queue, messaging
 from interact.agents import registry as reg
-from interact.agents.policy import Policy
 from interact.agents.providers import PermissionMode
-
-
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    yield
-
-
-def _record(**over):
-    return reg.register(
-        run_id=over.get("run_id", "r1"), name=over.get("name", "reviewer"),
-        provider=over.get("provider", "claude"), task="t", pid=1234,
-        agent="tester", provider_session_id=over.get("provider_session_id", "vendor-r1"),
-    )
+from tests.support import install_provider, register_run, use_policy
 
 
 def test_an_unknown_run_id_says_how_to_find_the_real_ones():
@@ -40,7 +25,7 @@ def test_an_unknown_run_id_says_how_to_find_the_real_ones():
 
 def test_it_refuses_to_type_into_one_of_the_users_own_editor_sessions(monkeypatch):
     """A foreign run is a session the user is driving — interact watches it, never types in it."""
-    _record()
+    register_run("r1", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
     monkeypatch.setattr(reg, "list_runs", lambda **kw: [_Foreign()])
     error = messaging.check_deliverable("r1")[1]
     assert error and "must not type into it" in error
@@ -52,7 +37,7 @@ class _Foreign:
 
 def test_a_provider_that_cannot_resume_is_refused_with_the_alternative(monkeypatch):
     """Without resume the message would arrive with no context, which is worse than refusing."""
-    _record(provider="codex")
+    register_run("r1", name="reviewer", provider="codex", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
 
     class _NoResume:
         can_resume = False
@@ -63,7 +48,7 @@ def test_a_provider_that_cannot_resume_is_refused_with_the_alternative(monkeypat
 
 
 def test_a_deliverable_run_returns_no_error(monkeypatch):
-    _record()
+    register_run("r1", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
 
     class _Ok:
         can_resume = True
@@ -80,20 +65,20 @@ def test_a_deliverable_run_returns_no_error(monkeypatch):
 
 
 def test_a_unique_prefix_resolves_to_the_full_id():
-    _record(run_id="abcd1234-0000-0000-0000-000000000000")
+    register_run("abcd1234-0000-0000-0000-000000000000", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
     assert reg.resolve_run_id("abcd1234") == "abcd1234-0000-0000-0000-000000000000"
 
 
 def test_an_exact_id_still_resolves_to_itself():
-    _record(run_id="abcd1234-0000-0000-0000-000000000000")
+    register_run("abcd1234-0000-0000-0000-000000000000", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
     full = "abcd1234-0000-0000-0000-000000000000"
     assert reg.resolve_run_id(full) == full
 
 
 def test_an_ambiguous_prefix_resolves_to_nothing_rather_than_guessing():
     """Picking one at random could stop or message the WRONG agent — refuse instead."""
-    _record(run_id="abcd1111-0000-0000-0000-000000000000")
-    _record(run_id="abcd2222-0000-0000-0000-000000000000")
+    register_run("abcd1111-0000-0000-0000-000000000000", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
+    register_run("abcd2222-0000-0000-0000-000000000000", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
     assert reg.resolve_run_id("abcd") is None
 
 
@@ -102,7 +87,7 @@ def test_an_unknown_prefix_resolves_to_nothing():
 
 
 def test_delivery_accepts_the_id_the_list_printed(monkeypatch):
-    _record(run_id="abcd1234-0000-0000-0000-000000000000")
+    register_run("abcd1234-0000-0000-0000-000000000000", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
 
     class _Ok:
         can_resume = True
@@ -167,24 +152,20 @@ def _continuation_policy(monkeypatch):
     provider = _DeliveryProvider()
     provider.calls = []
     monkeypatch.setattr(messaging, "provider_for", lambda name: provider)
-    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
-        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
-        providers={"fake": True},
-    ))
+    use_policy(monkeypatch, messaging, agents={"tester": "fresh-model"},
+               reasoning={"tester": "high"}, providers={"fake": True})
     return provider
 
 
 def _resume_policy(monkeypatch):
-    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
-        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
-        providers={"resume-fake": True},
-    ))
+    use_policy(monkeypatch, messaging, agents={"tester": "fresh-model"},
+               reasoning={"tester": "high"}, providers={"resume-fake": True})
 
 
 def test_delivery_queues_against_vendor_session_not_interact_id(monkeypatch):
     from interact.agents import agent_queue
     provider = _continuation_policy(monkeypatch)
-    _record(run_id="interact-run", provider="fake", provider_session_id="vendor-thread")
+    register_run("interact-run", name="reviewer", provider="fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
 
     delivery = messaging.deliver_message("interact-run", "ping", sender="operator")
@@ -196,7 +177,7 @@ def test_delivery_queues_against_vendor_session_not_interact_id(monkeypatch):
 
 def test_peer_message_carries_registry_model_context_without_inventing_capability(monkeypatch):
     _continuation_policy(monkeypatch)
-    _record(run_id="recipient", provider="fake", provider_session_id="vendor-thread")
+    register_run("recipient", name="reviewer", provider="fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     reg.register(
         run_id="sender", pid=None, provider="fake", name="source reviewer", agent="tester",
         model="fixture/reviewer", requested_criterion="aa.intelligence >= 35", reasoning="low",
@@ -219,7 +200,7 @@ def test_peer_message_carries_registry_model_context_without_inventing_capabilit
 def test_stopped_delivery_resumes_with_fresh_policy_and_tracks_new_pid(monkeypatch):
     from interact.agents import agent_queue
     provider = _continuation_policy(monkeypatch)
-    _record(run_id="interact-run", provider="fake", provider_session_id="vendor-thread")
+    register_run("interact-run", name="reviewer", provider="fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     monkeypatch.setattr(reg, "_discover_foreign", lambda: [])
 
@@ -246,14 +227,11 @@ def test_concurrent_resumes_have_one_writer_and_one_busy_result(monkeypatch):
     provider = _ResumeProvider()
     provider.script = "import time; time.sleep(1)\n" + provider.script
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
-                        "resume-fake", provider)
+    install_provider(monkeypatch, provider)
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
-    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
-        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
-        providers={"resume-fake": True},
-    ))
-    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    use_policy(monkeypatch, messaging, agents={"tester": "fresh-model"},
+               reasoning={"tester": "high"}, providers={"resume-fake": True})
+    register_run("r1", name="reviewer", provider="resume-fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(reg, "_alive", lambda pid: pid != 1234)
 
     results = []
@@ -278,9 +256,8 @@ def test_wait_records_nonzero_exit_and_bounded_redacted_stderr(monkeypatch):
     provider.script = "import sys; sys.stderr.write('api_key=test-secret-value\\n'); sys.exit(7)"
     _resume_policy(monkeypatch)
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
-                        "resume-fake", provider)
-    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    install_provider(monkeypatch, provider)
+    register_run("r1", name="reviewer", provider="resume-fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
 
@@ -299,9 +276,8 @@ def test_wait_rejects_a_clean_process_that_emits_no_resume_event(monkeypatch):
     provider.script = "pass"
     _resume_policy(monkeypatch)
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
-                        "resume-fake", provider)
-    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    install_provider(monkeypatch, provider)
+    register_run("r1", name="reviewer", provider="resume-fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
 
@@ -321,9 +297,8 @@ def test_wait_false_still_reaps_and_records_the_resumed_process(monkeypatch):
     provider.script = "import time; time.sleep(0.05)"
     _resume_policy(monkeypatch)
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
-                        "resume-fake", provider)
-    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    install_provider(monkeypatch, provider)
+    register_run("r1", name="reviewer", provider="resume-fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
 
@@ -340,9 +315,8 @@ def test_queued_reply_lookup_uses_persisted_attempt_anchor(monkeypatch):
     provider = _ResumeProvider()
     _resume_policy(monkeypatch)
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setitem(__import__("interact.agents.providers", fromlist=["PROVIDERS"]).PROVIDERS,
-                        "resume-fake", provider)
-    _record(provider="resume-fake", provider_session_id="vendor-thread")
+    install_provider(monkeypatch, provider)
+    register_run("r1", name="reviewer", provider="resume-fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     monkeypatch.setattr(reg, "_alive", lambda pid: False)
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)
 
@@ -355,7 +329,7 @@ def test_queued_reply_lookup_uses_persisted_attempt_anchor(monkeypatch):
 
 
 def test_record_and_delivery_share_the_transcript_message_limit(monkeypatch):
-    _record()
+    register_run("r1", name="reviewer", provider="claude", task="t", pid=1234, agent="tester", provider_session_id="vendor-r1")
     oversized = "x" * 2001
 
     delivery = messaging.deliver_message("r1", oversized, sender="operator")
@@ -367,11 +341,9 @@ def test_queue_preserves_effective_policy_and_records_fresh_policy_separately(mo
     from interact.agents import agent_queue
     provider = _DeliveryProvider()
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
-        agents={"tester": "fresh-model"}, reasoning={"tester": "high"},
-        providers={"fake": True},
-    ))
-    _record(provider="fake", provider_session_id="vendor-thread")
+    use_policy(monkeypatch, messaging, agents={"tester": "fresh-model"},
+               reasoning={"tester": "high"}, providers={"fake": True})
+    register_run("r1", name="reviewer", provider="fake", task="t", pid=1234, agent="tester", provider_session_id="vendor-thread")
     stored = reg.get_run("r1")
     stored.model = "current-model"
     stored.requested_criterion = "current-criterion"
@@ -404,7 +376,6 @@ def test_a_message_the_agent_RECEIVED_points_inward_and_names_the_sender():
 def test_a_message_the_agent_SENT_points_outward_and_names_the_recipient(tmp_path, monkeypatch):
     from interact.agents.events import AgentEvent
 
-    monkeypatch.setenv("HOME", str(tmp_path))
     reg.register(run_id="r2", name="perf", provider="claude", task="t", pid=None)
     event = AgentEvent(kind="message", from_run="r1", to_run="r2", text="numbers look fine")
     assert event.summary(viewer="r1") == "→ perf: numbers look fine"
@@ -413,7 +384,6 @@ def test_a_message_the_agent_SENT_points_outward_and_names_the_recipient(tmp_pat
 def test_with_no_viewer_it_still_names_both_ends_rather_than_a_bare_hash(tmp_path, monkeypatch):
     from interact.agents.events import AgentEvent
 
-    monkeypatch.setenv("HOME", str(tmp_path))
     reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
     reg.register(run_id="r2", name="perf", provider="claude", task="t", pid=None)
     event = AgentEvent(kind="message", from_run="r1", to_run="r2", text="hi")
@@ -435,7 +405,6 @@ def test_an_unknown_id_falls_back_to_its_short_form():
 
 
 def test_a_message_is_placed_where_it_was_sent_not_at_the_end(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
     raw = reg.raw_events_path("r1")
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -454,7 +423,6 @@ def test_a_message_is_placed_where_it_was_sent_not_at_the_end(tmp_path, monkeypa
 
 
 def test_the_mirror_the_panel_reads_contains_the_messages(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
     reg.raw_events_path("r1").parent.mkdir(parents=True, exist_ok=True)
     reg.raw_events_path("r1").write_text(_assistant("hi") + "\n")
@@ -478,7 +446,6 @@ def test_a_message_with_no_anchor_goes_LAST_not_first(tmp_path, monkeypatch):
     """Messages recorded before the anchor existed carry none. We do not know where they belong,
     so they go at the end — `(index or 0)` silently read "unknown" as "the very beginning" and
     dropped every one of them above the run's own first turn."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
     raw = reg.raw_events_path("r1")
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -496,7 +463,6 @@ def test_the_mirror_updates_when_the_CONTENT_changes_not_only_its_length(tmp_pat
     """The mirror was rewritten only when the event COUNT changed, so a fix to how events are
     ordered or rendered never reached the panel — it kept serving the old shape forever, and the
     only way to notice was that the UI disagreed with the CLI."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     reg.register(run_id="r1", name="reviewer", provider="claude", task="t", pid=None)
     events_file = reg.events_path("r1")
     events_file.parent.mkdir(parents=True, exist_ok=True)

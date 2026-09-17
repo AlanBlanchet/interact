@@ -11,19 +11,11 @@ import pytest
 from interact.agents import agent_queue, messaging
 from interact.agents import registry as reg
 from interact.agents.policy import Policy
-from interact.agents.providers import AgentProvider, ClaudeCodeProvider, PROVIDERS
+from tests.support.agents import ScriptedProvider, install_provider, use_policy
 
 
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    yield
-
-
-class _Provider(AgentProvider):
+class _Provider(ScriptedProvider):
     name = "queue-fake"
-    binary = sys.executable
     can_resume = True
 
     def __init__(self, script: str | None = None):
@@ -35,18 +27,12 @@ class _Provider(AgentProvider):
         )
         self.messages: list[str] = []
 
-    def available(self):
-        return True
-
     def command(self, *args, **kwargs):
         return [sys.executable, "-c", "pass"]
 
     def resume_command(self, session_id, message, **kwargs):
         self.messages.append(message)
         return [sys.executable, "-c", self.script]
-
-    def parse(self, line):
-        return ClaudeCodeProvider().parse(line)
 
     def valid_definition(self, agent):
         return True
@@ -57,11 +43,9 @@ class _Provider(AgentProvider):
 
 def _setup(monkeypatch, provider=None):
     provider = provider or _Provider()
-    monkeypatch.setitem(PROVIDERS, provider.name, provider)
+    install_provider(monkeypatch, provider)
     monkeypatch.setattr(messaging, "provider_for", lambda _: provider)
-    monkeypatch.setattr(messaging, "load_policy", lambda: Policy(
-        agents={"tester": "queue-model"}, providers={provider.name: True},
-    ))
+    use_policy(monkeypatch, messaging, agents={"tester": "queue-model"}, providers={provider.name: True})
     # Delivery tests run the same dispatcher entry point in-process. The child process itself is
     # still real: launch_continuation uses Popen and its reaper owns waitpid/finish.
     monkeypatch.setattr(agent_queue, "ensure_dispatcher_locked", lambda *args, **kwargs: 1)

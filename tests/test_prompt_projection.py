@@ -15,6 +15,7 @@ from interact.prompt_projection import (
     install_prompt_projection,
     stage_projection_install,
 )
+from tests.support import commit_all, init_repo, run_git
 
 
 LEGACY = Path.home() / "dev" / "ai-prompts"
@@ -22,10 +23,7 @@ LEGACY_COMMIT = "f9b6cca2f01172beac30876c4d39fd479ca9fb4b"
 
 
 def _git(repository: Path, *arguments: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repository), *arguments], capture_output=True, text=True, check=True
-    )
-    return result.stdout.strip()
+    return run_git(repository, *arguments).stdout.strip()
 
 
 def _extract(repository: Path, commit: str, destination: Path) -> None:
@@ -80,7 +78,7 @@ def test_exact_commit_compiler_matches_the_complete_legacy_generator(tmp_path: P
 def _fixture_repository(tmp_path: Path, generator: str = "") -> Path:
     repository = tmp_path / "source"
     repository.mkdir()
-    _git(repository, "init", "--initial-branch=main")
+    init_repo(repository, branch="main")
     _git(repository, "config", "commit.gpgsign", "false")
     (repository / "generate.py").write_text(generator or (
         "from pathlib import Path\n"
@@ -101,11 +99,7 @@ def _fixture_repository(tmp_path: Path, generator: str = "") -> Path:
         "hooks": {"Stop": [{"hooks": [{"type": "prompt", "prompt": "placeholder"}]}]},
         "statusLine": {"type": "command", "command": "hook.sh"},
     }))
-    _git(repository, "add", ".")
-    subprocess.run(
-        ["git", "-C", str(repository), "-c", "user.name=Test", "-c",
-         "user.email=test@example.invalid", "commit", "-qm", "source"], check=True
-    )
+    commit_all(repository, "source")
     return repository
 
 
@@ -118,13 +112,16 @@ def test_compiler_rejects_unsafe_committed_sources(tmp_path: Path, unsafe: str) 
     elif unsafe == "case-collision":
         (repository / "GENERATE.py").write_text("collision\n")
         _git(repository, "add", "GENERATE.py")
-    else:
+    if unsafe == "submodule":
+        # `commit_all`'s own `git add -A` would re-scan the working tree, find no `nested`
+        # directory to back this gitlink, and stage its removal right back out — commit only
+        # what `update-index` already staged, don't restage.
         commit = _git(repository, "rev-parse", "HEAD")
         _git(repository, "update-index", "--add", "--cacheinfo", "160000," + commit + ",nested")
-    subprocess.run(
-        ["git", "-C", str(repository), "-c", "user.name=Test", "-c",
-         "user.email=test@example.invalid", "commit", "-qm", unsafe], check=True
-    )
+        _git(repository, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+             "commit", "-qm", unsafe)
+    else:
+        commit_all(repository, unsafe)
     with pytest.raises(ValueError, match="unsafe committed source"):
         compile_prompt_projection(repository, "HEAD", tmp_path / "projection", tmp_path / "installed")
 
@@ -167,11 +164,7 @@ def test_compiler_output_is_derived_from_the_selected_commit(tmp_path: Path) -> 
     assert (first / MANIFEST_NAME).read_bytes() == (repeated / MANIFEST_NAME).read_bytes()
     generator = repository / "generate.py"
     generator.write_text(generator.read_text().replace("agents\\n", "changed agents\\n"))
-    _git(repository, "add", "generate.py")
-    subprocess.run(
-        ["git", "-C", str(repository), "-c", "user.name=Test", "-c",
-         "user.email=test@example.invalid", "commit", "-qm", "change source"], check=True
-    )
+    commit_all(repository, "change source")
     second = tmp_path / "second"
     compile_prompt_projection(repository, "HEAD", second, tmp_path / "installed")
     assert (first / "AGENTS.md").read_bytes() != (second / "AGENTS.md").read_bytes()

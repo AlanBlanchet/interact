@@ -17,13 +17,7 @@ from pathlib import Path
 import pytest
 
 from interact import model_catalog as mc
-
-
-@pytest.fixture(autouse=True)
-def _home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    yield
+from tests.support.models import catalog_of
 
 
 _OPENROUTER = {
@@ -146,7 +140,6 @@ def test_the_catalog_carries_each_model_s_capability_score_for_the_pickers():
     a picker row can only show a name, and the choice cannot be a comparison."""
     from interact.model_catalog import ModelInfo, _with_scores
     from interact.models import Model
-    from tests.test_model_criteria import catalog_of
 
     with catalog_of(
         Model(id="known", provider="anthropic", capabilities=set(), intelligence_score=42.0),

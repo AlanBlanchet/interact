@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import pytest
 
+from tests.support import commit_all, git_out, init_repo
+
 REPO_ROOT = Path(__file__).parents[1]
 GATE = REPO_ROOT / "scripts" / "repository_gate.py"
 PRE_COMMIT = REPO_ROOT / ".githooks" / "pre-commit"
@@ -18,13 +20,9 @@ PRE_COMMIT = REPO_ROOT / ".githooks" / "pre-commit"
 @pytest.fixture
 def git_repo():
     root = REPO_ROOT / "out" / "tests" / "workflow-gates" / uuid4().hex
-    root.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "gate@example.invalid"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "Repository Gate Test"], cwd=root, check=True)
+    init_repo(root)
     (root / "seed.txt").write_text("seed\n")
-    subprocess.run(["git", "add", "seed.txt"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-qm", "seed"], cwd=root, check=True)
+    commit_all(root, "seed")
     yield root
     shutil.rmtree(root)
 
@@ -44,7 +42,7 @@ def stage(root: Path, path: str, content: bytes):
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
-    subprocess.run(["git", "add", "--", path], cwd=root, check=True)
+    git_out(root, "add", "--", path)
 
 @pytest.mark.parametrize(
     ("content", "finding_class"),
@@ -75,13 +73,13 @@ def test_staged_secret_blocks_without_disclosure(git_repo: Path, content: bytes,
 def test_scanner_ignores_content_outside_added_index_lines(git_repo: Path, case: str):
     path = git_repo / "candidate.txt"
     path.write_text("safe\n")
-    subprocess.run(["git", "add", "candidate.txt"], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=git_repo, check=True)
+    git_out(git_repo, "add", "candidate.txt")
+    git_out(git_repo, "commit", "-qm", "candidate")
     if case == "unstaged":
         path.write_text("token = 'ghp_" + "abcdefghijklmnopqrstuvwxyz123456'\n")
     else:
         path.unlink()
-        subprocess.run(["git", "add", "candidate.txt"], cwd=git_repo, check=True)
+        git_out(git_repo, "add", "candidate.txt")
 
     result = run_gate(git_repo, "scan-staged")
 
@@ -133,11 +131,7 @@ def test_configured_confidential_term_in_filename_is_redacted(git_repo: Path):
     terms = git_repo / ".git" / "confidential-terms"
     terms.write_text(confidential + "\n")
     terms.chmod(0o600)
-    subprocess.run(
-        ["git", "config", "--local", "interact.confidentialTermsFile", "confidential-terms"],
-        cwd=git_repo,
-        check=True,
-    )
+    git_out(git_repo, "config", "--local", "interact.confidentialTermsFile", "confidential-terms")
     stage(git_repo, confidential + ".txt", b"-----BEGIN PRI" + b"VATE KEY-----\n")
 
     result = run_gate(git_repo, "scan-staged")
@@ -153,8 +147,8 @@ def test_ascii_secret_scan_ignores_binary_git_attributes(git_repo: Path, attribu
     attributes = git_repo / ".gitattributes"
     attributes.write_text("*.secret binary\n")
     if attribute_authority == "committed":
-        subprocess.run(["git", "add", ".gitattributes"], cwd=git_repo, check=True)
-        subprocess.run(["git", "commit", "-qm", "attributes"], cwd=git_repo, check=True)
+        git_out(git_repo, "add", ".gitattributes")
+        git_out(git_repo, "commit", "-qm", "attributes")
     secret = b"ghp_" + b"abcdefghijklmnopqrstuvwxyz123456"
     stage(git_repo, "candidate.secret", b"token = '" + secret + b"'\n")
 
@@ -215,12 +209,12 @@ def test_repeated_line_diff_completes_within_linear_time_bound(git_repo: Path):
     path = git_repo / "repeated.txt"
     lines = [b"repeat\n"] * 16384
     path.write_bytes(b"".join(lines))
-    subprocess.run(["git", "add", "repeated.txt"], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "repeated"], cwd=git_repo, check=True)
+    git_out(git_repo, "add", "repeated.txt")
+    git_out(git_repo, "commit", "-qm", "repeated")
     secret = b"ghp_" + b"abcdefghijklmnopqrstuvwxyz123456"
     lines[len(lines) // 2] = secret + b"\n"
     path.write_bytes(b"".join(lines))
-    subprocess.run(["git", "add", "repeated.txt"], cwd=git_repo, check=True)
+    git_out(git_repo, "add", "repeated.txt")
 
     started = time.perf_counter()
     result = subprocess.run(
@@ -246,22 +240,22 @@ def test_scanner_handles_rename_destination(git_repo: Path, mutation: str):
     secret = "token = 'ghp_" + "abcdefghijklmnopqrstuvwxyz123456'"
     seed = git_repo / "seed.txt"
     seed.write_text(secret + "\nordinary\n")
-    subprocess.run(["git", "add", "seed.txt"], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "credential-like baseline"], cwd=git_repo, check=True)
-    subprocess.run(["git", "mv", "seed.txt", "renamed file.txt"], cwd=git_repo, check=True)
+    git_out(git_repo, "add", "seed.txt")
+    git_out(git_repo, "commit", "-qm", "credential-like baseline")
+    git_out(git_repo, "mv", "seed.txt", "renamed file.txt")
     renamed = git_repo / "renamed file.txt"
     if mutation == "benign":
         renamed.write_text(secret + "\nordinary expanded\n")
-        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+        git_out(git_repo, "add", "renamed file.txt")
     elif mutation == "added":
         renamed.write_text(renamed.read_text() + secret + "\n")
-        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+        git_out(git_repo, "add", "renamed file.txt")
     elif mutation == "modified":
         renamed.write_text(secret + "\n" + secret + "\n")
-        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+        git_out(git_repo, "add", "renamed file.txt")
     elif mutation == "changed_hostile":
         renamed.write_text("token = 'ghp_" + "123456abcdefghijklmnopqrstuvwxyz" + "'\nordinary\n")
-        subprocess.run(["git", "add", "renamed file.txt"], cwd=git_repo, check=True)
+        git_out(git_repo, "add", "renamed file.txt")
 
     result = run_gate(git_repo, "scan-staged")
 
@@ -311,11 +305,7 @@ def test_confidential_term_file_is_private_and_redacted(git_repo: Path, mode: in
     confidential = b"project-codename"
     terms.write_bytes(confidential + b"\n")
     terms.chmod(mode)
-    subprocess.run(
-        ["git", "config", "--local", "interact.confidentialTermsFile", "confidential-terms"],
-        cwd=git_repo,
-        check=True,
-    )
+    git_out(git_repo, "config", "--local", "interact.confidentialTermsFile", "confidential-terms")
     stage(git_repo, "candidate.txt", b"reference: " + confidential + b"\n")
 
     result = run_gate(git_repo, "scan-staged")
@@ -330,11 +320,7 @@ def test_confidential_term_file_rejects_same_inode_mutation(git_repo: Path):
     terms = git_repo / ".git" / "confidential-terms"
     terms.write_bytes(b"unmatched-confidential-term\n" * 200000)
     terms.chmod(0o600)
-    subprocess.run(
-        ["git", "config", "--local", "interact.confidentialTermsFile", "confidential-terms"],
-        cwd=git_repo,
-        check=True,
-    )
+    git_out(git_repo, "config", "--local", "interact.confidentialTermsFile", "confidential-terms")
     stage(git_repo, "candidate.txt", b"ordinary content\n")
     running = threading.Event()
     running.set()
@@ -389,7 +375,7 @@ def test_hook_blocks_staged_secret_with_the_indexed_scanner(git_repo: Path):
     scanner = scripts / GATE.name
     scanner.write_bytes(GATE.read_bytes())
     scanner.chmod(0o755)
-    subprocess.run(["git", "add", "scripts/repository_gate.py"], cwd=git_repo, check=True)
+    git_out(git_repo, "add", "scripts/repository_gate.py")
     scanner.write_text("raise SystemExit(0)\n")
     stage(git_repo, "candidate.txt", b"token = 'ghp_" + b"abcdefghijklmnopqrstuvwxyz123456'\n")
 

@@ -12,8 +12,8 @@ import pytest
 
 from interact.agents import registry as reg
 from interact.agents import run as run_module
-from interact.agents.policy import Policy
 from interact.agents.providers import ClaudeCodeProvider, CodexProvider
+from tests.support.agents import use_policy
 from interact.cli.app import app
 from interact.cli import app_commands
 from interact.server import tools_agents
@@ -22,8 +22,6 @@ from interact.config import UserConfig
 
 @pytest.fixture(autouse=True)
 def isolated_registry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(UserConfig, "PATH", tmp_path / ".interact" / "config.env")
     for key in ("INTERACT_PARENT_RUN_ID", "INTERACT_SESSION_ID", "CODEX_THREAD_ID"):
         monkeypatch.delenv(key, raising=False)
@@ -205,7 +203,7 @@ async def test_real_launcher_and_child_process_inherit_owner_through_recorded_pa
     provider = CodexProvider()
     monkeypatch.setattr(CodexProvider, "available", lambda self: True)
     monkeypatch.setattr(CodexProvider, "authenticated", AsyncMock(return_value=True))
-    monkeypatch.setattr(run_module, "load_policy", lambda: Policy(agents={"tester": "fixture-model"}, reasoning={"tester": "medium"}))
+    use_policy(monkeypatch, run_module, agents={"tester": "fixture-model"}, reasoning={"tester": "medium"})
     monkeypatch.setattr(run_module, "resolve_model", lambda model, env, **kwargs: ({}, model))
     monkeypatch.setenv("INTERACT_SESSION_ID", "stale-launcher-conversation")
     script = "import json; from interact.agents import registry; print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':registry.resolve_session_id()}}))"

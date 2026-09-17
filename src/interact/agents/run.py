@@ -22,6 +22,7 @@ from typing import BinaryIO, Sequence
 from interact_core import AgentRevisionRef
 
 from interact.agents import registry as reg
+from interact.agents import quota
 from interact.agents.policy import Policy, policy_path
 from interact.agents.profiles import overlay_for, profiles_from
 from interact.agents.providers import PROVIDERS, AgentProvider, CodexProvider, UnsupportedToolPolicy, validate_denied_tools, _safe_process_detail
@@ -187,29 +188,9 @@ class ModelUnavailable(RuntimeError):
     to some other model is worse than none — it looks like it worked."""
 
 
-#: A vendor CLI's own refusal for QUOTA or RATE LIMIT, e.g. "You've reached your <model> limit.
-#: Switch to another model." or "rate limit exceeded" — the one failure `_unavailable()` cannot
-#: see before the child starts, because only the provider itself knows its quota (#181).
-_QUOTA_REFUSAL = re.compile(
-    r"reached your .{0,80}\b(limit|quota)\b|rate.?limit(ed|ing)?|quota exceeded|"
-    r"switch to another model|usage limit reached",
-    re.IGNORECASE,
-)
-
-
-async def _quota_probe(run_id: str, process: "asyncio.subprocess.Process", *,
-                        window: float = 4.0, interval: float = 0.2) -> reg.SkipReason | None:
-    """Give a just-spawned child a short window to refuse for quota/rate-limit before this run
-    commits to it. Such a refusal prints in the child's own stream and it exits almost
-    immediately — the run "dies at $0.00" (#181) — while a genuinely working agent is still
-    writing its first turn well past this window. Returns ``"quota_exceeded"`` when the refusal
-    is seen, else ``None`` (including: still running past the window, which is the common case
-    and must not be slowed down further than this one check).
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + window
-    while process.returncode is None and loop.time() < deadline:
-        await asyncio.sleep(interval)
+def _child_output(run_id: str) -> str:
+    """Whatever the child has managed to write so far — its own stderr plus the tail of the
+    supervisor's raw event stream."""
     text = ""
     with suppress(Exception):
         text += reg.read_stderr(run_id)
@@ -217,7 +198,41 @@ async def _quota_probe(run_id: str, process: "asyncio.subprocess.Process", *,
         raw = reg.raw_events_path(run_id)
         if raw.exists():
             text += raw.read_bytes()[-4000:].decode(errors="replace")
-    return "quota_exceeded" if _QUOTA_REFUSAL.search(text) else None
+    return text
+
+
+async def _quota_probe(run_id: str, process: "asyncio.subprocess.Process", *,
+                        window: float = 4.0, interval: float = 0.2,
+                        grace: float = 1.5) -> reg.SkipReason | None:
+    """Give a just-spawned child a short window to refuse for quota/rate-limit before this run
+    commits to it. Such a refusal prints in the child's own stream and it exits almost
+    immediately — the run "dies at $0.00" (#181) — while a genuinely working agent is still
+    writing its first turn well past this window. Returns ``"quota_exceeded"`` when the refusal
+    is seen, else ``None``.
+
+    ``window`` is what a LIVE child gets, and it is short on purpose: `run_agent` returns a
+    handle to a running child, so every second here is spawn latency for every healthy agent. A
+    DEAD child gets ``grace`` seconds more of looking instead, costing nothing — its refusal
+    travels to disk through the supervisor's reader, so reading once at the instant the process
+    exits can find an empty stream and hand the run a candidate that never ran.
+
+    A refusal that arrives after ``window`` on a child still alive is NOT caught here: that run
+    keeps the candidate and reports its own failure.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + window
+    while process.returncode is None and loop.time() < deadline:
+        await asyncio.sleep(interval)
+    if quota.REFUSAL.search(_child_output(run_id)):
+        return "quota_exceeded"
+    if process.returncode is None:
+        return None
+    grace_deadline = loop.time() + grace
+    while loop.time() < grace_deadline:
+        await asyncio.sleep(interval)
+        if quota.REFUSAL.search(_child_output(run_id)):
+            return "quota_exceeded"
+    return None
 
 
 _IMAGE_EXTENSIONS = frozenset({".jpeg", ".jpg", ".png", ".webp"})
@@ -646,11 +661,18 @@ async def run_agent(
     image_paths: tuple[Path, ...] = (),
     denied_tools: tuple[str, ...] = (),
     provider_modes: dict[str, str] | None = None,
+    quota_window: float | None = None,
 ) -> RunHandle:
     """Spawn an agent run and register it, returning as soon as it is alive.
 
     Returns immediately by design: the supervisor's whole value is watching work in flight, so
     the run must be visible in the registry before it finishes.
+
+    ``quota_window`` buys that promise back for a caller that can afford to wait: a vendor takes
+    several seconds to answer "you've reached your limit", and a caller returning in four cannot
+    fall through to the next candidate for a refusal that has not arrived yet. A human launching
+    from the terminal waits; a supervisor watching in-flight work does not, so the default stays
+    the short one (:func:`_quota_probe`).
 
     ``profile`` names one of the OPERATOR's own profiles (``INTERACT_PROFILE_*`` in config),
     deciding what this agent runs on — so the critic can sit on a local model while the reviewer
@@ -754,6 +776,11 @@ async def run_agent(
     by_name = {p.name: p for p in pool}
     candidates = rank_candidates(model, dict(os.environ), providers=pool, weights=weights)
     skipped: list[reg.SkippedCandidate] = []
+    #: How many children this run has already handed to the vendor that owns session ids.
+    #: The first gets the run id itself, so `claude --resume <run_id>` works; a later one
+    #: gets a fresh id, because the vendor refuses an id a dead child already claimed
+    #: ("Session ID ... is already in use") and the fall-through would die on arrival.
+    vendor_sessions = 0
     chosen: reg.LaunchCandidate | None = None
     chosen_provider: AgentProvider | None = None
     process: "asyncio.subprocess.Process | None" = None
@@ -762,7 +789,15 @@ async def run_agent(
     auth_cache: dict[tuple[str, str], bool | None] = {}
     allowed_tools = policy.tools_for(agent)
     base_env = dict(os.environ)
+    # A model that refused for quota a moment ago refuses again: passing it over BEFORE the spawn
+    # is what stops every launch paying the same dead-child tax. When the memory would empty the
+    # list entirely it is ignored — a stale note must never be why nothing can run.
+    cooled = [c for c in candidates
+              if quota.blocked_until(c.provider, c.model) is None]
     for candidate in candidates:
+        if cooled and candidate not in cooled:
+            skipped.append(reg.SkippedCandidate(candidate=candidate, reason="quota_exceeded"))
+            continue
         candidate_provider = by_name[candidate.provider]
         routed, resolved_model = resolve_model(candidate.model, base_env, provider=candidate_provider, weights=weights)
         reason = await _unavailable(
@@ -825,12 +860,17 @@ async def run_agent(
         # argv built AFTER the model is decided: used to build first with raw text, so a criterion,
         # a `@profile` or a routed `ollama/x` id reached the binary unresolved while the resolved
         # name went only into the env and run record.
+        if candidate_provider.name == "claude":
+            vendor_session = run_id if vendor_sessions == 0 else str(uuid.uuid4())
+            vendor_sessions += 1
+        else:
+            vendor_session = run_id
         command_kwargs = dict(
             cwd=cwd, model=candidate_model,
             # Once, never twice: skip the mesh when the provider's own config already registers
             # interact — else the child would carry two registrations of the same server.
             mcp_config=mesh_config(run_id=run_id) if mesh and not already_meshed(candidate_provider.name, cwd=cwd) else None,
-            run_id=run_id, agent=agent, permission_mode=candidate_permission_mode,
+            run_id=vendor_session, agent=agent, permission_mode=candidate_permission_mode,
             allowed_tools=allowed_tools, reasoning=effort,
         )
         if policy.catalog is not None:
@@ -865,16 +905,20 @@ async def run_agent(
             permission_mode=candidate_permission_mode, requested_criterion=required_model,
             mesh_enabled=mesh, reasoning=effort,
             candidates=candidates, skipped=tuple(skipped), denied_tools=denied_tools,
-            provider_session_id=run_id if candidate_provider.name == "claude" else None,
+            provider_session_id=vendor_session if candidate_provider.name == "claude" else None,
             agent_ref=selected_ref, definition_path=definition_path,
         )
-        quota_reason = await _quota_probe(run_id, candidate_process)
+        quota_reason = await _quota_probe(
+            run_id, candidate_process,
+            **({} if quota_window is None else {"window": quota_window}),
+        )
         if quota_reason is not None:
             if candidate_process.returncode is None:
                 with suppress(ProcessLookupError):
                     candidate_process.kill()
             with suppress(Exception):
                 await candidate_process.wait()
+            quota.record_refusal(candidate.provider, candidate.model)
             skipped.append(reg.SkippedCandidate(candidate=candidate, reason=quota_reason))
             continue
         chosen = candidate

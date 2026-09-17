@@ -12,7 +12,7 @@ one thing labelled as another, which is the ideal setup for the confident wrong 
 import pytest
 
 from interact.desktop import DesktopElement
-from tests.conftest import make_varied_png
+from tests.support import varied_png
 
 
 def test_refs_detected_on_another_frame_are_reported_stale():
@@ -43,7 +43,7 @@ async def test_a_stale_ref_loses_its_LABEL_but_still_gets_looked_at(monkeypatch)
             self.wid, self.name, self.w, self.h = wid, "Code", 800, 600
 
         def capture(self):  # a frame that does NOT match the seeded detection
-            return make_varied_png()
+            return varied_png()
 
     DesktopElement.merge_into(
         wid, [DesktopElement(index=0, x=0, y=0, w=10, h=10, role="button", name="Old Button")], "sigOLD"
@@ -71,7 +71,7 @@ async def test_a_fresh_ref_keeps_its_label(monkeypatch):
     from interact.vision.detect import _page_signature
 
     wid = 5151
-    frame = make_varied_png()
+    frame = varied_png()
 
     class FakeWin:
         def __init__(self):

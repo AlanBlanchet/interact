@@ -17,32 +17,23 @@ import pytest
 
 from interact.agents import registry as reg, run as run_module
 from interact.agents.events import AgentEvent
-from interact.agents.providers import AgentProvider, CodexProvider
+from interact.agents.providers import CodexProvider
 from interact.agents.run import mesh_config, run_agent, validate_image_paths
+from tests.support.agents import ScriptedProvider, install_provider, use_policy
 
 
 @pytest.fixture(autouse=True)
 def _home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    from interact.agents.policy import Policy
-    monkeypatch.setattr("interact.agents.run.load_policy", lambda: Policy(
-        agents={"tester": "fixture-model"}, reasoning={"tester": "medium"},
-    ))
-    # A run's raw stream is parsed by the provider named on its record, looked up in the global
-    # registry — so a test double has to be registered exactly like a real provider is.
-    from interact.agents.providers import PROVIDERS
-
-    monkeypatch.setitem(PROVIDERS, "fake", _FakeProvider())
-    monkeypatch.setitem(PROVIDERS, "crash", _CrashingProvider())
+    use_policy(monkeypatch, agents={"tester": "fixture-model"}, reasoning={"tester": "medium"})
+    install_provider(monkeypatch, _FakeProvider())
+    install_provider(monkeypatch, _CrashingProvider())
     yield
 
 
-class _FakeProvider(AgentProvider):
+class _FakeProvider(ScriptedProvider):
     """Emits two events then exits — the shape of a real stream, none of the cost."""
 
     name = "fake"
-    binary = sys.executable
     script = (
         'import json,sys\n'
         'print(json.dumps({"type":"system","subtype":"init","cwd":"/tmp","tools":[],'
@@ -50,17 +41,6 @@ class _FakeProvider(AgentProvider):
         'print(json.dumps({"type":"result","subtype":"success","is_error":False,'
         '"total_cost_usd":0.5,"usage":{"output_tokens":7},"session_id":"SID"}), flush=True)\n'
     )
-
-    def available(self):
-        return True
-
-    def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
-                permission_mode=None, allowed_tools=None, reasoning=None):
-        return [sys.executable, "-c", self.script]
-
-    def parse(self, line):
-        from interact.agents.providers import ClaudeCodeProvider
-        return ClaudeCodeProvider().parse(line)
 
 
 class _CrashingProvider(_FakeProvider):
@@ -288,7 +268,6 @@ async def test_events_survive_the_spawning_loop_ending(tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_normalised_stream_is_kept_current_while_a_run_is_alive(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     from interact.agents import registry as reg
     from interact.agents.run import _mirror_while_alive
 
@@ -319,7 +298,6 @@ async def test_the_normalised_stream_is_kept_current_while_a_run_is_alive(tmp_pa
 
 @pytest.mark.asyncio
 async def test_the_pump_stops_when_the_run_does(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     from interact.agents import registry as reg
     from interact.agents.run import _mirror_while_alive
 
@@ -331,7 +309,6 @@ async def test_the_pump_stops_when_the_run_does(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_a_broken_read_never_kills_the_pump(tmp_path, monkeypatch):
     """It runs beside a live agent; a transient read failure must not take the stream down."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     from interact.agents import registry as reg
     from interact.agents.run import _mirror_while_alive
 
@@ -357,7 +334,6 @@ async def test_a_broken_read_never_kills_the_pump(tmp_path, monkeypatch):
 
 
 def test_spawn_returns_the_run_id_without_waiting(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("HOME", str(tmp_path))
     import importlib
 
     # `interact.cli.app` is BOTH a module and the cyclopts App object the package re-exports; the
@@ -385,7 +361,6 @@ def test_spawn_returns_the_run_id_without_waiting(monkeypatch, tmp_path, capsys)
 
 @pytest.mark.asyncio
 async def test_every_running_run_is_kept_current(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     from interact.agents import registry as reg
     from interact.agents.run import _mirror_running_runs
 
@@ -408,7 +383,6 @@ async def test_every_running_run_is_kept_current(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_one_unreadable_run_never_stops_the_others(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     from interact.agents import registry as reg
     from interact.agents.run import _mirror_running_runs
 

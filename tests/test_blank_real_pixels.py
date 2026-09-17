@@ -12,9 +12,8 @@ area on every page ever designed.
 
 import pytest
 
-from interact.browser import BrowserManager
-from interact.config import Config
 from interact.vision.measure import blank_frame_reason
+from tests.support import browser_manager
 
 # Each is (name, html, expect_blank). The sparse ones are the trap: almost all background.
 PAGES = [
@@ -36,7 +35,7 @@ PAGES = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,html,expect_blank", PAGES, ids=[p[0] for p in PAGES])
 async def test_blankness_matches_what_a_person_would_say(name, html, expect_blank):
-    mgr = BrowserManager(Config(headless=True, browser_type="chromium"))
+    mgr = browser_manager()
     try:
         await mgr.ensure_ready()
     except Exception as exc:

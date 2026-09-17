@@ -43,8 +43,6 @@ def test_refreshing_actually_WRITES_every_cache(monkeypatch, tmp_path):
     import interact.benchmark_tables as bt
     import interact.model_catalog as mc
 
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(mc, "_from_openrouter", lambda payload: [mc.ModelInfo(id="x/y", name="Y")])
     monkeypatch.setattr(mc.httpx, "get", lambda *a, **k: _Response({"data": [{}]}))
     monkeypatch.setattr(bs, "_fetch", lambda: bs.Board(
@@ -86,8 +84,6 @@ def test_a_cache_write_is_atomic_so_a_concurrent_reader_never_sees_a_half_file(t
 
     import interact.model_catalog as mc
 
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     mc._write_cache(mc.Catalog(models=[mc.ModelInfo(id="a/b")], source="openrouter", fetched_at=1.0))
     target = mc.cache_path()
     assert json.loads(target.read_text())["models"]

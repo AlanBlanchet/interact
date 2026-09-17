@@ -1311,9 +1311,16 @@ def agents_providers(
             print(f"           permission modes: {', '.join(m.id for m in modes)}")
 
 
+#: A terminal launch waits for the vendor's own refusal rather than handing back a run that is
+#: about to die at $0.00: the human is already watching this command, and a dead candidate costs
+#: them a relaunch. In-process callers keep the short window.
+CLI_QUOTA_WINDOW = 20.0
+
+
 async def _run_agent_for_cli(provider, task, **kwargs):
     """Indirection the tests replace — spawning for real costs money and a live CLI."""
 
+    kwargs.setdefault("quota_window", CLI_QUOTA_WINDOW)
     return await run_agent(provider, task, **kwargs)
 
 
@@ -1481,6 +1488,7 @@ def agents_run(task: str, provider: str | None = None, agent: str | None = None,
     async def _go() -> int:
         prov = provider_for(provider) if provider is not None else None
         handle = await run_agent(prov, task, name=name or agent,
+                                 quota_window=CLI_QUOTA_WINDOW,
                                  cwd=cwd or os.getcwd(), agent=agent, model=model,
                                  permission_mode=permission_mode,
                                  image_paths=tuple(image_paths or ()),

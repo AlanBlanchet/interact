@@ -25,6 +25,7 @@ from typing import BinaryIO, Literal
 import fcntl
 
 from pydantic import BaseModel, Field, PrivateAttr
+from interact.agents import quota
 from interact_core import AgentRevisionRef, PromptExecutionRef
 
 from interact.agents.events import AgentEvent
@@ -783,7 +784,7 @@ def _write(run: AgentRun) -> None:
             raw = json.loads(payload)
         except (TypeError, ValueError, json.JSONDecodeError):
             raw = {}
-        merged = {**raw, **run.model_dump()}
+        merged = {**raw, **run.model_dump(mode="json")}
         _replace_private(_record_path(run.run_id), json.dumps(merged, ensure_ascii=False).encode())
 
 
@@ -858,6 +859,11 @@ def append_event(run_id: str, event: AgentEvent) -> None:
         stored = _read_record(run_id)
         if stored is None:
             return
+        if event.kind == "error" and event.text and quota.REFUSAL.search(event.text):
+            # The vendor can take longer to answer "you've reached your limit" than the launch
+            # waits, so this is where a late refusal is heard at all. Remembering it here is what
+            # stops the NEXT launch spending a child on the same dead model.
+            quota.record_refusal(stored.provider, stored.model)
         terminal = stored.status in ("done", "failed", "cancelled", "crashed", "stopped")
         same_turn = event.turn_id is None or event.turn_id == stored.provider_turn_id
         newer_root_turn = (

@@ -27,29 +27,11 @@ from pathlib import Path
 import pytest
 
 from interact.desktop import DesktopBackend, DesktopWindow, NestedBackend
+from tests.support.desktop import RecordingBackend
 
 FIXTURE = Path(__file__).parent / "fixtures" / "drag_window.py"
 PANEL = Path(__file__).parent / "fixtures" / "panel.py"
 BAR_H = 32  # matches drag_window.py's title-bar height
-
-
-class RecordingBackend(DesktopBackend):
-    """A backend that records primitive calls instead of touching a display."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def capture(self) -> bytes:
-        return b""
-
-    def move(self, x: float, y: float) -> None:
-        self.calls.append(("move", x, y))
-
-    def mouse_down(self, button: str = "left") -> None:
-        self.calls.append(("down", button))
-
-    def mouse_up(self, button: str = "left") -> None:
-        self.calls.append(("up", button))
 
 
 def test_drag_circle_geometry() -> None:

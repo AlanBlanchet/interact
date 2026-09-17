@@ -34,6 +34,7 @@ os.environ.setdefault("INTERACT_MEDIA_BILLING", "api_allowed")
 
 from interact.config import UserConfig, load_dotenv_for_cli
 from interact.agents.providers import AgentProvider, ClaudeCodeProvider
+from interact.models import Model
 
 
 @pytest.fixture
@@ -43,6 +44,21 @@ def media_output_root() -> Path:
     parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=parent, prefix="case-") as directory:
         yield Path(directory)
+
+
+@pytest.fixture
+def desktop_gate_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the Linux desktop-resolution path for a display-free unit test that mocks the backend:
+    force ``desktop_supported()`` True (so a mac/win runner doesn't take the portable-screen
+    branch) and open the unsupported gate. Opt in by requesting this fixture by name — it used to
+    be an autouse fixture hidden inside ``tests/support/desktop.py`` that three files turned on
+    for themselves merely by importing its name (a live-by-import trick pytest allows but that
+    hides which tests actually need it); the off-Linux behaviour has its own coverage in
+    test_cross_platform.py."""
+    from interact import server as srv
+
+    monkeypatch.setattr("interact.desktop.backend.desktop_supported", lambda: True)
+    monkeypatch.setattr(srv.targets, "_desktop_unsupported", lambda *a, **k: None)
 
 
 @pytest.fixture(autouse=True)
@@ -187,6 +203,19 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_desktop)
 
 @pytest.fixture
+def reset_model_registry():
+    """`Model._reset()` before and after — the shared body for a file whose OWN tests want a
+    private, empty `Model` catalog per test. Not autouse here: a file opts in with its own
+    `@pytest.fixture(autouse=True)` wrapper (see `test_probe.py`, `test_cli_reports.py`), so this
+    stays scoped to the files that actually want it rather than resetting the registry around
+    every test in the suite. `test_models.py`'s `_clear_registry` also clears measured
+    Benchmark scores and stays a separate, file-local fixture — a real superset, not this."""
+    Model._reset()
+    yield
+    Model._reset()
+
+
+@pytest.fixture
 def http_origin(tmp_path):
     """A real http origin serving one static page, for anything the browser keys by ORIGIN —
     localStorage above all: a `data:` / `about:blank` page has an opaque origin, so state set there
@@ -203,33 +232,20 @@ def http_origin(tmp_path):
         server.server_close()
 
 
-# --- shared image fixtures (blankness, capture and VLM-gate tests all build frames) ---
+@pytest.fixture(autouse=True)
+def _forget_desktop_caches() -> None:
+    """Empty the process-wide window caches between tests.
 
+    `CoordTransform` and `DesktopElement` keep what they learn about a window in module-level
+    dicts keyed by window id, and every desktop test builds its window with the same id (123).
+    One test storing decoration offsets for that id therefore moved another file's pointer by
+    26 pixels, which is only visible when the two run in the same session — ten failures in the
+    full suite, green file by file. Clearing here fixes the class, not the pair.
+    """
+    from interact.desktop import coords, element
 
-def make_png(fill=(0, 0, 0), size=(320, 200), speckle: int = 0) -> bytes:
-    """A flat frame, optionally speckled — what a crashed or unmapped window grabs as."""
-    import io
-
-    from PIL import Image
-
-    img = Image.new("RGB", size, fill)
-    for i in range(speckle):
-        img.putpixel((i % size[0], (i * 7) % size[1]), (255, 255, 255))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def make_varied_png(size=(320, 200)) -> bytes:
-    """A frame with content in it, for the negative case."""
-    import io
-
-    from PIL import Image
-
-    img = Image.new("RGB", size)
-    for x in range(size[0]):
-        for y in range(size[1]):
-            img.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    coords._coord_cache.clear()
+    element._element_cache.clear()
+    yield
+    coords._coord_cache.clear()
+    element._element_cache.clear()

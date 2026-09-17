@@ -8,34 +8,36 @@ or a failure once the child could act is the run's outcome, never a reason to tr
 
 import asyncio
 import importlib
+import os
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from interact.agents import registry as reg
-from interact.agents.policy import Policy
-from interact.agents.providers import PROVIDERS, AgentProvider, ClaudeCodeProvider, PermissionMode, UnsupportedToolPolicy
-from interact.agents.run import ModelUnavailable, rank_candidates, run_agent
-from interact.models import Model, ModelCapability
+from interact.agents.providers import PROVIDERS, PermissionMode, UnsupportedToolPolicy
+from tests.support.agents import ScriptedProvider, use_policy
+from interact.agents import quota
+from interact.agents.run import (
+    ModelUnavailable,
+    _quota_probe as quota_probe,
+    rank_candidates,
+    run_agent,
+)
 import interact.server.tools_agents as tools_agents
 from interact.cli import app_commands as cli
-from test_model_criteria import catalog_of
+from tests.support.models import catalog_of, model
 
 CRITERION = "cap.vlm and price.in >= 0"
 
 
-class _Cli(AgentProvider):
+class _Cli(ScriptedProvider):
     """A provider whose availability facts are set by the test, running a real subprocess."""
 
     verified = True
     installed = True
     logged_in = True
-    script = (
-        'import json\n'
-        'print(json.dumps({"type":"system","subtype":"init","session_id":"SID"}), flush=True)\n'
-        'print(json.dumps({"type":"result","subtype":"success","is_error":False,'
-        '"usage":{"output_tokens":1},"session_id":"SID"}), flush=True)\n'
-    )
     probes = 0
 
     def available(self):
@@ -44,13 +46,6 @@ class _Cli(AgentProvider):
     async def authenticated(self, env, *, timeout=10):
         type(self).probes += 1
         return self.logged_in
-
-    def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
-                permission_mode=None, allowed_tools=None, reasoning=None, image_paths=()):
-        return [sys.executable, "-c", self.script]
-
-    def parse(self, line):
-        return ClaudeCodeProvider().parse(line)
 
 
 class _Alpha(_Cli):
@@ -79,15 +74,9 @@ class _QuotaRefusing(_Beta):
                 "Switch to another model\\n\"); sys.exit(1)"]
 
 
-def _row(provider, id, score, price):
-    return Model(provider=provider, id=id, capabilities={ModelCapability.VLM},
-                 intelligence_score=score, input_cost_per_million=price, output_cost_per_million=price)
-
-
 @pytest.fixture
 def team(monkeypatch, tmp_path):
     """Two CLIs, each running its own vendor; the cheapest clearing model sits with `beta`."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     alpha, beta = _Alpha(), _Beta()
     for cls in (_Alpha, _Beta):
         cls.installed = True
@@ -96,14 +85,12 @@ def team(monkeypatch, tmp_path):
     monkeypatch.setattr("interact.agents.providers.PROVIDERS", {"alpha": alpha, "beta": beta})
     monkeypatch.setattr("interact.agents.run.PROVIDERS", {"alpha": alpha, "beta": beta})
     monkeypatch.setattr(reg, "PROVIDERS", {"alpha": alpha, "beta": beta})
-    monkeypatch.setattr("interact.agents.run.load_policy", lambda: Policy(
-        agents={"tester": CRITERION}, reasoning={"tester": "medium"},
-    ))
+    use_policy(monkeypatch, agents={"tester": CRITERION}, reasoning={"tester": "medium"})
     with catalog_of(
-        _row("vendor-b", "b-strong", 90.0, 0.2),
-        _row("vendor-a", "a-mid", 60.0, 1.0),
-        _row("vendor-a", "a-weak", 20.0, 2.0),
-        _row("vendor-c", "unreachable", 99.0, 0.1),
+        model(id="b-strong", provider="vendor-b", score=90.0, input_cost=0.2, output_cost=0.2),
+        model(id="a-mid", provider="vendor-a", score=60.0, input_cost=1.0, output_cost=1.0),
+        model(id="a-weak", provider="vendor-a", score=20.0, input_cost=2.0, output_cost=2.0),
+        model(id="unreachable", provider="vendor-c", score=99.0, input_cost=0.1, output_cost=0.1),
     ):
         yield alpha, beta
 
@@ -187,10 +174,136 @@ async def test_a_quota_refusal_falls_through_to_the_next_candidate(team, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_a_refusal_that_reaches_disk_after_the_child_exits_is_still_seen(tmp_path, monkeypatch):
+    """The vendor prints its quota refusal through the supervisor's reader, so the line can land
+    a moment AFTER the child is gone. Reading the stream once, at the instant the process exits,
+    sees an empty file and lets the run commit to a candidate that never ran (#181): the probe
+    keeps looking for a short grace period once the child is dead."""
+    raw = reg.raw_events_path("probe-run")
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text("")
+
+    async def refuse_late():
+        await asyncio.sleep(0.3)
+        raw.write_text('{"kind":"text","text":"You\'ve reached your Fable limit. '
+                       'Switch to another model, or manage usage credits"}\n')
+
+    writer = asyncio.create_task(refuse_late())
+    reason = await quota_probe("probe-run", SimpleNamespace(returncode=1), window=1.0)
+    await writer
+    assert reason == "quota_exceeded"
+
+
+class _ClaudeNamed(_Cli):
+    """Two candidates of the SAME vendor: it is the vendor that owns the session id namespace."""
+
+    name = "claude"
+    binary = "claude-cli"
+    native_providers = frozenset({"vendor-a", "vendor-b"})
+    sessions: list[str] = []
+
+    def definition_path(self, agent):
+        return Path(os.environ["HOME"]) / ".claude" / "agents" / f"{agent}.md"
+
+    def command(self, task, *, cwd, model, mcp_config, run_id, agent=None,
+                permission_mode=None, allowed_tools=None, reasoning=None, image_paths=()):
+        type(self).sessions.append(run_id)
+        if len(type(self).sessions) == 1:  # the first candidate, out of quota
+            return [sys.executable, "-c",
+                    "import sys; sys.stderr.write(\"You've reached your model limit\\n\"); sys.exit(1)"]
+        return [sys.executable, "-c", self.script]
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_launch_waits_longer_for_the_vendors_refusal(tmp_path, monkeypatch):
+    """`run_agent` returns as soon as the child is alive — four seconds, less than a vendor takes
+    to answer "you've reached your limit", so the fall-through never sees the refusal. A human
+    watching `interact agents spawn` can afford that wait; the supervisor cannot, so the longer
+    window belongs to the CLI and the short one stays the default."""
+    seen = {}
+
+    async def capture(provider, task, **kwargs):
+        seen["window"] = kwargs.get("quota_window")
+        return SimpleNamespace(run_id="r")
+
+    monkeypatch.setattr(cli, "run_agent", capture)
+    await cli._run_agent_for_cli(None, "t", cwd=str(tmp_path))
+    assert seen["window"] == cli.CLI_QUOTA_WINDOW and cli.CLI_QUOTA_WINDOW > 4.0
+
+
+@pytest.mark.asyncio
+async def test_the_launch_hands_its_window_to_the_probe(team, tmp_path, monkeypatch):
+    """The knob is worth nothing unless it reaches the one place that waits."""
+    seen = {}
+
+    async def probe(run_id, process, *, window=4.0, **rest):
+        seen["window"] = window
+        return None
+
+    monkeypatch.setattr("interact.agents.run._quota_probe", probe)
+    run = await run_agent(None, "t", agent="tester", cwd=str(tmp_path), mesh=False, quota_window=0.05)
+    await asyncio.wait_for(run.wait(), 30)
+    assert seen["window"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_a_second_candidate_of_the_same_vendor_gets_its_own_session_id(team, tmp_path, monkeypatch):
+    """The vendor refuses a session id its dead first child already claimed ("Session ID ... is
+    already in use"), so the run that falls through to another model of the SAME vendor asks the
+    vendor for a fresh one instead of dying on arrival."""
+    alpha, _ = team
+    definitions = tmp_path / ".claude" / "agents"
+    definitions.mkdir(parents=True, exist_ok=True)
+    (definitions / "tester.md").write_text("---\nname: tester\n---\nBe skeptical.\n", encoding="utf-8")
+    vendor = _ClaudeNamed()
+    _ClaudeNamed.sessions = []
+    monkeypatch.setattr("interact.agents.run.PROVIDERS", {"claude": vendor})
+    monkeypatch.setattr("interact.agents.providers.PROVIDERS", {"claude": vendor})
+    monkeypatch.setattr(reg, "PROVIDERS", {"claude": vendor})
+    run = await run_agent(None, "t", agent="tester", cwd=str(tmp_path), mesh=False)
+    await asyncio.wait_for(run.wait(), 30)
+    saved = reg.get_run(run.run_id)
+    assert [s.reason for s in saved.skipped] == ["quota_exceeded"]
+    assert len(_ClaudeNamed.sessions) == 2 and len(set(_ClaudeNamed.sessions)) == 2
+    assert _ClaudeNamed.sessions[0] == run.run_id
+    assert _ClaudeNamed.sessions[1] != run.run_id  # the dead child owns the first one
+    assert saved.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_refused_a_moment_ago_is_passed_over_before_any_child_is_spawned(
+    team, tmp_path, monkeypatch,
+):
+    """"Three research agents died on your Fable quota, twice each": a refusal is a fact about
+    the account for a period, so the next launch must not spend another child discovering it."""
+    alpha, beta = team
+    top = rank_candidates(CRITERION, dict(os.environ), providers=[alpha, beta])[0]
+    quota.record_refusal(top.provider, top.model, cooldown=600)
+    _Cli.probes = 0
+    run = await run_agent(None, "t", agent="tester", cwd=str(tmp_path), mesh=False)
+    await asyncio.wait_for(run.wait(), 30)
+    saved = reg.get_run(run.run_id)
+    assert (saved.provider, saved.model) != (top.provider, top.model)
+    assert [(s.candidate.model, s.reason) for s in saved.skipped][0] == (top.model, "quota_exceeded")
+    assert saved.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_memory_never_stops_every_candidate_from_running(team, tmp_path):
+    """The note is a shortcut, never a veto: with every model remembered as refused, the walk
+    ignores the memory rather than telling the owner nothing can run."""
+    alpha, beta = team
+    for candidate in rank_candidates(CRITERION, dict(os.environ), providers=[alpha, beta]):
+        quota.record_refusal(candidate.provider, candidate.model, cooldown=600)
+    run = await run_agent(None, "t", agent="tester", cwd=str(tmp_path), mesh=False)
+    await asyncio.wait_for(run.wait(), 30)
+    saved = reg.get_run(run.run_id)
+    assert saved.status == "done" and saved.skipped == ()
+
+
+@pytest.mark.asyncio
 async def test_a_switched_off_provider_is_skipped_with_its_reason(team, tmp_path, monkeypatch):
-    monkeypatch.setattr("interact.agents.run.load_policy", lambda: Policy(
-        agents={"tester": CRITERION}, reasoning={"tester": "medium"}, providers={"beta": False},
-    ))
+    use_policy(monkeypatch, agents={"tester": CRITERION}, reasoning={"tester": "medium"}, providers={"beta": False})
     run = await run_agent(None, "t", agent="tester", cwd=str(tmp_path), mesh=False)
     await asyncio.wait_for(run.wait(), 30)
     saved = reg.get_run(run.run_id)

@@ -12,6 +12,7 @@ from interact.models import (
     ModelCapability,
     ModelChain,
 )
+from tests.support.models import model
 
 SAMPLE_JSON = json.dumps(
     {
@@ -77,18 +78,6 @@ def _register_models(*models: Model) -> None:
         Model._register(m)
 
 
-def _make_model(
-    id: str = "test/model", caps=None, input_cost=1.0, output_cost=2.0, available=True
-):
-    return Model(
-        id=id,
-        provider="test",
-        capabilities=caps or {ModelCapability.VLM},
-        input_cost_per_million=input_cost,
-        output_cost_per_million=output_cost,
-    )
-
-
 class TestModelCapability:
     @pytest.mark.parametrize(
         "cap,expected",
@@ -99,7 +88,7 @@ class TestModelCapability:
         ],
     )
     def test_model_can_capability(self, cap, expected):
-        m = _make_model(caps={ModelCapability.VLM})
+        m = model(caps={ModelCapability.VLM})
         assert m.can(cap) is expected
 
     @pytest.mark.parametrize(
@@ -109,16 +98,46 @@ class TestModelCapability:
             (None, None, 0.0),
             (0.5, None, 0.5),
             (None, 3.0, 3.0),
+            (5.0, None, 5.0),
+            (None, 5.0, 5.0),
+            (0.0, 0.0, 0.0),
         ],
     )
     def test_model_cost_score(self, input_cost, output_cost, expected):
-        m = _make_model(input_cost=input_cost, output_cost=output_cost)
-        assert m.cost_score == expected
+        """The property and the free function it delegates to agree on every case."""
+        m = model(input_cost=input_cost, output_cost=output_cost)
+        assert m.cost_score == Model.cost_of(input_cost, output_cost) == expected
+
+    @pytest.mark.parametrize(
+        "score, cost, expected",
+        [
+            (0.5, 2.0, 0.25),
+            (0.5, 0.0, None),
+            (0.5, None, None),
+            (0.0, 1.0, 0.0),
+        ],
+    )
+    def test_quality_per_dollar(self, score, cost, expected):
+        assert Model.quality_per_dollar(score, cost) == expected
+
+    def test_recommendation_quality_per_dollar_uses_helper(self):
+        m = model(id="x/y", input_cost=2.0, output_cost=2.0)
+        bench = Benchmark(id="bx", name="b", description="b")
+        rec = BenchmarkRecommendation(
+            benchmark=bench, model=m, source="published", rank=1, score=0.8
+        )
+        assert rec.quality_per_dollar == Model.quality_per_dollar(0.8, 4.0) == 0.2
+
+        zero = model(id="z/z", input_cost=None, output_cost=None)
+        rec2 = BenchmarkRecommendation(
+            benchmark=bench, model=zero, source="published", rank=1, score=0.5
+        )
+        assert rec2.quality_per_dollar is None
 
 
 class TestModelFromLitellmId:
     def test_known_in_registry(self):
-        m = _make_model(id="anthropic/haiku")
+        m = model(id="anthropic/haiku")
         _register_models(m)
         result = Model.from_litellm_id("anthropic/haiku")
         assert result.id == "anthropic/haiku"
@@ -197,7 +216,7 @@ class TestRegistryMixin:
         assert Model.registry() is not Benchmark.registry()
         before_models = len(Model.registry())
         before_bench = len(Benchmark.registry())
-        m = _make_model(id="iso/check")
+        m = model(id="iso/check")
         Model._register(m)
         assert len(Model.registry()) == before_models + 1
         assert len(Benchmark.registry()) == before_bench
@@ -214,8 +233,8 @@ class TestCircuitBreakerTTL:
 
 class TestModelChain:
     def test_active_skips_tripped(self):
-        m1 = _make_model(id="model-a")
-        m2 = _make_model(id="model-b")
+        m1 = model(id="model-a")
+        m2 = model(id="model-b")
         chain = ModelChain(role="image", preferences=[m1, m2])
         cb = CircuitBreaker()
         cb.trip("model-a")
@@ -226,8 +245,8 @@ class TestModelChain:
         assert result.id == "model-b"
 
     def test_active_skips_unavailable(self):
-        m1 = _make_model(id="model-a")
-        m2 = _make_model(id="model-b")
+        m1 = model(id="model-a")
+        m2 = model(id="model-b")
         chain = ModelChain(role="image", preferences=[m1, m2])
 
         def availability(self):
@@ -254,13 +273,13 @@ class TestModelChain:
 
 class TestByCapability:
     def test_filters_and_sorts(self):
-        m_cheap = _make_model(
+        m_cheap = model(
             id="cheap", input_cost=0.1, output_cost=0.2, caps={ModelCapability.VLM}
         )
-        m_expensive = _make_model(
+        m_expensive = model(
             id="expensive", input_cost=5.0, output_cost=10.0, caps={ModelCapability.VLM}
         )
-        m_llm = _make_model(id="llm-only", caps={ModelCapability.LLM})
+        m_llm = model(id="llm-only", caps={ModelCapability.LLM})
         _register_models(m_expensive, m_cheap, m_llm)
 
         with patch.object(Model, "is_available", return_value=True):
@@ -301,13 +320,13 @@ class TestIsAvailable:
 
 class TestBenchmarkRecommend:
     def test_quality_per_dollar_orders_recommendations(self):
-        cheap = _make_model(
+        cheap = model(
             id="cheap-vlm",
             input_cost=0.5,
             output_cost=1.5,
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )
-        expensive = _make_model(
+        expensive = model(
             id="pricey-vlm",
             input_cost=10.0,
             output_cost=30.0,
@@ -331,10 +350,10 @@ class TestBenchmarkRecommend:
         assert recs[0].cost_per_million == 2.0
 
     def test_min_score_filter(self):
-        weak = _make_model(
+        weak = model(
             id="weak", caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM}
         )
-        strong = _make_model(
+        strong = model(
             id="strong", caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM}
         )
         _register_models(weak, strong)
@@ -349,10 +368,10 @@ class TestBenchmarkRecommend:
         assert [r.model.id for r in recs] == ["strong"]
 
     def test_models_without_score_excluded(self):
-        scored = _make_model(
+        scored = model(
             id="scored", caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM}
         )
-        unscored = _make_model(
+        unscored = model(
             id="unscored", caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM}
         )
         _register_models(scored, unscored)
@@ -435,7 +454,7 @@ class TestPublishedTable:
         rec_name = bench.published.lib_recommendation if bench.published else None
         assert rec_name is not None
         assert bench.lib_recommendation_model() is None
-        m = _make_model(
+        m = model(
             id=f"openai/{rec_name}",
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )
@@ -452,7 +471,7 @@ class TestPublishedTable:
         assert bench.published is not None
         # Pick any entry from the live cache and assert the bridge wires it through.
         entry = bench.published.entries[0]
-        m = _make_model(
+        m = model(
             id=f"vendor/{entry.model_name}",
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )
@@ -468,7 +487,7 @@ class TestPublishedTable:
 
 class TestRecommendBoth:
     def test_recommend_prefer_both_includes_both_sources(self):
-        m = _make_model(
+        m = model(
             id="openai/ui-tars-1.5",
             input_cost=1.0,
             output_cost=2.0,
@@ -490,7 +509,7 @@ class TestRecommendBoth:
         assert sources == {"published", "measured"}
 
     def test_benchmark_recommendation_source_field(self):
-        m = _make_model(
+        m = model(
             id="ui-tars-1.5",
             caps={ModelCapability.GUI_GROUNDING, ModelCapability.VLM},
         )

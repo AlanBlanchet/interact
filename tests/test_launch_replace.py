@@ -245,3 +245,4 @@ def test_spawn_layers_a_launch_env_over_the_sandbox_pins(backend):
     proc = backend.spawn(["sh", "-c", "echo $FOO $DISPLAY"], env={"FOO": "bar"})
     assert proc.wait(timeout=10) == 0
     assert backend.proc_output(proc).split() == ["bar", backend.display]
+

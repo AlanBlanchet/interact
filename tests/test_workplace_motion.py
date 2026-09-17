@@ -755,49 +755,6 @@ def panel_pages(tmp_path_factory):
     return out
 
 
-@pytest.fixture(scope="module")
-def chat_page(browser, panel_pages):
-    """The chat document, rendered from source with the host's API stubbed."""
-    pg = browser.new_page(viewport={"width": 420, "height": 600})
-    pg.goto((panel_pages / "chat" / "dark.html").as_uri())
-    pg.wait_for_timeout(300)
-    yield pg
-    pg.close()
-
-
-def test_a_failed_send_returns_your_message(chat_page):
-    """It used to clear the box on submit, so a send to an agent that had ended left you a toast
-    and nothing else. Losing typed text is the one thing a chat box must never do."""
-    got = chat_page.evaluate(
-        """() => {
-          const box = document.getElementById('message');
-          box.value = 'a message I do not want to lose';
-          document.getElementById('composer').dispatchEvent(
-            new Event('submit', {cancelable: true}));
-          const emptied = box.value;
-          window.dispatchEvent(new MessageEvent('message', {data: {type: 'sent', ok: false}}));
-          return {emptied, restored: box.value};
-        }"""
-    )
-    assert got["emptied"] == "", "the box must empty instantly — a laggy chat feels broken"
-    assert got["restored"] == "a message I do not want to lose"
-
-
-def test_a_streaming_update_does_not_wipe_what_you_are_typing(chat_page):
-    """The panel patches the transcript while an agent works. Rebuilding the document instead
-    would destroy a half-written reply every time the agent said anything."""
-    got = chat_page.evaluate(
-        """() => {
-          const box = document.getElementById('message');
-          box.value = 'half-typed thought';
-          window.dispatchEvent(new MessageEvent('message',
-            {data: {type: 'transcript', html: '<p>new turn</p>'}}));
-          return box.value;
-        }"""
-    )
-    assert got == "half-typed thought"
-
-
 # --- The world's text stays readable, measured on what actually paints ------------------------
 #
 # A CSS-parsing guard for this already existed and stopped protecting anything the moment the

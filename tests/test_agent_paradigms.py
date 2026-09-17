@@ -1,28 +1,19 @@
-"""A paradigm: content authored once, projected per-agent as a skill or a system prompt.
-
-"In interact, we should have these paradigms! Such that later on a user doesn't edit a 'system
-prompt' or a 'skill', but a paradigm, and choses to add it to an agent as 'skill' or as 'system
-prompt'." Today that choice is Alan's own private build script (paradigms.yaml + generate.py),
-outside this repository. This is the same idea made public and per-agent: one paradigm file, and
-each agent that uses it picks its own projection — the SAME content can be a lazily-loaded skill
-for one agent and baked into the always-present system prompt for another.
+"""A paradigm: content authored once, projected per-agent as a skill OR a system-prompt fragment.
+The same authored unit is a lazily-loaded skill for one agent and baked into the always-present
+system prompt for another — the choice belongs to the policy, not to the paradigm file.
 """
 
 import json
 
 import pytest
 
-from interact.agents.paradigms import (
-    ParadigmError,
-    plan_projections,
-    read_paradigm,
-)
+from interact.agents.paradigms import ParadigmError, plan_projections, read_paradigm
 from interact.agents.policy import Policy, PolicyError
 
 
 @pytest.fixture
-def repository(tmp_path):
-    """A minimal paradigm repository: one paradigm file, frontmatter + body."""
+def paradigm_repository(tmp_path):
+    """One paradigm file, frontmatter + body — the minimal repository the reader needs."""
     root = tmp_path / "prompts"
     (root / "paradigms").mkdir(parents=True)
     (root / "paradigms" / "coding.md").write_text(
@@ -32,16 +23,16 @@ def repository(tmp_path):
     return root
 
 
-def test_a_paradigm_file_is_read_as_name_description_and_body(repository):
-    p = read_paradigm("coding", repository)
+def test_a_paradigm_file_is_read_as_name_description_and_body(paradigm_repository):
+    p = read_paradigm("coding", paradigm_repository)
     assert p.name == "coding"
     assert p.description == "How code gets written here"
     assert "Generic to the max" in p.body
 
 
-def test_an_unknown_paradigm_is_refused_where_it_is_asked_for(repository):
+def test_an_unknown_paradigm_is_refused_where_it_is_asked_for(paradigm_repository):
     with pytest.raises(ParadigmError, match="coding-typo"):
-        read_paradigm("coding-typo", repository)
+        read_paradigm("coding-typo", paradigm_repository)
 
 
 def test_the_policy_holds_which_agent_uses_which_paradigm_and_how(tmp_path):
@@ -94,7 +85,7 @@ def test_assigning_writes_back_the_one_file_every_front_end_reads(tmp_path):
     ]
 
 
-def test_the_same_paradigm_is_a_skill_for_one_agent_and_baked_in_for_another(repository, tmp_path):
+def test_the_same_paradigm_is_a_skill_for_one_agent_and_baked_in_for_another(paradigm_repository, tmp_path):
     """The whole point: one authored unit, a per-agent choice of projection — never a global flag
     on the paradigm that binds every agent to the same answer."""
     path = tmp_path / "agents.json"
@@ -106,7 +97,7 @@ def test_the_same_paradigm_is_a_skill_for_one_agent_and_baked_in_for_another(rep
     }))
     policy = Policy.load(path)
 
-    plan = plan_projections(policy, repository)
+    plan = plan_projections(policy, paradigm_repository)
 
     assert plan.system_prompt_fragments["tester"] == ["Generic to the max, unlocked by typed config. Test-driven, edge-case-first."]
     assert "tester" not in [s.agent for s in plan.skills]

@@ -1,8 +1,11 @@
-"""launch_app command handling at the tool level: a shell-syntax command (`cd X && app`) runs via
-bash instead of failing exec with `[Errno 2] No such file or directory: 'cd'`, `cwd=` starts the
-app in a project directory directly, a `VAR=value app` prefix (#117) becomes the launch's
-environment instead of being exec'd as a literal program named `VAR=value`, and the "Replaced N
-app(s)" note counts kills that HAPPENED and names what survived (#118)."""
+"""launch_app tool-level command handling.
+
+A shell-syntax command (`cd X && app`) runs via bash instead of failing exec with
+`[Errno 2] No such file or directory: 'cd'`, `cwd=` starts the app in a project directory
+directly, a `VAR=value app` prefix (#117) becomes the launch's environment instead of being
+exec'd as a literal program named `VAR=value`, and the "Replaced N app(s)" note counts
+kills that HAPPENED and names what survived (#118).
+"""
 
 import asyncio
 from pathlib import Path
@@ -12,8 +15,11 @@ import pytest
 import interact.server as srv
 from interact.desktop.nested import KillReport
 
+pytestmark = pytest.mark.usefixtures("desktop_gate_open")
 
-class _FakeBackend:
+
+
+class _ToolFakeBackend:
     display = ":88"
 
     def __init__(self):
@@ -37,9 +43,8 @@ class _FakeBackend:
 
 @pytest.fixture
 def fake_backend(monkeypatch):
-    fb = _FakeBackend()
+    fb = _ToolFakeBackend()
     monkeypatch.setattr(srv.sandbox, "_get_sandbox", lambda size=None: fb)
-    monkeypatch.setattr(srv.targets, "_desktop_unsupported", lambda: None)
     return fb
 
 
@@ -63,10 +68,11 @@ def test_missing_cwd_is_a_clear_error(fake_backend, tmp_path):
     assert fake_backend.spawned == []  # never spawned into a wrong directory
 
 
-# ── `VAR=value app` (#117) ───────────────────────────────────────────────────────────────────
-# Agents write `FOO=bar app` as naturally as `cd X && app`. No shell marker matches it, so the
-# shlex argv was exec'd verbatim: Popen(["FOO=bar", "app"]) → FileNotFoundError: 'FOO=bar',
-# reaching the agent as FastMCP's generic exception text, not one of this module's `ERROR:` strings.
+# ── `VAR=value app` (#117) ────────────────────────────────────────────────────────────────
+# Agents write `FOO=bar app` as naturally as `cd X && app`. No shell marker matches it, so
+# the shlex argv was exec'd verbatim: Popen(["FOO=bar", "app"]) → FileNotFoundError:
+# 'FOO=bar', reaching the agent as FastMCP's generic exception text, not one of this
+# module's `ERROR:` strings.
 
 
 def test_leading_assignments_become_the_launch_env(fake_backend):
@@ -76,9 +82,9 @@ def test_leading_assignments_become_the_launch_env(fake_backend):
 
 
 def test_assignments_keep_the_launch_rewrites(fake_backend, tmp_path, monkeypatch):
-    """The prefix must NOT reroute the command through bash: staying on the exec path is what keeps
-    the sandbox rewrites (an editor's isolated profile here, Flutter's software-GL flag) — a
-    `bash -c` launch bypasses them."""
+    """The prefix must NOT reroute the command through bash: staying on the exec path is what
+    keeps the sandbox rewrites (an editor's isolated profile here, Flutter's software-GL
+    flag) — a `bash -c` launch bypasses them."""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     out = asyncio.run(srv.launch_app("FOO=bar code /tmp/p", wait=1))
     assert "ERROR" not in out
@@ -88,8 +94,8 @@ def test_assignments_keep_the_launch_rewrites(fake_backend, tmp_path, monkeypatc
 
 
 def test_an_env_binary_prefix_is_left_to_env_itself(fake_backend):
-    """`env LANG=C xterm` names a real program — the `env` binary applies the assignment, so the
-    argv reaches exec whole and no per-launch environment is built."""
+    """`env LANG=C xterm` names a real program — the `env` binary applies the assignment, so
+    the argv reaches exec whole and no per-launch environment is built."""
     asyncio.run(srv.launch_app("env LANG=C xterm", wait=1))
     assert fake_backend.spawned == [(["env", "LANG=C", "xterm"], None, None)]
 
@@ -108,17 +114,18 @@ def test_assignments_without_a_command_are_a_clear_error(fake_backend):
     ],
 )
 def test_a_failed_exec_is_a_guided_error_naming_the_real_command(fake_backend, error, phrase):
-    """A program exec cannot start returns a guided `ERROR:` naming what was actually tried — `app`,
-    the real command, now that the `FOO=bar` prefix is consumed rather than exec'd."""
+    """A program exec cannot start returns a guided `ERROR:` naming what was actually tried —
+    `app`, the real command, now that the `FOO=bar` prefix is consumed rather than exec'd."""
     fake_backend.spawn_error = error
     out = asyncio.run(srv.launch_app("FOO=bar app --x", wait=1))
     assert out.startswith("ERROR") and "'app'" in out and phrase in out
 
 
-# ── "Replaced N app(s)" reports what the kill DID (#118) ─────────────────────────────────────
-# `kill_apps` used to return the PRE-kill count, so an Electron app whose helpers `setsid` out of
-# the group was reported "replaced" while its window stayed up holding the profile socket — and the
-# next launch, handed to that zombie, opened nothing with no explanation anywhere.
+# ── "Replaced N app(s)" reports what the kill DID (#118) ────────────────────────────────
+# `kill_apps` used to return the PRE-kill count, so an Electron app whose helpers `setsid`
+# out of the group was reported "replaced" while its window stayed up holding the profile
+# socket — and the next launch, handed to that zombie, opened nothing with no explanation
+# anywhere.
 
 
 @pytest.mark.parametrize(
