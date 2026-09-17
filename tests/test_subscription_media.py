@@ -40,7 +40,6 @@ from interact.agents.providers import (
     _MediaResult,
 )
 from interact.config import Config
-from interact.benchmarks.published import PublishedEntry, PublishedTable
 from interact.models import CircuitBreaker, Model, ModelCapability, ModelChain
 from interact.vision import MediaItem
 from interact.vision.core import analyze_media, transcribe_audio

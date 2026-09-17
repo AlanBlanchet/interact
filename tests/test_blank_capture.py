@@ -19,9 +19,7 @@ from interact.desktop import DesktopWindow
 from interact.vision.measure import blank_frame_reason
 
 
-from tests.support import varied_png as _varied_png
-from tests.support import solid_png
-
+from tests.support import solid_png, varied_png as _varied_png
 
 def test_an_all_black_capture_is_reported_blank_with_its_colour():
     reason = blank_frame_reason(solid_png((320, 200), colour=(0, 0, 0)))
@@ -162,19 +160,9 @@ async def test_the_judgement_tools_are_gated_too():
 # that was never coming back.
 
 
-def _black_png() -> bytes:
-    import io
-
-    from PIL import Image as PILImage
-
-    buf = io.BytesIO()
-    PILImage.new("RGB", (40, 40), "black").save(buf, format="PNG")
-    return buf.getvalue()
-
-
 def _blank_capture(monkeypatch, *, pid: str | None, alive: bool):
     """A window whose every capture path comes back uniform, with a chosen liveness answer."""
-    black = _black_png()
+    black = solid_png(40, 40, (0, 0, 0))
 
     def fake(cmd, *a, **k):
         if cmd[0] == "xdotool":
