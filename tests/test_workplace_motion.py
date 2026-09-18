@@ -642,6 +642,20 @@ def test_forty_eight_actors_hold_frame_budget_and_input_reaches_the_next_paint(s
     page.close()
     if os.environ.get("WORKPLACE_PERF_REPORT"):
         print("workplace_performance=" + json.dumps(result, sort_keys=True))
+    # A 20 ms input budget is only measurable on a host that can still schedule frames. The
+    # paused control asks the browser for a 16 ms cadence with nothing to draw; when THAT comes
+    # back at 100-180 ms the machine is saturated (a desktop full of Chrome renderers, a parallel
+    # suite) and every number below measures the host, not the scene. Say so instead of failing.
+    saturated = {
+        control["name"]: control["pausedScheduleP95"]
+        for control in result["controls"]
+        if control["pausedScheduleP95"] > 60
+    }
+    if saturated:
+        pytest.skip(
+            f"host cannot schedule an idle 16ms frame loop (paused schedule p95 {saturated}); "
+            "the 20ms input budget is unmeasurable here"
+        )
     paired_excess_failures = {
         control["name"]: control["pairedExcessP95"]
         for control in result["controls"]
