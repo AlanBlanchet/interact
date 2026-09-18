@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pytest
 
 from interact.browser import BrowserManager
@@ -37,16 +35,16 @@ def browser_config(**overrides) -> Config:
     return Config(**{"headless": True, "browser_type": "chromium", **overrides})
 
 
-def browser_manager(session_id: str | None = None, **overrides) -> BrowserManager:
-    """A headless chromium manager, composed from `browser_config`.
+def browser_manager(session_id: str = "default", **overrides) -> BrowserManager:
+    """A headless chromium manager, composed from `browser_config`. `session_id` reaches
+    `BrowserManager` itself (its own default, `"default"`) — a persistent-profile test needs a
+    real name so two managers land in two distinct `<base>/<session_id>` subdirs.
 
-    Every call gets its OWN session id unless one is named: a shared id is a shared profile
-    directory and a shared tab list, so a page another test left open showed up as the active
-    tab here (`_capture` read "Example" where this test had just opened "BBB"). Naming it is for
-    the persistent-profile tests, where two managers must land in two distinct
-    `<base>/<session_id>` subdirs.
+    A unique id per call was tried and reverted: it did not stop a foreign page appearing in
+    `_context.pages` (tests/test_tabs_and_refs.py, "Example" where the test opened "BBB") and it
+    launches one browser per test, which on a loaded host cost a recording its video.
     """
-    return BrowserManager(browser_config(**overrides), session_id or f"test-{uuid4().hex[:8]}")
+    return BrowserManager(browser_config(**overrides), session_id)
 
 
 async def ready_or_skip(manager: BrowserManager) -> None:

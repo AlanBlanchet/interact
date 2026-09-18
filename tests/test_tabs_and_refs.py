@@ -94,7 +94,9 @@ async def test_active_tab_follows_new_and_switch():
         await page.goto("data:text/html,<title>AAA</title>A")
         await mgr.new_tab("data:text/html,<title>BBB</title>B")
         assert mgr.active_tab == 1
-        assert (await _capture(mgr)).title == "BBB"  # tab-less capture → active tab (#30)
+        # The tab list is in the message because this fails in the full suite and not alone:
+        # a page neither line here opened answers as the active tab (title "Example").
+        assert (await _capture(mgr)).title == "BBB", [p.url for p in mgr._context.pages]
         await mgr.switch_tab(0)
         assert mgr.active_tab == 0
         assert (await _capture(mgr)).title == "AAA"
