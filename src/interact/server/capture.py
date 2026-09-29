@@ -10,6 +10,7 @@ from interact.config import DEFAULT_LIMIT, QUALITY_TIERS
 from interact.vision.critique import format_grounding
 from interact.debug_utils import Debug
 from interact.desktop import DesktopElement, DesktopWindow
+from interact.desktop.frames import Framing
 from interact.vision.detect import _desktop_context, _detect_desktop_elements
 from interact.server import core, targets, vlm
 from interact.settle import settle_page
@@ -95,13 +96,14 @@ async def _capture_desktop(
     query: str | None = None,
     path: str | None = None,
     model_override: str | None = None,
+    framing: Framing | None = None,
 ) -> tuple[bytes, str]:
-    screenshot_bytes = win.capture()
-    context = _desktop_context(win)
+    screenshot_bytes, note = (framing or Framing()).apply(win.capture())
+    context = _desktop_context(win) + (f"\n{note}" if note else "")
     result = await vlm._media_response(
         screenshot_bytes, context, query, path, model_override=model_override
     )
-    return screenshot_bytes, result.text or context
+    return screenshot_bytes, (result.text or context) + (f"\n{note}" if note and result.text else "")
 
 
 async def _annotate_desktop(
